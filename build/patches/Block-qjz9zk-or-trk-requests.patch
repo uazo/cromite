@@ -7,19 +7,19 @@ This patch is based on Iridium's 'net: add "trk:" scheme and help identify URLs 
 ---
  .../chrome_autocomplete_scheme_classifier.cc  |  1 +
  chrome/browser/history/history_utils.cc       |  1 +
- chrome/browser/ui/singleton_tabs.cc           |  3 ++-
- .../omnibox/browser/autocomplete_input.cc     |  8 +++++-
+ chrome/browser/ui/singleton_tabs.cc           |  5 ++++
+ .../omnibox/browser/autocomplete_input.cc     |  8 ++++-
  components/url_formatter/url_fixer.cc         |  4 +++
  .../child_process_security_policy_impl.cc     |  1 +
  net/BUILD.gn                                  |  2 ++
- net/url_request/trk_protocol_handler.cc       | 25 +++++++++++++++++
- net/url_request/trk_protocol_handler.h        | 27 +++++++++++++++++++
- net/url_request/url_request.cc                |  8 ++++++
- .../url_request_context_builder.cc            |  3 +++
+ net/url_request/trk_protocol_handler.cc       | 25 ++++++++++++++++
+ net/url_request/trk_protocol_handler.h        | 30 +++++++++++++++++++
+ net/url_request/url_request.cc                |  8 +++++
+ .../url_request_context_builder.cc            |  3 ++
  url/url_constants.cc                          |  1 +
  url/url_constants.h                           |  1 +
  url/url_util.cc                               |  2 ++
- 14 files changed, 85 insertions(+), 2 deletions(-)
+ 14 files changed, 91 insertions(+), 1 deletion(-)
  create mode 100644 net/url_request/trk_protocol_handler.cc
  create mode 100644 net/url_request/trk_protocol_handler.h
 
@@ -48,16 +48,18 @@ diff --git a/chrome/browser/history/history_utils.cc b/chrome/browser/history/hi
 diff --git a/chrome/browser/ui/singleton_tabs.cc b/chrome/browser/ui/singleton_tabs.cc
 --- a/chrome/browser/ui/singleton_tabs.cc
 +++ b/chrome/browser/ui/singleton_tabs.cc
-@@ -102,7 +102,8 @@ int GetIndexOfExistingTab(Browser* browser, const NavigateParams& params) {
-     // RewriteURLIfNecessary removes the "view-source:" scheme which could lead
-     // to incorrect matching, so ensure that the target and the candidate are
-     // either both view-source:, or neither is.
--    if (tab_url.SchemeIs(content::kViewSourceScheme) != target_is_view_source) {
-+    if (tab_url.SchemeIs(content::kViewSourceScheme) ||
-+        tab_url.SchemeIs(url::kTraceScheme) != target_is_view_source) {
+@@ -106,6 +106,11 @@ int GetIndexOfExistingTab(Browser* browser, const NavigateParams& params) {
        continue;
      }
  
++    // trk: URLs must not be rewritten
++    if (tab_url.SchemeIs(url::kTraceScheme)) {
++      continue;
++    }
++
+     GURL rewritten_tab_url = tab_url;
+     content::BrowserURLHandler::GetInstance()->RewriteURLIfNecessary(
+         &rewritten_tab_url, browser->profile());
 diff --git a/components/omnibox/browser/autocomplete_input.cc b/components/omnibox/browser/autocomplete_input.cc
 --- a/components/omnibox/browser/autocomplete_input.cc
 +++ b/components/omnibox/browser/autocomplete_input.cc
@@ -104,14 +106,14 @@ diff --git a/components/url_formatter/url_fixer.cc b/components/url_formatter/ur
 diff --git a/content/browser/child_process_security_policy_impl.cc b/content/browser/child_process_security_policy_impl.cc
 --- a/content/browser/child_process_security_policy_impl.cc
 +++ b/content/browser/child_process_security_policy_impl.cc
-@@ -733,6 +733,7 @@ ChildProcessSecurityPolicyImpl::ChildProcessSecurityPolicyImpl()
-   RegisterWebSafeScheme(url::kWssScheme);
- #endif  // BUILDFLAG(ENABLE_WEBSOCKETS)
-   RegisterWebSafeScheme(url::kDataScheme);
+@@ -745,6 +745,7 @@ ChildProcessSecurityPolicyImpl::ChildProcessSecurityPolicyImpl()
+   RegisterPseudoScheme(url::kJavaScriptScheme);
+   RegisterPseudoScheme(kViewSourceScheme);
+   RegisterPseudoScheme(kGoogleChromeScheme);
 +  RegisterWebSafeScheme(url::kTraceScheme);
+ }
  
-   // TODO(nick): https://crbug.com/651534 blob: and filesystem: schemes embed
-   // other origins, so we should not treat them as web safe. Remove callers of
+ ChildProcessSecurityPolicyImpl::~ChildProcessSecurityPolicyImpl() {
 diff --git a/net/BUILD.gn b/net/BUILD.gn
 --- a/net/BUILD.gn
 +++ b/net/BUILD.gn
@@ -158,7 +160,7 @@ diff --git a/net/url_request/trk_protocol_handler.h b/net/url_request/trk_protoc
 new file mode 100644
 --- /dev/null
 +++ b/net/url_request/trk_protocol_handler.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,30 @@
 +// Copyright (c) 2018 The ungoogled-chromium Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -178,6 +180,9 @@ new file mode 100644
 +class NET_EXPORT TrkProtocolHandler
 +    : public URLRequestJobFactory::ProtocolHandler {
 + public:
++  TrkProtocolHandler(const TrkProtocolHandler&) = delete;
++  TrkProtocolHandler& operator=(const TrkProtocolHandler&) = delete;
++
 +  TrkProtocolHandler();
 +  std::unique_ptr<URLRequestJob> CreateJob(URLRequest* request) const override;
 +  bool IsSafeRedirectTarget(const GURL& location) const override;
@@ -241,25 +246,25 @@ diff --git a/net/url_request/url_request_context_builder.cc b/net/url_request/ur
 diff --git a/url/url_constants.cc b/url/url_constants.cc
 --- a/url/url_constants.cc
 +++ b/url/url_constants.cc
-@@ -30,6 +30,7 @@ const char kQuicTransportScheme[] = "quic-transport";
+@@ -29,6 +29,7 @@ const char kMailToScheme[] = "mailto";
+ const char kQuicTransportScheme[] = "quic-transport";
  const char kTelScheme[] = "tel";
  const char kUrnScheme[] = "urn";
- const char kUuidInPackageScheme[] = "uuid-in-package";
 +const char kTraceScheme[] = "trk";
+ const char kUuidInPackageScheme[] = "uuid-in-package";
  const char kWsScheme[] = "ws";
  const char kWssScheme[] = "wss";
- 
 diff --git a/url/url_constants.h b/url/url_constants.h
 --- a/url/url_constants.h
 +++ b/url/url_constants.h
-@@ -34,6 +34,7 @@ COMPONENT_EXPORT(URL) extern const char kQuicTransportScheme[];
+@@ -33,6 +33,7 @@ COMPONENT_EXPORT(URL) extern const char kMailToScheme[];
+ COMPONENT_EXPORT(URL) extern const char kQuicTransportScheme[];
  COMPONENT_EXPORT(URL) extern const char kTelScheme[];
  COMPONENT_EXPORT(URL) extern const char kUrnScheme[];
- COMPONENT_EXPORT(URL) extern const char kUuidInPackageScheme[];
 +COMPONENT_EXPORT(URL) extern const char kTraceScheme[];
+ COMPONENT_EXPORT(URL) extern const char kUuidInPackageScheme[];
  COMPONENT_EXPORT(URL) extern const char kWsScheme[];
  COMPONENT_EXPORT(URL) extern const char kWssScheme[];
- 
 diff --git a/url/url_util.cc b/url/url_util.cc
 --- a/url/url_util.cc
 +++ b/url/url_util.cc
@@ -279,6 +284,5 @@ diff --git a/url/url_util.cc b/url/url_util.cc
    };
  
    // Schemes that can be sent CORS requests.
--- 
+--
 2.25.1
-

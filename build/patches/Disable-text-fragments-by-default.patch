@@ -4,38 +4,75 @@ Subject: Disable text fragments by default
 
 Revert "[Text Fragment] Unflag fragment directive removal."
 ---
- chrome/browser/about_flags.cc                                | 1 +
- chrome/browser/flag-metadata.json                            | 2 +-
- chrome/browser/ui/prefs/prefs_tab_helper.cc                  | 2 +-
- content/child/runtime_features.cc                            | 1 +
- third_party/blink/common/features.cc                         | 2 +-
- third_party/blink/renderer/core/dom/document.cc              | 5 +++++
- .../blink/renderer/platform/runtime_enabled_features.json5   | 3 +--
- 7 files changed, 11 insertions(+), 5 deletions(-)
+ chrome/browser/about_flags.cc                 |  5 ++++
+ chrome/browser/flag-metadata.json             |  5 ++++
+ chrome/browser/flag_descriptions.cc           |  4 +++
+ chrome/browser/flag_descriptions.h            |  3 ++
+ chrome/browser/ui/prefs/prefs_tab_helper.cc   |  2 +-
+ content/child/runtime_features.cc             |  2 +-
+ third_party/blink/common/features.cc          |  2 +-
+ .../blink/renderer/core/dom/document.cc       |  5 ++++
+ .../text_fragment_anchor_metrics_test.cc      | 29 +++++++------------
+ .../platform/runtime_enabled_features.json5   |  3 +-
+ 10 files changed, 36 insertions(+), 24 deletions(-)
 
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
-@@ -5545,6 +5545,7 @@ const FeatureEntry kFeatureEntries[] = {
-      FEATURE_VALUE_TYPE(sharing_hub::kSharingHubDesktopOmnibox)},
- #endif  // defined(OS_WIN) || defined(OS_MAC) || defined(OS_LINUX) ||
-         // defined(OS_FUCHSIA)
-+     // will override runtime text fragment identifiers setting too
+@@ -5360,6 +5360,11 @@ const FeatureEntry kFeatureEntries[] = {
+      FEATURE_VALUE_TYPE(chrome::android::kCCTResizableForThirdParties)},
+ #endif
  
++    {"enable-text-fragment-anchor",
++     flag_descriptions::kEnableTextFragmentAnchorName,
++     flag_descriptions::kEnableTextFragmentAnchorDescription, kOsAll,
++     FEATURE_VALUE_TYPE(blink::features::kTextFragmentAnchor)},
++
  #if BUILDFLAG(IS_CHROMEOS_ASH)
-     {"ash-enable-pip-rounded-corners",
+     {"enforce-system-aec", flag_descriptions::kCrOSEnforceSystemAecName,
+      flag_descriptions::kCrOSEnforceSystemAecDescription, kOsCrOS,
 diff --git a/chrome/browser/flag-metadata.json b/chrome/browser/flag-metadata.json
 --- a/chrome/browser/flag-metadata.json
 +++ b/chrome/browser/flag-metadata.json
-@@ -3035,7 +3035,7 @@
-   {
-     "name": "ev-details-in-page-info",
-     "owners": [ "cthomp" ],
--    "expiry_milestone": 83
-+    "expiry_milestone": -1
+@@ -2332,6 +2332,11 @@
+     // deep into the future to allow for experiments.
+     "expiry_milestone": 90
    },
++  {
++    "name": "enable-text-fragment-anchor",
++    "owners": [ "bokan", "input-dev" ],
++    "expiry_milestone": -1
++  },
    {
-     "name": "exo-gamepad-vibration",
+     "name": "enable-new-download-api",
+     "owners": [ "sdefresne", "bling-flags@google.com" ],
+diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descriptions.cc
+--- a/chrome/browser/flag_descriptions.cc
++++ b/chrome/browser/flag_descriptions.cc
+@@ -1239,6 +1239,10 @@ const char kEnableRestrictedWebApisDescription[] =
+     "Enable the restricted web APIs for dev trial. This will be replaced with "
+     "permission policies to control the capabilities afterwards.";
+ 
++const char kEnableTextFragmentAnchorName[] = "Enable Text Fragment Anchor.";
++const char kEnableTextFragmentAnchorDescription[] =
++    "Enables scrolling to text specified in URL's fragment.";
++
+ const char kEnableUseZoomForDsfName[] =
+     "Use Blink's zoom for device scale factor.";
+ const char kEnableUseZoomForDsfDescription[] =
+diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
+--- a/chrome/browser/flag_descriptions.h
++++ b/chrome/browser/flag_descriptions.h
+@@ -717,6 +717,9 @@ extern const char kEnableRestrictedWebApisDescription[];
+ extern const char kEnableSubresourceRedirectName[];
+ extern const char kEnableSubresourceRedirectDescription[];
+ 
++extern const char kEnableTextFragmentAnchorName[];
++extern const char kEnableTextFragmentAnchorDescription[];
++
+ extern const char kEnableUseZoomForDsfName[];
+ extern const char kEnableUseZoomForDsfDescription[];
+ extern const char kEnableUseZoomForDsfChoiceDefault[];
 diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/prefs/prefs_tab_helper.cc
 --- a/chrome/browser/ui/prefs/prefs_tab_helper.cc
 +++ b/chrome/browser/ui/prefs/prefs_tab_helper.cc
@@ -51,14 +88,15 @@ diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/pre
 diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.cc
 --- a/content/child/runtime_features.cc
 +++ b/content/child/runtime_features.cc
-@@ -264,6 +264,7 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
-     {wf::EnableMouseSubframeNoImplicitCapture,
-      features::kMouseSubframeNoImplicitCapture},
-     {wf::EnableNeverSlowMode, features::kNeverSlowMode},
-+    // will set the TextFragmentIdentifiers runtime feature
-     {wf::EnableNotificationContentImage, features::kNotificationContentImage,
-      kSetOnlyIfOverridden},
-     {wf::EnableParseUrlProtocolHandler,
+@@ -295,7 +295,7 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
+      features::kSignedExchangeSubresourcePrefetch},
+     {wf::EnableSkipTouchEventFilter, blink::features::kSkipTouchEventFilter},
+     {wf::EnableSubresourceWebBundles, features::kSubresourceWebBundles},
+-    {wf::EnableTextFragmentAnchor, blink::features::kTextFragmentAnchor},
++    {wf::EnableTextFragmentAnchor, blink::features::kTextFragmentAnchor}, // will set the TextFragmentIdentifiers runtime feature
+     {wf::EnableCSSSelectorFragmentAnchor,
+      blink::features::kCssSelectorFragmentAnchor},
+     {wf::EnableBackfaceVisibilityInterop,
 diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
 --- a/third_party/blink/common/features.cc
 +++ b/third_party/blink/common/features.cc
@@ -89,6 +127,54 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
  
    url_ = new_url;
    UpdateBaseURL();
+diff --git a/third_party/blink/renderer/core/fragment_directive/text_fragment_anchor_metrics_test.cc b/third_party/blink/renderer/core/fragment_directive/text_fragment_anchor_metrics_test.cc
+--- a/third_party/blink/renderer/core/fragment_directive/text_fragment_anchor_metrics_test.cc
++++ b/third_party/blink/renderer/core/fragment_directive/text_fragment_anchor_metrics_test.cc
+@@ -1251,34 +1251,25 @@ TEST_P(TextFragmentRelatedMetricTest, ElementIdSuccessFailureCounts) {
+   // result of the element-id fragment if a text directive is successfully
+   // parsed. If the feature is off we treat the text directive as an element-id
+   // and should count the result.
++  const int kUncountedOrNotFound = GetParam() ? kUncounted : kNotFound;
+   const int kUncountedOrFound = GetParam() ? kUncounted : kFound;
+ 
+-  // Note: We'll strip the fragment directive (i.e. anything after :~:) leaving
+-  // just the element anchor. The fragment directive stripping behavior is now
+-  // shipped unflagged so it should always be performed.
++  // When the TextFragmentAnchors feature is on, we'll strip the fragment
++  // directive (i.e. anything after :~:) leaving just the element anchor.
++  const int kFoundIfDirectiveStripped = GetParam() ? kFound : kNotFound;
+ 
+   Vector<std::pair<String, int>> test_cases = {
+       {"", kUncounted},
+       {"#element", kFound},
+       {"#doesntExist", kNotFound},
+-      // `:~:foo` will be stripped so #element will be found and #doesntexist
+-      // ##element will be not found.
+-      {"#element:~:foo", kFound},
++      {"#element:~:foo", kFoundIfDirectiveStripped},
+       {"#doesntexist:~:foo", kNotFound},
+       {"##element", kNotFound},
+-      // If the feature  is on, `:~:text=` will parse so we shouldn't count.
+-      // Otherwise, it'll just be stripped so #element will be found.
+-      {"#element:~:text=doesntexist", kUncountedOrFound},
+-      {"#element:~:text=page", kUncountedOrFound},
+-      // If the feature is on, `:~:text` is parsed so we don't count. If it's
+-      // off the entire fragment is a directive that's stripped so no search is
+-      // performed either.
+-      {"#:~:text=doesntexist", kUncounted},
+-      {"#:~:text=page", kUncounted},
+-      {"#:~:text=name", kUncounted},
+-      // If the feature is enabled, `:~:text` parses and we don't count the
+-      // element-id. If the feature is off, we still strip the :~: directive
+-      // and the remaining fragment does match an element id.
++      {"#element:~:text=doesntexist", kUncountedOrNotFound},
++      {"#element:~:text=page", kUncountedOrNotFound},
++      {"#:~:text=doesntexist", kUncountedOrNotFound},
++      {"#:~:text=page", kUncountedOrNotFound},
++      {"#:~:text=name", kUncountedOrFound},
+       {"#element:~:text=name", kUncountedOrFound}};
+ 
+   const int kNotFoundSample = 0;
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
@@ -102,6 +188,5 @@ diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 
      },
      {
        name: "TextFragmentTapOpensContextMenu",
--- 
+--
 2.25.1
-

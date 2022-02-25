@@ -25,7 +25,6 @@ Fix RestoreForeignSessionTab by recreating the tab (issue #681)
  chrome/browser/browser_process_impl.cc        |  20 ++
  chrome/browser/browser_process_impl.h         |   2 +
  chrome/browser/chrome_browser_main.cc         |   3 +
- .../browser/chrome_content_browser_client.cc  |   5 -
  .../flags/android/cached_feature_flags.cc     |  11 +
  .../browser/flags/CachedFeatureFlags.java     |  10 +
  .../net/system_network_context_manager.cc     |   4 +
@@ -37,7 +36,7 @@ Fix RestoreForeignSessionTab by recreating the tab (issue #681)
  .../adblock_updater_service.cc                | 271 ++++++++++++++++++
  .../adblock_updater_service.h                 |  99 +++++++
  .../download_filters_task.cc                  | 224 +++++++++++++++
- .../component_updater/download_filters_task.h | 127 ++++++++
+ .../component_updater/download_filters_task.h | 130 +++++++++
  ...ent_subresource_filter_throttle_manager.cc |  11 +
  .../content/browser/ruleset_service.cc        |  33 ++-
  .../content/browser/ruleset_service.h         |   7 +-
@@ -46,7 +45,7 @@ Fix RestoreForeignSessionTab by recreating the tab (issue #681)
  .../browser/subresource_filter_features.cc    | 113 +-------
  .../core/common/indexed_ruleset.cc            |   5 +-
  .../navigation_throttle_runner.cc             |   5 -
- 37 files changed, 1155 insertions(+), 129 deletions(-)
+ 36 files changed, 1158 insertions(+), 124 deletions(-)
  create mode 100644 chrome/android/java/res/layout/adblock_editor.xml
  create mode 100644 chrome/android/java/res/xml/adblock_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AdBlockEditor.java
@@ -543,38 +542,16 @@ diff --git a/chrome/browser/browser_process_impl.h b/chrome/browser/browser_proc
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
-@@ -1664,6 +1664,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
-     }
-   }
+@@ -1681,6 +1681,9 @@ int ChromeBrowserMainParts::PreMainMessageLoopRunImpl() {
+   // will be initialized when the app enters foreground mode.
+   variations_service->set_policy_pref_service(profile_->GetPrefs());
  
 +  // force AdBlock updater initialisation
 +  g_browser_process->adblock_updater();
 +
- #if BUILDFLAG(IS_CHROMEOS_ASH)
-   if (base::FeatureList::IsEnabled(ash::features::kOnDeviceSpeechRecognition)) {
-     speech::SodaInstaller::GetInstance()->Init(profile_->GetPrefs(),
-diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
---- a/chrome/browser/chrome_content_browser_client.cc
-+++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -61,7 +61,6 @@
- #include "chrome/browser/hid/chrome_hid_delegate.h"
- #include "chrome/browser/interstitials/enterprise_util.h"
- #include "chrome/browser/lifetime/browser_shutdown.h"
--#include "chrome/browser/lookalikes/lookalike_url_navigation_throttle.h"
- #include "chrome/browser/media/audio_service_util.h"
- #include "chrome/browser/media/router/media_router_feature.h"
- #include "chrome/browser/media/webrtc/audio_debug_recordings_handler.h"
-@@ -4221,10 +4220,6 @@ ChromeContentBrowserClient::CreateThrottlesForNavigation(
-                    &throttles);
- #endif
- 
--  MaybeAddThrottle(
--      LookalikeUrlNavigationThrottle::MaybeCreateNavigationThrottle(handle),
--      &throttles);
--
-   MaybeAddThrottle(PDFIFrameNavigationThrottle::MaybeCreateThrottleFor(handle),
-                    &throttles);
- #if BUILDFLAG(ENABLE_PDF)
+ #else
+   // We are in regular browser boot sequence. Open initial tabs and enter the
+   // main message loop.
 diff --git a/chrome/browser/flags/android/cached_feature_flags.cc b/chrome/browser/flags/android/cached_feature_flags.cc
 --- a/chrome/browser/flags/android/cached_feature_flags.cc
 +++ b/chrome/browser/flags/android/cached_feature_flags.cc
@@ -1346,7 +1323,7 @@ diff --git a/components/component_updater/download_filters_task.h b/components/c
 new file mode 100644
 --- /dev/null
 +++ b/components/component_updater/download_filters_task.h
-@@ -0,0 +1,127 @@
+@@ -0,0 +1,130 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -1420,6 +1397,9 @@ new file mode 100644
 +// Defines a specialized task for updating AdBlock filters.
 +class DownloadFiltersTask : public base::RefCounted<DownloadFiltersTask> {
 + public:
++  DownloadFiltersTask(const DownloadFiltersTask&) = delete;
++  DownloadFiltersTask& operator=(const DownloadFiltersTask&) = delete;
++
 +  using Callback =
 +      base::OnceCallback<void(scoped_refptr<DownloadFiltersTask> task, Error error)>;
 +
@@ -1855,6 +1835,5 @@ diff --git a/content/browser/renderer_host/navigation_throttle_runner.cc b/conte
  }
  
  NavigationThrottle* NavigationThrottleRunner::GetDeferringThrottle() const {
--- 
+--
 2.25.1
-

@@ -8,6 +8,7 @@ The patch also includes tablet mode.
  cc/base/features.cc                           |  3 ++
  cc/base/features.h                            |  1 +
  cc/input/browser_controls_offset_manager.cc   |  6 +++
+ cc/trees/layer_tree_host_impl.cc              |  3 ++
  .../tab_management/TabGroupUiCoordinator.java |  7 ++-
  .../tab_management/TabGroupUiMediator.java    | 50 ++++++++++++++++++-
  .../tab_management/TabGroupUiProperties.java  |  6 ++-
@@ -20,14 +21,14 @@ The patch also includes tablet mode.
  .../browser/app/flags/ChromeCachedFlags.java  |  1 +
  .../compositor/CompositorViewHolder.java      |  6 +++
  .../layouts/LayoutManagerChromeTablet.java    |  4 +-
+ .../layouts/ToolbarSwipeLayout.java           | 15 +++++-
  .../overlays/strip/StripLayoutHelper.java     |  2 +-
  .../strip/StripLayoutHelperManager.java       | 33 ++++++++++--
  .../scene_layer/StaticTabSceneLayer.java      |  8 ++-
  .../scene_layer/TabListSceneLayer.java        | 14 ++++++
  .../scene_layer/TabStripSceneLayer.java       | 15 +++++-
- .../scene_layer/ToolbarSwipeSceneLayer.java   | 10 +++-
  .../browser/findinpage/FindToolbarTablet.java | 11 ++--
- .../fullscreen/BrowserControlsManager.java    | 11 ++++
+ .../fullscreen/BrowserControlsManager.java    | 13 +++++
  .../modaldialog/ChromeTabModalPresenter.java  |  2 +-
  .../chrome/browser/ntp/NewTabPage.java        | 13 +++--
  .../chrome/browser/ntp/RecentTabsPage.java    | 22 ++++++--
@@ -46,6 +47,7 @@ The patch also includes tablet mode.
  .../flags/android/chrome_feature_list.cc      |  2 +
  .../browser/flags/CachedFeatureFlags.java     | 19 +++++++
  .../browser/flags/ChromeFeatureList.java      |  2 +
+ .../chrome/browser/ui/appmenu/AppMenu.java    |  4 ++
  .../omnibox/LocationBarCoordinator.java       |  9 +++-
  .../browser/omnibox/UrlBarCoordinator.java    | 11 +++-
  .../suggestions/AutocompleteCoordinator.java  | 16 +++++-
@@ -64,7 +66,8 @@ The patch also includes tablet mode.
  .../top/TopToolbarOverlayCoordinator.java     |  7 +++
  .../top/TopToolbarOverlayProperties.java      |  8 ++-
  .../toolbar/top/TopToolbarSceneLayer.java     | 11 +++-
- 59 files changed, 606 insertions(+), 48 deletions(-)
+ .../render_widget_host_view_android.cc        |  3 ++
+ 62 files changed, 622 insertions(+), 49 deletions(-)
 
 diff --git a/cc/base/features.cc b/cc/base/features.cc
 --- a/cc/base/features.cc
@@ -113,6 +116,19 @@ diff --git a/cc/input/browser_controls_offset_manager.cc b/cc/input/browser_cont
    return pending_delta - applied_delta;
  }
  
+diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
+--- a/cc/trees/layer_tree_host_impl.cc
++++ b/cc/trees/layer_tree_host_impl.cc
+@@ -4267,6 +4267,9 @@ bool LayerTreeHostImpl::AnimateBrowserControls(base::TimeTicks time) {
+   if (scroll_delta.IsZero())
+     return false;
+ 
++  if (base::FeatureList::IsEnabled(::features::kMoveTopToolbarToBottom))
++    return false;
++
+   // This counter-scrolls the page to keep the appearance of the page content
+   // being fixed while the browser controls animate.
+   viewport().ScrollBy(scroll_delta,
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java
@@ -542,6 +558,45 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layo
          addSceneOverlay(mTabStripLayoutHelperManager);
  
          setNextLayout(null);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/ToolbarSwipeLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/ToolbarSwipeLayout.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/ToolbarSwipeLayout.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/ToolbarSwipeLayout.java
+@@ -35,6 +35,9 @@ import org.chromium.ui.base.DeviceFormFactor;
+ import org.chromium.ui.base.LocalizationUtils;
+ import org.chromium.ui.resources.ResourceManager;
+ 
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.flags.CachedFeatureFlags;
++
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+@@ -383,7 +386,11 @@ public class ToolbarSwipeLayout extends Layout {
+                 mLeftToolbarOverlay.setXOffset(leftX * dpToPx);
+             }
+             mLeftTab.setX(leftX);
+-            mLeftTab.setY(mBrowserControlsStateProvider.getContentOffset() / dpToPx);
++            if (CachedFeatureFlags.isEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM)) {
++                mLeftTab.setY(0);
++            } else {
++                mLeftTab.setY(mBrowserControlsStateProvider.getContentOffset() / dpToPx);
++            }
+             needUpdate = updateSnap(dt, mLeftTab) || needUpdate;
+         } else if (mLeftToolbarOverlay != null) {
+             mLeftToolbarOverlay.setManualVisibility(false);
+@@ -396,7 +403,11 @@ public class ToolbarSwipeLayout extends Layout {
+                 mRightToolbarOverlay.setXOffset(rightX * dpToPx);
+             }
+             mRightTab.setX(rightX);
+-            mRightTab.setY(mBrowserControlsStateProvider.getContentOffset() / dpToPx);
++            if (CachedFeatureFlags.isEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM)) {
++                mRightTab.setY(0);
++            } else {
++                mRightTab.setY(mBrowserControlsStateProvider.getContentOffset() / dpToPx);
++            }
+             needUpdate = updateSnap(dt, mRightTab) || needUpdate;
+         } else if (mRightToolbarOverlay != null) {
+             mRightToolbarOverlay.setManualVisibility(false);
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/overlays/strip/StripLayoutHelper.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/overlays/strip/StripLayoutHelper.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/overlays/strip/StripLayoutHelper.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/overlays/strip/StripLayoutHelper.java
@@ -759,37 +814,6 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/scen
          // This will hide the tab strips if necessary.
          TabStripSceneLayerJni.get().beginBuildingFrame(
                  mNativePtr, TabStripSceneLayer.this, visible);
-diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/scene_layer/ToolbarSwipeSceneLayer.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/scene_layer/ToolbarSwipeSceneLayer.java
---- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/scene_layer/ToolbarSwipeSceneLayer.java
-+++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/scene_layer/ToolbarSwipeSceneLayer.java
-@@ -13,6 +13,9 @@ import org.chromium.chrome.browser.compositor.layouts.content.TabContentManager;
- import org.chromium.chrome.browser.layouts.scene_layer.SceneLayer;
- import org.chromium.chrome.browser.tab.Tab;
- 
-+import org.chromium.chrome.browser.flags.ChromeFeatureList;
-+import org.chromium.chrome.browser.flags.CachedFeatureFlags;
-+
- /** A SceneLayer that displays one or two tab content layers for toolbar swipe functionality. */
- @JNINamespace("android")
- public class ToolbarSwipeSceneLayer extends SceneLayer {
-@@ -27,11 +30,16 @@ public class ToolbarSwipeSceneLayer extends SceneLayer {
-     public void update(LayoutTab tab, boolean isLeftTab, int backgroundColor) {
-         final float dpToPx = mContext.getResources().getDisplayMetrics().density;
- 
-+        float y = (tab != null ? tab.get(LayoutTab.Y) * dpToPx : 0);
-+        if (CachedFeatureFlags.isEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM)) {
-+            // the toolbar is with gravity bottom, fixed at zero
-+            y = 0;
-+        }
-         ToolbarSwipeSceneLayerJni.get().updateLayer(mNativePtr, this,
-                 tab != null ? tab.get(LayoutTab.TAB_ID) : Tab.INVALID_TAB_ID, isLeftTab,
-                 tab != null ? tab.get(LayoutTab.CAN_USE_LIVE_TEXTURE) : false, backgroundColor,
-                 tab != null ? tab.get(LayoutTab.X) * dpToPx : 0,
--                tab != null ? tab.get(LayoutTab.Y) * dpToPx : 0);
-+                y);
-     }
- 
-     @Override
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/findinpage/FindToolbarTablet.java b/chrome/android/java/src/org/chromium/chrome/browser/findinpage/FindToolbarTablet.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/findinpage/FindToolbarTablet.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/findinpage/FindToolbarTablet.java
@@ -846,6 +870,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/fullscreen/Brow
      @Override
      public int getTopControlsMinHeight() {
          return mTopControlsMinHeight;
+@@ -433,6 +444,8 @@ public class BrowserControlsManager
+ 
+     @Override
+     public float getTopVisibleContentOffset() {
++        if (CachedFeatureFlags.isEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM))
++            return 0;
+         return getTopControlsHeight() + getTopControlOffset();
+     }
+ 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/modaldialog/ChromeTabModalPresenter.java b/chrome/android/java/src/org/chromium/chrome/browser/modaldialog/ChromeTabModalPresenter.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/modaldialog/ChromeTabModalPresenter.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/modaldialog/ChromeTabModalPresenter.java
@@ -960,7 +993,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/RecentTabsP
 -        final int bottomMargin = mBrowserControlsStateProvider.getBottomControlsHeight();
 +        int bottomMargin = mBrowserControlsStateProvider.getBottomControlsHeight();
 +        if (CachedFeatureFlags.isEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM)) {
-+            bottomMargin += mBrowserControlsStateProvider.getTopControlsHeight() + mTabStripAndToolbarHeight;
++            bottomMargin += mBrowserControlsStateProvider.getTopControlsHeight();
 +        }
          if (topMargin != layoutParams.topMargin || bottomMargin != layoutParams.bottomMargin) {
              layoutParams.topMargin = topMargin;
@@ -1187,7 +1220,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContai
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
-@@ -6203,6 +6203,11 @@ const FeatureEntry kFeatureEntries[] = {
+@@ -6207,6 +6207,11 @@ const FeatureEntry kFeatureEntries[] = {
       flag_descriptions::kImpulseScrollAnimationsDescription, kOsAll,
       FEATURE_VALUE_TYPE(features::kImpulseScrollAnimations)},
  
@@ -1288,7 +1321,7 @@ diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrom
 diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descriptions.cc
 --- a/chrome/browser/flag_descriptions.cc
 +++ b/chrome/browser/flag_descriptions.cc
-@@ -1507,6 +1507,10 @@ const char kImpulseScrollAnimationsDescription[] =
+@@ -1511,6 +1511,10 @@ const char kImpulseScrollAnimationsDescription[] =
      "Replaces the default scroll animation with Impulse-style scroll "
      "animations.";
  
@@ -1302,7 +1335,7 @@ diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descripti
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
-@@ -877,6 +877,9 @@ extern const char kCompositorThreadedScrollbarScrollingDescription[];
+@@ -880,6 +880,9 @@ extern const char kCompositorThreadedScrollbarScrollingDescription[];
  extern const char kImpulseScrollAnimationsName[];
  extern const char kImpulseScrollAnimationsDescription[];
  
@@ -1355,7 +1388,7 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
  #include "base/metrics/field_trial_params.h"
  #include "chrome/browser/browser_features.h"
  #include "chrome/browser/commerce/commerce_feature_list.h"
-@@ -244,6 +245,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
+@@ -243,6 +244,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
      &kInstantStart,
      &kKitKatSupported,
      &kLensCameraAssistedSearch,
@@ -1418,6 +1451,27 @@ diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/f
      public static final String METRICS_SETTINGS_ANDROID = "MetricsSettingsAndroid";
      public static final String NEW_WINDOW_APP_MENU = "NewWindowAppMenu";
      public static final String SEARCH_READY_OMNIBOX = "SearchReadyOmnibox";
+diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+--- a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
++++ b/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/chrome/browser/ui/appmenu/AppMenu.java
+@@ -39,6 +39,8 @@ import androidx.annotation.VisibleForTesting;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.SysUtils;
+ import org.chromium.base.metrics.RecordHistogram;
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.flags.CachedFeatureFlags;
+ import org.chromium.chrome.browser.ui.appmenu.internal.R;
+ import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter;
+ import org.chromium.components.browser_ui.widget.highlight.ViewHighlighter.HighlightParams;
+@@ -509,6 +511,8 @@ class AppMenu implements OnItemClickListener, OnKeyListener, AppMenuClickHandler
+             View anchorView, @IdRes int groupDividerResourceId) {
+         anchorView.getLocationOnScreen(mTempLocation);
+         int anchorViewY = mTempLocation[1] - appDimensions.top;
++        if (CachedFeatureFlags.isEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM))
++            anchorViewY += mNegativeVerticalOffsetNotTopAnchored;
+ 
+         int anchorViewImpactHeight = mIsByPermanentButton ? anchorView.getHeight() : 0;
+ 
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
@@ -1618,7 +1672,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -1449,6 +1449,12 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -1452,6 +1452,12 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_ACCESSIBILITY_CAPTIONS_TITLE" desc="Title of the preference that allows the user to update caption settings.">
          Captions
        </message>
@@ -1966,6 +2020,25 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
                  model.get(TopToolbarOverlayProperties.SHOW_SHADOW),
                  model.get(TopToolbarOverlayProperties.VISIBLE),
                  model.get(TopToolbarOverlayProperties.ANONYMIZE));
--- 
+diff --git a/content/browser/renderer_host/render_widget_host_view_android.cc b/content/browser/renderer_host/render_widget_host_view_android.cc
+--- a/content/browser/renderer_host/render_widget_host_view_android.cc
++++ b/content/browser/renderer_host/render_widget_host_view_android.cc
+@@ -27,6 +27,7 @@
+ #include "base/task/thread_pool.h"
+ #include "base/threading/scoped_blocking_call.h"
+ #include "base/threading/thread_task_runner_handle.h"
++#include "cc/base/features.h"
+ #include "cc/base/math_util.h"
+ #include "cc/layers/layer.h"
+ #include "cc/layers/surface_layer.h"
+@@ -493,6 +494,8 @@ void RenderWidgetHostViewAndroid::OnRenderFrameMetadataChangedBeforeActivation(
+   // factor. Thus, |top_content_offset| in CSS pixels is also in DIPs.
+   float top_content_offset =
+       metadata.top_controls_height * metadata.top_controls_shown_ratio;
++  if (base::FeatureList::IsEnabled(::features::kMoveTopToolbarToBottom))
++    top_content_offset = 0;
+   float top_shown_pix = top_content_offset * to_pix;
+ 
+   if (ime_adapter_android_) {
+--
 2.25.1
-
