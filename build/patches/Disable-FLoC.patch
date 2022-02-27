@@ -10,12 +10,14 @@ Also added the disabling of blink features through the DisabledForBromite tag
  .../floc_component_installer.cc               | 10 +---
  .../floc_eligibility_observer.cc              | 58 +------------------
  .../floc_id_provider_impl.cc                  |  4 +-
- .../privacy_sandbox_settings.cc               | 14 +++--
+ .../privacy_sandbox_service.cc                |  4 +-
  .../federated_learning/features/features.cc   | 12 ++--
  components/federated_learning/floc_id.cc      | 19 +++---
  .../history/core/browser/history_backend.cc   | 13 +----
  .../history/core/browser/history_service.cc   |  9 +--
  components/history/core/browser/url_row.h     |  1 -
+ .../privacy_sandbox/privacy_sandbox_prefs.cc  |  2 +-
+ .../privacy_sandbox_settings.cc               |  4 +-
  third_party/blink/common/features.cc          |  4 +-
  .../permissions_policy_feature.mojom          |  5 --
  .../renderer/bindings/generated_in_core.gni   |  2 -
@@ -24,12 +26,12 @@ Also added the disabling of blink features through the DisabledForBromite tag
  .../renderer/core/dom/interest_cohort.idl     |  4 --
  .../permissions_policy_features.json5         |  6 --
  .../platform/runtime_enabled_features.json5   |  5 +-
- 18 files changed, 38 insertions(+), 164 deletions(-)
+ 20 files changed, 36 insertions(+), 162 deletions(-)
 
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2798,6 +2798,10 @@ bool ChromeContentBrowserClient::IsConversionMeasurementOperationAllowed(
+@@ -2792,6 +2792,10 @@ bool ChromeContentBrowserClient::IsConversionMeasurementOperationAllowed(
      const url::Origin* impression_origin,
      const url::Origin* conversion_origin,
      const url::Origin* reporting_origin) {
@@ -169,30 +171,20 @@ diff --git a/chrome/browser/federated_learning/floc_id_provider_impl.cc b/chrome
  
      if (url_result.visit_time() < history_begin_time)
        history_begin_time = url_result.visit_time();
-diff --git a/chrome/browser/privacy_sandbox/privacy_sandbox_settings.cc b/chrome/browser/privacy_sandbox/privacy_sandbox_settings.cc
---- a/chrome/browser/privacy_sandbox/privacy_sandbox_settings.cc
-+++ b/chrome/browser/privacy_sandbox/privacy_sandbox_settings.cc
-@@ -181,6 +181,9 @@ PrivacySandboxSettings::PrivacySandboxSettings(
- 
-   // as default, privacy sandbox is disabled
-   pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabled, false);
-+  // as default, floc is not enabled
-+  pref_service_->SetBoolean(prefs::kPrivacySandboxFlocEnabled, false);
-+
-   // On first entering the privacy sandbox experiment, users may have the
-   // privacy sandbox disabled (or "reconciled") based on their current cookie
-   // settings (e.g. blocking 3P cookies). Depending on the state of the sync
-@@ -291,7 +294,8 @@ bool PrivacySandboxSettings::IsFlocPrefEnabled() const {
+diff --git a/chrome/browser/privacy_sandbox/privacy_sandbox_service.cc b/chrome/browser/privacy_sandbox/privacy_sandbox_service.cc
+--- a/chrome/browser/privacy_sandbox/privacy_sandbox_service.cc
++++ b/chrome/browser/privacy_sandbox/privacy_sandbox_service.cc
+@@ -229,7 +229,8 @@ bool PrivacySandboxService::IsFlocPrefEnabled() const {
  }
  
- void PrivacySandboxSettings::SetFlocPrefEnabled(bool enabled) const {
+ void PrivacySandboxService::SetFlocPrefEnabled(bool enabled) const {
 -  pref_service_->SetBoolean(prefs::kPrivacySandboxFlocEnabled, enabled);
 +  // never enable floc
 +  pref_service_->SetBoolean(prefs::kPrivacySandboxFlocEnabled, false);
    base::RecordAction(base::UserMetricsAction(
        enabled ? "Settings.PrivacySandbox.FlocEnabled"
                : "Settings.PrivacySandbox.FlocDisabled"));
-@@ -444,6 +448,7 @@ void PrivacySandboxSettings::MaybeReconcilePrivacySandboxPref() {
+@@ -282,6 +283,7 @@ void PrivacySandboxService::MaybeReconcilePrivacySandboxPref() {
    // this code could be eliminated in the future, as initially
    // the feauture was tied to the cookies flag
    pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabled, false);
@@ -200,20 +192,6 @@ diff --git a/chrome/browser/privacy_sandbox/privacy_sandbox_settings.cc b/chrome
    if((true))
      return;
  
-@@ -542,11 +547,8 @@ void PrivacySandboxSettings::ReconcilePrivacySandboxPref() {
- 
- void PrivacySandboxSettings::SetFlocDataAccessibleFromNow(
-     bool reset_calculate_timer) const {
--  pref_service_->SetTime(prefs::kPrivacySandboxFlocDataAccessibleSince,
--                         base::Time::Now());
--
--  for (auto& observer : observers_)
--    observer.OnFlocDataAccessibleSinceUpdated(reset_calculate_timer);
-+  // don't tell anyone, thanks.
-+  pref_service_->ClearPref(prefs::kPrivacySandboxFlocDataAccessibleSince);
- }
- 
- void PrivacySandboxSettings::StopObserving() {
 diff --git a/components/federated_learning/features/features.cc b/components/federated_learning/features/features.cc
 --- a/components/federated_learning/features/features.cc
 +++ b/components/federated_learning/features/features.cc
@@ -359,10 +337,36 @@ diff --git a/components/history/core/browser/url_row.h b/components/history/core
  };
  
  using VisitContentAnnotationFlags = uint64_t;
+diff --git a/components/privacy_sandbox/privacy_sandbox_prefs.cc b/components/privacy_sandbox/privacy_sandbox_prefs.cc
+--- a/components/privacy_sandbox/privacy_sandbox_prefs.cc
++++ b/components/privacy_sandbox/privacy_sandbox_prefs.cc
+@@ -45,7 +45,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
+   registry->RegisterTimePref(prefs::kPrivacySandboxFlocDataAccessibleSince,
+                              base::Time());
+   registry->RegisterBooleanPref(
+-      prefs::kPrivacySandboxFlocEnabled, true,
++      prefs::kPrivacySandboxFlocEnabled, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+   registry->RegisterDictionaryPref(prefs::kPrivacySandboxFledgeJoinBlocked);
+ }
+diff --git a/components/privacy_sandbox/privacy_sandbox_settings.cc b/components/privacy_sandbox/privacy_sandbox_settings.cc
+--- a/components/privacy_sandbox/privacy_sandbox_settings.cc
++++ b/components/privacy_sandbox/privacy_sandbox_settings.cc
+@@ -115,8 +115,8 @@ base::Time PrivacySandboxSettings::FlocDataAccessibleSince() const {
+ 
+ void PrivacySandboxSettings::SetFlocDataAccessibleFromNow(
+     bool reset_calculate_timer) const {
+-  pref_service_->SetTime(prefs::kPrivacySandboxFlocDataAccessibleSince,
+-                         base::Time::Now());
++  // don't tell anyone, thanks.
++  pref_service_->ClearPref(prefs::kPrivacySandboxFlocDataAccessibleSince);
+ 
+   for (auto& observer : observers_)
+     observer.OnFlocDataAccessibleSinceUpdated(reset_calculate_timer);
 diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
 --- a/third_party/blink/common/features.cc
 +++ b/third_party/blink/common/features.cc
-@@ -890,11 +890,11 @@ const base::Feature kSendCnameAliasesToSubresourceFilterFromRenderer{
+@@ -895,11 +895,11 @@ const base::Feature kSendCnameAliasesToSubresourceFilterFromRenderer{
  // API exposure will be disabled regardless of the OT config.
  // (See https://github.com/WICG/floc.)
  const base::Feature kInterestCohortAPIOriginTrial{
@@ -411,10 +415,10 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
  #include "third_party/blink/renderer/bindings/core/v8/v8_element_creation_options.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_element_registration_options.h"
 -#include "third_party/blink/renderer/bindings/core/v8/v8_interest_cohort.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_observable_array_css_style_sheet.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_throw_dom_exception.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_union_elementcreationoptions_string.h"
- #include "third_party/blink/renderer/bindings/core/v8/v8_union_htmlscriptelement_svgscriptelement.h"
-@@ -6043,8 +6042,7 @@ ScriptPromise Document::interestCohort(ScriptState* script_state,
+@@ -6045,8 +6044,7 @@ ScriptPromise Document::interestCohort(ScriptState* script_state,
      return ScriptPromise();
    }
  
@@ -424,7 +428,7 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
      exception_state.ThrowDOMException(
          DOMExceptionCode::kInvalidAccessError,
          "The \"interest-cohort\" Permissions Policy denied the use of "
-@@ -6056,33 +6054,6 @@ ScriptPromise Document::interestCohort(ScriptState* script_state,
+@@ -6058,33 +6056,6 @@ ScriptPromise Document::interestCohort(ScriptState* script_state,
        MakeGarbageCollected<ScriptPromiseResolver>(script_state);
  
    ScriptPromise promise = resolver->Promise();
@@ -499,7 +503,7 @@ diff --git a/third_party/blink/renderer/core/permissions_policy/permissions_poli
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -1259,12 +1259,11 @@
+@@ -1261,12 +1261,11 @@
      },
      {
        name: "InterestCohortAPI",
@@ -513,6 +517,6 @@ diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 
 +      depends_on: ["DisabledForBromite"]
      },
      {
-       name: "IntersectionObserverDocumentScrollingElementRoot",
+       name: "KeyboardAccessibleTooltip",
 --
 2.25.1
