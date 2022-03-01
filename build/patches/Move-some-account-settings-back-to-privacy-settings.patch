@@ -4,10 +4,10 @@ Subject: Move some account settings back to privacy settings
 
 Search suggestions, autofill assistant and contextual search
 ---
- .../java/res/xml/privacy_preferences.xml      | 20 +++++++
- .../privacy/settings/PrivacySettings.java     | 60 ++++++++++++++++++-
+ .../java/res/xml/privacy_preferences.xml      | 20 ++++++
+ .../privacy/settings/PrivacySettings.java     | 67 ++++++++++++++++++-
  .../strings/android_chrome_strings.grd        |  4 ++
- 3 files changed, 83 insertions(+), 1 deletion(-)
+ 3 files changed, 90 insertions(+), 1 deletion(-)
 
 diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
 --- a/chrome/android/java/res/xml/privacy_preferences.xml
@@ -40,15 +40,16 @@ diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/androi
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-@@ -21,6 +21,7 @@ import org.chromium.base.ContextUtils;
+@@ -21,6 +21,8 @@ import org.chromium.base.ContextUtils;
  import org.chromium.base.BuildInfo;
  import org.chromium.base.Log;
  import org.chromium.chrome.R;
-+import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.autofill_assistant.AssistantFeatures;
++import org.chromium.chrome.browser.autofill_assistant.AutofillAssistantPreferencesUtil;
  import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
  import org.chromium.chrome.browser.flags.ChromeFeatureList;
  import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthSettingSwitchPreference;
-@@ -50,6 +51,13 @@ import org.chromium.components.user_prefs.UserPrefs;
+@@ -50,6 +52,13 @@ import org.chromium.components.user_prefs.UserPrefs;
  import org.chromium.ui.text.NoUnderlineClickableSpan;
  import org.chromium.ui.text.SpanApplier;
  
@@ -62,7 +63,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
  /**
   * Fragment to keep track of the all the privacy related preferences.
   */
-@@ -74,6 +82,18 @@ public class PrivacySettings
+@@ -74,6 +83,18 @@ public class PrivacySettings
  
      private static final String PREF_CLOSE_TABS_ON_EXIT = "close_tabs_on_exit";
  
@@ -81,7 +82,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
      private ManagedPreferenceDelegate mManagedPreferenceDelegate;
      private IncognitoLockSettings mIncognitoLockSettings;
      private ViewGroup mDialogContainer;
-@@ -120,6 +140,29 @@ public class PrivacySettings
+@@ -120,6 +141,28 @@ public class PrivacySettings
  
          mManagedPreferenceDelegate = createManagedPreferenceDelegate();
  
@@ -93,8 +94,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 +        if (shouldShowAutofillAssistantPreference()) {
 +            mAutofillAssistant.setOnPreferenceChangeListener(this);
 +            mAutofillAssistant.setManagedPreferenceDelegate(mManagedPreferenceDelegate);
-+            mAutofillAssistant.setChecked(mSharedPreferencesManager.readBoolean(
-+                ChromePreferenceKeys.AUTOFILL_ASSISTANT_ENABLED, false));
++            mAutofillAssistant.setChecked(isAutofillAssistantSwitchOn());
 +        } else {
 +            PreferenceCategory servicesCategory =
 +                     (PreferenceCategory) findPreference(PREF_SERVICES_CATEGORY);
@@ -111,7 +111,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
          ChromeSwitchPreference canMakePaymentPref =
                  (ChromeSwitchPreference) findPreference(PREF_CAN_MAKE_PAYMENT);
          canMakePaymentPref.setOnPreferenceChangeListener(this);
-@@ -185,6 +228,12 @@ public class PrivacySettings
+@@ -185,6 +228,11 @@ public class PrivacySettings
              AlwaysIncognitoLinkInterceptor.setAlwaysIncognito((boolean) newValue);
              if (!mSnackbarManager.isShowing())
                  mSnackbarManager.showSnackbar(mSnackbar);
@@ -119,12 +119,11 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 +            UserPrefs.get(Profile.getLastUsedRegularProfile())
 +                    .setBoolean(Pref.SEARCH_SUGGEST_ENABLED, (boolean) newValue);
 +        } else if (PREF_AUTOFILL_ASSISTANT.equals(key)) {
-+            mSharedPreferencesManager.writeBoolean(
-+                 ChromePreferenceKeys.AUTOFILL_ASSISTANT_ENABLED, (boolean) newValue);
++           setAutofillAssistantSwitchValue((boolean) newValue);
          } else if (PREF_HTTPS_FIRST_MODE.equals(key)) {
              UserPrefs.get(Profile.getLastUsedRegularProfile())
                      .setBoolean(Pref.HTTPS_ONLY_MODE_ENABLED, (boolean) newValue);
-@@ -207,7 +256,7 @@ public class PrivacySettings
+@@ -207,7 +255,7 @@ public class PrivacySettings
       * Updates the preferences.
       */
      public void updatePreferences() {
@@ -133,7 +132,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
  
          ChromeSwitchPreference canMakePaymentPref =
                  (ChromeSwitchPreference) findPreference(PREF_CAN_MAKE_PAYMENT);
-@@ -263,6 +312,15 @@ public class PrivacySettings
+@@ -263,6 +311,23 @@ public class PrivacySettings
          mSnackbarManager = manager;
      }
  
@@ -142,8 +141,16 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 +     *  will the AA switch be assigned a value).
 +     */
 +    private boolean shouldShowAutofillAssistantPreference() {
-+        return mSharedPreferencesManager.contains(
-+                        ChromePreferenceKeys.AUTOFILL_ASSISTANT_ENABLED);
++        return AssistantFeatures.AUTOFILL_ASSISTANT.isEnabled();
++    }
++
++    public boolean isAutofillAssistantSwitchOn() {
++        return AutofillAssistantPreferencesUtil.getAssistantEnabledPreference(
++                /* defaultValue= */ false);
++    }
++
++    public void setAutofillAssistantSwitchValue(boolean newValue) {
++        AutofillAssistantPreferencesUtil.setAssistantEnabledPreference(newValue);
 +    }
 +
      @Override

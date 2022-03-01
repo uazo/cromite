@@ -57,7 +57,7 @@ Subject: Experimental-user-scripts-support
  .../user_scripts/browser/user_script_loader.h | 169 ++++
  .../browser/user_script_pref_info.cc          |  34 +
  .../browser/user_script_pref_info.h           |  72 ++
- .../user_scripts/browser/user_script_prefs.cc | 276 ++++++
+ .../user_scripts/browser/user_script_prefs.cc | 278 ++++++
  .../user_scripts/browser/user_script_prefs.h  |  62 ++
  .../browser/userscripts_browser_client.cc     |  78 ++
  .../browser/userscripts_browser_client.h      |  62 ++
@@ -114,7 +114,7 @@ Subject: Experimental-user-scripts-support
  .../renderer/web_ui_injection_host.h          |  27 +
  .../strings/userscripts_strings.grdp          |  55 ++
  tools/gritsettings/resource_ids.spec          |   6 +
- 111 files changed, 9569 insertions(+), 2 deletions(-)
+ 111 files changed, 9571 insertions(+), 2 deletions(-)
  create mode 100644 components/user_scripts/README.md
  create mode 100755 components/user_scripts/android/BUILD.gn
  create mode 100644 components/user_scripts/android/java/res/layout/accept_script_item.xml
@@ -3818,7 +3818,7 @@ diff --git a/components/user_scripts/browser/user_script_prefs.cc b/components/u
 new file mode 100644
 --- /dev/null
 +++ b/components/user_scripts/browser/user_script_prefs.cc
-@@ -0,0 +1,276 @@
+@@ -0,0 +1,278 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -3846,6 +3846,7 @@ new file mode 100644
 +#include "chrome/browser/profiles/profile.h"
 +#include "chrome/browser/profiles/profile_manager.h"
 +
++#include "components/prefs/pref_registry_simple.h"
 +#include "components/prefs/pref_service.h"
 +#include "components/prefs/scoped_user_pref_update.h"
 +#include "components/pref_registry/pref_registry_syncable.h"
@@ -3877,22 +3878,22 @@ new file mode 100644
 +
 +class PrefUpdate : public DictionaryPrefUpdate {
 + public:
-+  PrefUpdate(const PrefUpdate&) = delete;
-+  PrefUpdate& operator=(const PrefUpdate&) = delete;
 +  PrefUpdate(PrefService* service,
 +             const std::string& id,
 +             const std::string& path)
 +      : DictionaryPrefUpdate(service, path), id_(id) {}
 +
++  PrefUpdate(const PrefUpdate&) = delete;
++  PrefUpdate& operator=(const PrefUpdate&) = delete;
 +  ~PrefUpdate() override = default;
 +
-+  base::DictionaryValue* Get() override {
-+    base::DictionaryValue* dict = DictionaryPrefUpdate::Get();
++  base::Value* Get() override {
++    base::Value* dict = DictionaryPrefUpdate::Get();
 +    base::Value* dict_item =
 +        dict->FindKeyOfType(id_, base::Value::Type::DICTIONARY);
 +    if (!dict_item)
 +      dict_item = dict->SetKey(id_, base::Value(base::Value::Type::DICTIONARY));
-+    return static_cast<base::DictionaryValue*>(dict_item);
++    return dict_item;
 +  }
 +
 + private:
@@ -3981,20 +3982,20 @@ new file mode 100644
 +    scriptInfo->force_disabled = (it->get()->force_disabled());
 +
 +    PrefUpdate update(prefs_, key, kUserScriptsList);
-+    base::DictionaryValue* script_dict = update.Get();
++    base::Value* script_dict = update.Get();
 +
-+    script_dict->SetString(kScriptName, scriptInfo->name());
-+    script_dict->SetString(kScriptDescription, scriptInfo->description());
-+    script_dict->SetBoolean(kScriptIsEnabled, scriptInfo->enabled);
-+    script_dict->SetString(kScriptVersion, scriptInfo->version());
-+    script_dict->SetString(kScriptFilePath, scriptInfo->file_path());
-+    script_dict->SetString(kScriptUrlSource, scriptInfo->url_source());
-+    script_dict->SetString(kScriptParserError, scriptInfo->parser_error());
-+    script_dict->SetBoolean(kScriptForceDisabled, scriptInfo->force_disabled);
++    script_dict->SetStringKey(kScriptName, scriptInfo->name());
++    script_dict->SetStringKey(kScriptDescription, scriptInfo->description());
++    script_dict->SetBoolKey(kScriptIsEnabled, scriptInfo->enabled);
++    script_dict->SetStringKey(kScriptVersion, scriptInfo->version());
++    script_dict->SetStringKey(kScriptFilePath, scriptInfo->file_path());
++    script_dict->SetStringKey(kScriptUrlSource, scriptInfo->url_source());
++    script_dict->SetStringKey(kScriptParserError, scriptInfo->parser_error());
++    script_dict->SetBoolKey(kScriptForceDisabled, scriptInfo->force_disabled);
 +
 +    std::string install_time_str =
 +        base::NumberToString(scriptInfo->install_time.ToInternalValue());
-+    script_dict->SetString(kScriptInstallTime, install_time_str);
++    script_dict->SetStringKey(kScriptInstallTime, install_time_str);
 +
 +   if (!scriptInfo->enabled) {
 +      it = user_scripts.erase(it);
@@ -4006,7 +4007,8 @@ new file mode 100644
 +  // remove script from prefs if no more present
 +  std::vector<std::string> all_scripts_to_remove;
 +  const base::DictionaryValue* dict =
-+    prefs_->GetDictionary(kUserScriptsList);
++      &base::Value::AsDictionaryValue(*prefs_->GetDictionary(
++          kUserScriptsList));
 +  for (base::DictionaryValue::Iterator script_it(*dict); !script_it.IsAtEnd();
 +       script_it.Advance()) {
 +    const std::string& key = script_it.key();
@@ -4017,7 +4019,7 @@ new file mode 100644
 +  }
 +
 +  DictionaryPrefUpdate update(prefs_, kUserScriptsList);
-+  base::DictionaryValue* const update_dict = update.Get();
++  base::Value* const update_dict = update.Get();
 +  for (auto key : all_scripts_to_remove) {
 +      update_dict->RemoveKey(key);
 +  }
@@ -4028,7 +4030,7 @@ new file mode 100644
 +std::string UserScriptsPrefs::GetScriptsInfo() {
 +  std::string json_string;
 +
-+  const base::DictionaryValue* dict =
++  const base::Value* dict =
 +    prefs_->GetDictionary(kUserScriptsList);
 +
 +  if (dict) {
@@ -4046,7 +4048,7 @@ new file mode 100644
 +  auto scriptInfo = std::make_unique<UserScriptsListPrefs::ScriptInfo>(
 +      script_id, "", base::Time::Now(), false);
 +
-+  const base::DictionaryValue* scripts =
++  const base::Value* scripts =
 +      prefs_->GetDictionary(kUserScriptsList);
 +  if (!scripts)
 +    return scriptInfo;
@@ -4082,16 +4084,16 @@ new file mode 100644
 +
 +void UserScriptsPrefs::RemoveScriptFromPrefs(const std::string& script_id) {
 +  DictionaryPrefUpdate update(prefs_, kUserScriptsList);
-+  base::DictionaryValue* const update_dict = update.Get();
++  base::Value* const update_dict = update.Get();
 +  update_dict->RemoveKey(script_id);
 +}
 +
 +void UserScriptsPrefs::SetScriptEnabled(const std::string& script_id, bool is_enabled) {
 +  PrefUpdate update(prefs_, script_id, kUserScriptsList);
-+  base::DictionaryValue* script_dict = update.Get();
++  base::Value* script_dict = update.Get();
 +  if (script_dict->FindBoolKey(kScriptForceDisabled).value_or(false))
 +    is_enabled = true;
-+  script_dict->SetBoolean(kScriptIsEnabled, is_enabled);
++  script_dict->SetBoolKey(kScriptIsEnabled, is_enabled);
 +}
 +
 +}
@@ -6209,11 +6211,11 @@ new file mode 100755
 +                             bool allow_file_access,
 +                             std::string* error) {
 +  std::vector<std::string> patterns;
-+  for (size_t i = 0; i < value.GetList().size(); ++i) {
-+    std::string item;
-+    if (!value.GetString(i, &item))
++  for (const base::Value& pattern : value.GetList()) {
++    const std::string* item = pattern.GetIfString();
++    if (!item)
 +      return false;
-+    patterns.push_back(item);
++    patterns.push_back(*item);
 +  }
 +  return Populate(patterns, valid_schemes, allow_file_access, error);
 +}
