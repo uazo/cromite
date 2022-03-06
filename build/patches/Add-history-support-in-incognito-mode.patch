@@ -30,7 +30,8 @@ Subject: Add-history-support-in-incognito-mode.patch
  .../android/offline_page_model_factory.cc     |  21 +-
  .../android/request_coordinator_factory.cc    |  17 +
  .../offline_page_model_factory.h              |   1 +
- .../offline_pages/recent_tab_helper.cc        |  12 +
+ .../offline_pages/recent_tab_helper.cc        |  17 +-
+ .../browser/offline_pages/recent_tab_helper.h |   3 +
  .../request_coordinator_factory.h             |   2 +
  chrome/browser/prefs/browser_prefs.cc         |   3 +
  .../browser/ui/android/native_page/BUILD.gn   |   2 +
@@ -40,7 +41,7 @@ Subject: Add-history-support-in-incognito-mode.patch
  chrome/common/pref_names.cc                   |   2 +
  chrome/common/pref_names.h                    |   4 +
  chrome/test/BUILD.gn                          |   5 +
- 37 files changed, 1048 insertions(+), 41 deletions(-)
+ 38 files changed, 1055 insertions(+), 42 deletions(-)
  create mode 100644 chrome/android/javatests/src/org/chromium/chrome/browser/history/Bromite_HistoryManagerTest.java
  create mode 100644 chrome/android/javatests/src/org/chromium/chrome/browser/privacy/settings/Bromite_PrivacySettingsFragmentTest_HistoryInAlwaysIncognito.java
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/Bromite_AppMenuPropertiesDelegateUnitTest.java
@@ -1575,7 +1576,7 @@ diff --git a/chrome/browser/offline_pages/recent_tab_helper.cc b/chrome/browser/
  namespace {
  class DefaultRecentTabHelperDelegate
      : public offline_pages::RecentTabHelper::Delegate {
-@@ -181,6 +186,13 @@ bool RecentTabHelper::EnsureInitialized() {
+@@ -181,6 +186,14 @@ bool RecentTabHelper::EnsureInitialized() {
    // WebContents with its origin as well.
    snapshots_enabled_ = !tab_id_.empty() &&
                         !web_contents()->GetBrowserContext()->IsOffTheRecord();
@@ -1584,11 +1585,36 @@ diff --git a/chrome/browser/offline_pages/recent_tab_helper.cc b/chrome/browser/
 +          ->GetOriginalProfile()
 +          ->GetPrefs()->GetBoolean(prefs::kIncognitoTabHistoryEnabled) == true) {
 +      snapshots_enabled_ = true;
++      always_incognito_mode_enabled_ = true;
 +    }
 +  }
  
    if (snapshots_enabled_) {
      page_model_ = OfflinePageModelFactory::GetForBrowserContext(
+@@ -458,7 +471,9 @@ void RecentTabHelper::ContinueSnapshotWithIdsToPurge(
+ void RecentTabHelper::ContinueSnapshotAfterPurge(
+     SnapshotProgressInfo* snapshot_info,
+     OfflinePageModel::DeletePageResult result) {
+-  if (result != OfflinePageModel::DeletePageResult::SUCCESS) {
++  // remove snapshot save of recent tab if always incognito mode is active
++  // so recents tab list is empty at every startup
++  if ((always_incognito_mode_enabled_) || result != OfflinePageModel::DeletePageResult::SUCCESS) {
+     ReportSnapshotCompleted(snapshot_info, false);
+     return;
+   }
+diff --git a/chrome/browser/offline_pages/recent_tab_helper.h b/chrome/browser/offline_pages/recent_tab_helper.h
+--- a/chrome/browser/offline_pages/recent_tab_helper.h
++++ b/chrome/browser/offline_pages/recent_tab_helper.h
+@@ -143,6 +143,9 @@ class RecentTabHelper
+   // Not page-specific.
+   bool snapshots_enabled_ = false;
+ 
++  // If true, always incognito mode is enabled
++  bool always_incognito_mode_enabled_ = false;
++
+   // Snapshot progress information for an ongoing snapshot requested by
+   // downloads. Null if there's no ongoing request.
+   std::unique_ptr<SnapshotProgressInfo> downloads_ongoing_snapshot_info_;
 diff --git a/chrome/browser/offline_pages/request_coordinator_factory.h b/chrome/browser/offline_pages/request_coordinator_factory.h
 --- a/chrome/browser/offline_pages/request_coordinator_factory.h
 +++ b/chrome/browser/offline_pages/request_coordinator_factory.h
