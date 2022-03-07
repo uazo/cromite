@@ -12,9 +12,10 @@ See also: https://github.com/bromite/bromite/wiki/TimezoneOverride
  ...ezoneoverride_site_settings_preference.xml |  68 ++++++
  .../res/xml/site_settings_preferences.xml     |   4 +
  .../java/res/xml/website_preferences.xml      |   9 +
- .../ContentSettingsResources.java             |  20 +-
- .../site_settings/SingleCategorySettings.java |  73 ++++++-
- .../site_settings/SingleWebsiteSettings.java  |   2 +
+ .../ContentSettingsResources.java             |  35 +++-
+ .../site_settings/SingleCategorySettings.java |  77 ++++++-
+ .../site_settings/SingleWebsiteSettings.java  |   8 +-
+ .../site_settings/SiteSettings.java           |   2 +-
  .../site_settings/SiteSettingsCategory.java   |  10 +-
  .../site_settings/SiteSettingsDelegate.java   |   2 +
  ...imezoneOverrideSiteSettingsPreference.java | 193 ++++++++++++++++++
@@ -40,7 +41,7 @@ See also: https://github.com/bromite/bromite/wiki/TimezoneOverride
  .../renderer/content_settings_agent_impl.cc   |  89 ++++++++
  .../renderer/content_settings_agent_impl.h    |   4 +
  .../WebLayerSiteSettingsDelegate.java         |   3 +
- 34 files changed, 675 insertions(+), 12 deletions(-)
+ 35 files changed, 699 insertions(+), 15 deletions(-)
  create mode 100755 components/browser_ui/site_settings/android/java/res/layout/time_zone_select_dialog.xml
  create mode 100755 components/browser_ui/site_settings/android/java/res/layout/timezoneoverride_site_settings_preference.xml
  create mode 100755 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/TimezoneOverrideSiteSettingsPreference.java
@@ -85,9 +86,9 @@ diff --git a/components/browser_ui/site_settings/android/BUILD.gn b/components/b
      "java/src/org/chromium/components/browser_ui/site_settings/WebsitePreferenceBridge.java",
 +    "java/src/org/chromium/components/browser_ui/site_settings/TimezoneOverrideSiteSettingsPreference.java"
    ]
-   sources += [
-     "java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java",
-@@ -166,6 +167,8 @@ android_resources("java_resources") {
+   annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
+   resources_package = "org.chromium.components.browser_ui.site_settings"
+@@ -162,6 +163,8 @@ android_resources("java_resources") {
      "java/res/xml/single_website_preferences.xml",
      "java/res/xml/site_settings_preferences.xml",
      "java/res/xml/website_preferences.xml",
@@ -265,18 +266,33 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 +                            R.string.website_settings_category_timezone_override_custom,
 +                            R.string.website_settings_category_timezone_override_random);
          }
-         ResourceItem ri = BromiteCustomContentSettingImpl.getResourceItem(contentType);
-         if (ri != null) return ri;
-@@ -443,7 +449,7 @@ public class ContentSettingsResources {
+         assert false; // NOTREACHED
+         return null;
+@@ -441,6 +447,23 @@ public class ContentSettingsResources {
          }
      }
  
--    public static int getCategorySummary(int contentType, @Nullable @ContentSettingValues int value) { //
 +    public static int getCategorySummary(int contentType, @Nullable @ContentSettingValues int value) {
-         int result = BromiteCustomContentSettingImpl.getCategorySummary(contentType, value);
-         if (result != 0) return result;
-         if (contentType == ContentSettingsType.TIMEZONE_OVERRIDE) {
-@@ -475,7 +481,10 @@ public class ContentSettingsResources {
++        if (contentType == ContentSettingsType.TIMEZONE_OVERRIDE) {
++            switch (value) {
++                case ContentSettingValues.ALLOW:
++                    return R.string.website_settings_category_timezone_override_allowed;
++                case ContentSettingValues.ASK:
++                    return R.string.website_settings_category_timezone_override_custom;
++                case ContentSettingValues.BLOCK:
++                    return R.string.website_settings_category_timezone_override_random;
++                default:
++                    return 0;
++            }
++        }
++        else
++            return getCategorySummary(value);
++    }
++
+     /**
+      * Returns the string resource id for a content type to show with a permission category.
+      * @param enabled Whether the content type is enabled.
+@@ -455,7 +478,10 @@ public class ContentSettingsResources {
       * with a particular website.
       * @param value The ContentSetting for which we want the resource.
       */
@@ -288,7 +304,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          switch (value) {
              case ContentSettingValues.ALLOW:
                  return R.string.website_settings_permissions_allow;
-@@ -583,6 +592,13 @@ public class ContentSettingsResources {
+@@ -561,6 +587,13 @@ public class ContentSettingsResources {
                  return descriptionIDs;
              }
          }
@@ -342,9 +358,9 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 +                else
 +                    return ContentSettingValues.BLOCK == contentSetting;
              }
-             if (BromiteCustomContentSettingImpl.processOnBlockList(contentSetting, contentSetting))
-                 return BromiteCustomContentSettingImpl.isOnBlockList(contentSetting, website, contentSetting);
-@@ -391,7 +400,8 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+         }
+         return false;
+@@ -388,7 +397,8 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
              if (queryHasChanged) getInfoForOrigins();
          });
  
@@ -354,7 +370,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
              MenuItem help = menu.add(
                      Menu.NONE, R.id.menu_id_site_settings_help, Menu.NONE, R.string.menu_help);
              help.setIcon(VectorDrawableCompat.create(
-@@ -402,7 +412,10 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+@@ -399,7 +409,10 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
      @Override
      public boolean onOptionsItemSelected(MenuItem item) {
          if (item.getItemId() == R.id.menu_id_site_settings_help) {
@@ -366,7 +382,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
                  getSiteSettingsDelegate().launchProtectedContentHelpAndFeedbackActivity(
                          getActivity());
              } else {
-@@ -501,6 +514,12 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+@@ -493,6 +506,12 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
              WebsitePreferenceBridge.setDefaultContentSetting(
                      browserContextHandle, mCategory.getContentSettingsType(), setting);
              getInfoForOrigins();
@@ -379,16 +395,16 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          } else if (FOUR_STATE_COOKIE_TOGGLE_KEY.equals(preference.getKey())) {
              setCookieSettingsPreference((CookieSettingsState) newValue);
              getInfoForOrigins();
-@@ -598,6 +617,8 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+@@ -590,6 +609,8 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
              assert WebsitePreferenceBridge.isCategoryEnabled(
                      browserContextHandle, ContentSettingsType.AUTO_DARK_WEB_CONTENT);
              resource = R.string.website_settings_add_site_description_auto_dark_block;
 +        } else if (mCategory.showSites(SiteSettingsCategory.Type.TIMEZONE_OVERRIDE)) {
 +            resource = R.string.website_settings_category_timezone_override_allowed;
          }
-         if (resource == 0)
-             resource = BromiteCustomContentSettingImpl.getAddExceptionDialogMessage(mCategory);
-@@ -640,6 +661,13 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+         assert resource > 0;
+         return getString(resource);
+@@ -630,6 +651,13 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
          if (mCategory.showSites(SiteSettingsCategory.Type.COOKIES) && mRequiresFourStateSetting) {
              setting = cookieSettingsExceptionShouldBlock() ? ContentSettingValues.BLOCK
                                                             : ContentSettingValues.ALLOW;
@@ -402,28 +418,32 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          } else {
              setting = (WebsitePreferenceBridge.isCategoryEnabled(
                                browserContextHandle, mCategory.getContentSettingsType()))
-@@ -696,6 +724,8 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+@@ -686,6 +714,8 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
                  && !WebsitePreferenceBridge.isCategoryEnabled(
                          browserContextHandle, ContentSettingsType.AUTOMATIC_DOWNLOADS)) {
              allowSpecifyingExceptions = true;
 +        } else if (mCategory.showSites(SiteSettingsCategory.Type.TIMEZONE_OVERRIDE)) {
 +            allowSpecifyingExceptions = true;
-         } else {
-             Boolean allow = BromiteCustomContentSettingImpl.allowSpecifyingExceptions(mCategory);
-             if (allow != null) allowSpecifyingExceptions = (boolean)allow;
-@@ -874,6 +904,11 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
-                 Boolean blocked = BromiteCustomContentSettingImpl.considerException(mCategory, triStateToggle.getCheckedSetting());
-                 if (blocked != null) return (boolean)blocked;
-             }
+         }
+         if (allowSpecifyingExceptions) {
+             getPreferenceScreen().addPreference(new AddExceptionPreference(getStyledContext(),
+@@ -857,7 +887,14 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+             TriStateSiteSettingsPreference triStateToggle =
+                     (TriStateSiteSettingsPreference) getPreferenceScreen().findPreference(
+                             TRI_STATE_TOGGLE_KEY);
+-            return (triStateToggle.getCheckedSetting() == ContentSettingValues.BLOCK);
++            if (triStateToggle != null)
++              return (triStateToggle.getCheckedSetting() == ContentSettingValues.BLOCK);
++
 +            TimezoneOverrideSiteSettingsPreference timeOverrideStatePreference =
 +                    (TimezoneOverrideSiteSettingsPreference) getPreferenceScreen().findPreference(
 +                            TIMEOVERRIDE_STATE_TOGGLE_KEY);
 +            if (timeOverrideStatePreference != null)
 +              return (timeOverrideStatePreference.getCheckedSetting() != ContentSettingValues.ALLOW);
-             return (triStateToggle.getCheckedSetting() == ContentSettingValues.BLOCK);
          } else if (mRequiresFourStateSetting) {
              FourStateCookieSettingsPreference fourStateCookieToggle =
-@@ -903,6 +938,9 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+                     (FourStateCookieSettingsPreference) getPreferenceScreen().findPreference(
+@@ -886,6 +923,9 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
                  (FourStateCookieSettingsPreference) screen.findPreference(
                          FOUR_STATE_COOKIE_TOGGLE_KEY);
          // TODO(crbug.com/1104836): Remove the old third-party cookie blocking UI
@@ -433,7 +453,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          Preference notificationsVibrate = screen.findPreference(NOTIFICATIONS_VIBRATE_TOGGLE_KEY);
          Preference notificationsQuietUi = screen.findPreference(NOTIFICATIONS_QUIET_UI_TOGGLE_KEY);
          Preference explainProtectedMediaKey = screen.findPreference(EXPLAIN_PROTECTED_MEDIA_KEY);
-@@ -914,14 +952,23 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+@@ -897,20 +937,32 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
          if (mRequiresTriStateSetting) {
              screen.removePreference(binaryToggle);
              screen.removePreference(fourStateCookieToggle);
@@ -458,18 +478,17 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
              configureBinaryToggle(binaryToggle, contentType);
          }
  
-@@ -929,6 +976,9 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+         if (!mCategory.showSites(SiteSettingsCategory.Type.COOKIES)) {
              screen.removePreference(screen.findPreference(COOKIE_INFO_TEXT_KEY));
          }
-         BromiteCustomContentSettingImpl.configureGlobalToggles(mCategory, screen);
 +        if (!(mCategory.showSites(SiteSettingsCategory.Type.TIMEZONE_OVERRIDE))) {
 +            screen.removePreference(screen.findPreference(TIMEOVERRIDE_INFO_TEXT));
 +        }
  
          if (permissionBlockedByOs) {
              maybeShowOsWarning(screen);
-@@ -1044,6 +1094,15 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
-         triStateToggle.initialize(contentType, setting, descriptionIds);
+@@ -1026,6 +1078,15 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+         triStateToggle.initialize(setting, descriptionIds);
      }
  
 +    private void configureTimeOverrideStateToggle(
@@ -484,7 +503,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
      private void configureBinaryToggle(ChromeSwitchPreference binaryToggle, int contentType) {
          binaryToggle.setOnPreferenceChangeListener(this);
          binaryToggle.setTitle(ContentSettingsResources.getTitle(contentType));
-@@ -1135,9 +1194,11 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
+@@ -1109,9 +1170,11 @@ public class SingleCategorySettings extends SiteSettingsPreferenceFragment
  
          CharSequence[] descriptions = new String[2];
          descriptions[0] =
@@ -501,7 +520,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java
-@@ -133,6 +133,8 @@ public class SingleWebsiteSettings extends SiteSettingsPreferenceFragment
+@@ -132,6 +132,8 @@ public class SingleWebsiteSettings extends SiteSettingsPreferenceFragment
                  return "popup_permission_list";
              case ContentSettingsType.SOUND:
                  return "sound_permission_list";
@@ -510,6 +529,42 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
              case ContentSettingsType.AR:
                  return "ar_permission_list";
              case ContentSettingsType.MEDIASTREAM_CAMERA:
+@@ -884,11 +886,13 @@ public class SingleWebsiteSettings extends SiteSettingsPreferenceFragment
+         if (value == null) return;
+         setUpPreferenceCommon(preference, value);
+ 
++        int content_type = getContentSettingsTypeFromPreferenceKey(preference.getKey());
++
+         ChromeSwitchPreference switchPreference = (ChromeSwitchPreference) preference;
+         switchPreference.setChecked(value == ContentSettingValues.ALLOW);
+         switchPreference.setSummary(isEmbargoed
+                         ? getString(R.string.automatically_blocked)
+-                        : getString(ContentSettingsResources.getCategorySummary(value)));
++                        : getString(ContentSettingsResources.getCategorySummary(content_type, value)));
+         switchPreference.setOnPreferenceChangeListener(this);
+         @ContentSettingsType
+         int contentType = getContentSettingsTypeFromPreferenceKey(preference.getKey());
+@@ -1080,7 +1084,7 @@ public class SingleWebsiteSettings extends SiteSettingsPreferenceFragment
+         }
+ 
+         mSite.setContentSetting(browserContextHandle, type, permission);
+-        preference.setSummary(getString(ContentSettingsResources.getCategorySummary(permission)));
++        preference.setSummary(getString(ContentSettingsResources.getCategorySummary(type, permission)));
+         preference.setIcon(getContentSettingsIcon(type, permission));
+ 
+         if (mWebsiteSettingsObserver != null) {
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
+--- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
+@@ -117,7 +117,7 @@ public class SiteSettings
+             } else if (Type.AUTO_DARK_WEB_CONTENT == prefCategory) {
+                 p.setSummary(ContentSettingsResources.getAutoDarkWebContentListSummary(checked));
+             } else if (requiresTriStateSetting) {
+-                p.setSummary(ContentSettingsResources.getCategorySummary(setting));
++                p.setSummary(ContentSettingsResources.getCategorySummary(contentType, setting));
+             } else {
+                 p.setSummary(ContentSettingsResources.getCategorySummary(contentType, checked));
+             }
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
@@ -536,7 +591,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
      }
  
      private final BrowserContextHandle mBrowserContextHandle;
-@@ -201,6 +203,8 @@ public class SiteSettingsCategory {
+@@ -198,6 +200,8 @@ public class SiteSettingsCategory {
                  return ContentSettingsType.USB_GUARD;
              case Type.VIRTUAL_REALITY:
                  return ContentSettingsType.VR;
@@ -545,15 +600,15 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
              // case Type.ALL_SITES
              // case Type.USE_STORAGE
              default:
-@@ -279,6 +283,8 @@ public class SiteSettingsCategory {
+@@ -276,6 +280,8 @@ public class SiteSettingsCategory {
                  return "use_storage";
              case Type.VIRTUAL_REALITY:
                  return "virtual_reality";
 +            case Type.TIMEZONE_OVERRIDE:
 +                return "timezone_override";
              default:
-             {
-                 String value = BromiteCustomContentSettingImpl.getPreferenceKey(type);
+                 assert false;
+                 return "";
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsDelegate.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsDelegate.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsDelegate.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsDelegate.java
@@ -765,10 +820,10 @@ new file mode 100755
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/Website.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/Website.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/Website.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/Website.java
-@@ -233,6 +233,16 @@ public final class Website implements Serializable {
-             exception = BromiteCustomContentSettingImpl.createCustomException(type, value, getAddress());
-             if (exception != null)
-                 setContentSettingException(type, exception);
+@@ -229,6 +229,16 @@ public final class Website implements Serializable {
+             } else {
+                 RecordUserAction.record("SoundContentSetting.UnmuteBy.SiteSettings");
+             }
 +        } else if (type == ContentSettingsType.TIMEZONE_OVERRIDE) {
 +            // It is possible to set the permission without having an existing exception,
 +            // because we can show the ALLOW state even when this permission is set to the
@@ -812,7 +867,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 +            case ContentSettingsType.TIMEZONE_OVERRIDE:
 +                return true;
              default:
-                 return BromiteCustomContentSettingImpl.requiresTriStateContentSetting(contentSettingsType);
+                 return false;
          }
 @@ -351,6 +353,14 @@ public class WebsitePreferenceBridge {
                  contentSettingType, primaryPattern, secondaryPattern, setting);

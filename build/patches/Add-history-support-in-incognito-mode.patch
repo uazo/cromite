@@ -1,7 +1,14 @@
-From: Your Name <you@example.com>
-Date: Tue, 22 Feb 2022 17:53:17 +0000
-Subject: Add-history-support-in-incognito-mode.patch
+From: uazo <uazo@users.noreply.github.com>
+Date: Fri, 7 Aug 2020 16:33:47 +0000
+Subject: Add history support in incognito mode
 
+Add history, recents, offlinepages and send to home screen for always incognito.
+History, recent tabs and offline pages require the INCOGNITO_TAB_HISTORY_ENABLED
+flag turned on.
+IncognitoPlaceholder is also deactivated, both in the phone and tablet version.
+The relative tests are also present.
+
+See also: https://github.com/bromite/bromite/pull/1427
 ---
  .../chrome_junit_test_java_sources.gni        |   4 +
  chrome/android/chrome_test_java_sources.gni   |   6 +
@@ -30,10 +37,9 @@ Subject: Add-history-support-in-incognito-mode.patch
  .../android/offline_page_model_factory.cc     |  21 +-
  .../android/request_coordinator_factory.cc    |  17 +
  .../offline_page_model_factory.h              |   1 +
- .../offline_pages/recent_tab_helper.cc        |  17 +-
- .../browser/offline_pages/recent_tab_helper.h |   3 +
+ .../offline_pages/recent_tab_helper.cc        |  12 +
  .../request_coordinator_factory.h             |   2 +
- chrome/browser/prefs/browser_prefs.cc         |   3 +
+ chrome/browser/prefs/browser_prefs.cc         |   2 +
  .../browser/ui/android/native_page/BUILD.gn   |   2 +
  .../browser/ui/native_page/NativePage.java    |  12 +-
  .../ui/native_page/NativePageTest.java        |  26 ++
@@ -41,7 +47,7 @@ Subject: Add-history-support-in-incognito-mode.patch
  chrome/common/pref_names.cc                   |   2 +
  chrome/common/pref_names.h                    |   4 +
  chrome/test/BUILD.gn                          |   5 +
- 38 files changed, 1055 insertions(+), 42 deletions(-)
+ 37 files changed, 1047 insertions(+), 41 deletions(-)
  create mode 100644 chrome/android/javatests/src/org/chromium/chrome/browser/history/Bromite_HistoryManagerTest.java
  create mode 100644 chrome/android/javatests/src/org/chromium/chrome/browser/privacy/settings/Bromite_PrivacySettingsFragmentTest_HistoryInAlwaysIncognito.java
  create mode 100644 chrome/android/junit/src/org/chromium/chrome/browser/app/appmenu/Bromite_AppMenuPropertiesDelegateUnitTest.java
@@ -76,9 +82,9 @@ diff --git a/chrome/android/chrome_test_java_sources.gni b/chrome/android/chrome
 diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
 --- a/chrome/android/java/res/xml/privacy_preferences.xml
 +++ b/chrome/android/java/res/xml/privacy_preferences.xml
-@@ -51,6 +51,11 @@
-         android:title="@string/close_tabs_on_exit_title"
-         android:summary="@string/close_tabs_on_exit_summary"
+@@ -42,6 +42,11 @@
+         android:title="@string/always_incognito_title"
+         android:summary="@string/always_incognito_summary"
          android:defaultValue="false" />
 +    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
 +        android:key="incognito_history_enabled"
@@ -116,7 +122,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/App
      /**
       * Construct a new {@link AppMenuPropertiesDelegateImpl}.
       * @param context The activity context.
-@@ -589,7 +600,15 @@ public class AppMenuPropertiesDelegateImpl implements AppMenuPropertiesDelegate
+@@ -588,7 +599,15 @@ public class AppMenuPropertiesDelegateImpl implements AppMenuPropertiesDelegate
              }
  
              if (item.getItemId() == R.id.recent_tabs_menu_id) {
@@ -133,7 +139,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/App
              }
              if (item.getItemId() == R.id.menu_group_tabs) {
                  item.setVisible(isMenuGroupTabsVisible);
-@@ -826,7 +845,9 @@ public class AppMenuPropertiesDelegateImpl implements AppMenuPropertiesDelegate
+@@ -825,7 +844,9 @@ public class AppMenuPropertiesDelegateImpl implements AppMenuPropertiesDelegate
          //                is not persisted when adding to the homescreen.
          // * If creating shortcuts it not supported by the current home screen.
          return WebappsUtils.isAddToHomeIntentSupported() && !isChromeScheme && !isFileScheme
@@ -335,27 +341,27 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/RecentTabsM
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-@@ -19,6 +19,7 @@ import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
+@@ -16,6 +16,7 @@ import androidx.preference.Preference;
+ import androidx.preference.PreferenceFragmentCompat;
+ import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
  
- import org.chromium.base.ContextUtils;
- import org.chromium.base.BuildInfo;
 +import org.chromium.base.Log;
  import org.chromium.chrome.R;
  import org.chromium.chrome.browser.feedback.HelpAndFeedbackLauncherImpl;
  import org.chromium.chrome.browser.flags.ChromeFeatureList;
-@@ -158,6 +159,11 @@ public class PrivacySettings
-         Preference secureDnsPref = findPreference(PREF_SECURE_DNS);
-         secureDnsPref.setVisible(SecureDnsSettings.isUiEnabled());
+@@ -156,6 +157,11 @@ public class PrivacySettings
+         phoneAsASecurityKey.setVisible(
+                 ChromeFeatureList.isEnabled(ChromeFeatureList.WEB_AUTH_PHONE_SUPPORT));
  
 +        ChromeSwitchPreference historyInIncognitoPref =
 +                (ChromeSwitchPreference) findPreference(PREF_INCOGNITO_TAB_HISTORY_ENABLED);
 +        historyInIncognitoPref.setOnPreferenceChangeListener(this);
 +        historyInIncognitoPref.setManagedPreferenceDelegate(mManagedPreferenceDelegate);
 +
-         Preference phoneAsASecurityKey = findPreference(PREF_PHONE_AS_A_SECURITY_KEY);
-         phoneAsASecurityKey.setVisible(
-                 ChromeFeatureList.isEnabled(ChromeFeatureList.WEB_AUTH_PHONE_SUPPORT));
-@@ -182,10 +188,15 @@ public class PrivacySettings
+         updatePreferences();
+     }
+ 
+@@ -172,10 +178,15 @@ public class PrivacySettings
          } else if (PREF_HTTPS_FIRST_MODE.equals(key)) {
              UserPrefs.get(Profile.getLastUsedRegularProfile())
                      .setBoolean(Pref.HTTPS_ONLY_MODE_ENABLED, (boolean) newValue);
@@ -371,9 +377,9 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
      @Override
      public void onResume() {
          super.onResume();
-@@ -216,6 +227,13 @@ public class PrivacySettings
-         closeTabsOnExitPref.setOnPreferenceChangeListener(this);
-         closeTabsOnExitPref.setManagedPreferenceDelegate(mManagedPreferenceDelegate);
+@@ -201,6 +212,13 @@ public class PrivacySettings
+                             : R.string.text_off);
+         }
  
 +        ChromeSwitchPreference historyInIncognitoPref =
 +                (ChromeSwitchPreference) findPreference(PREF_INCOGNITO_TAB_HISTORY_ENABLED);
@@ -1316,7 +1322,7 @@ diff --git a/chrome/browser/history/history_tab_helper.cc b/chrome/browser/histo
    Profile* profile =
        Profile::FromBrowserContext(web_contents()->GetBrowserContext());
 +
-+#if defined(OS_ANDROID)
++#if BUILDFLAG(IS_ANDROID)
 +  if(profile->GetOriginalProfile()->GetPrefs()->GetBoolean(prefs::kIncognitoTabHistoryEnabled)) {
 +    return HistoryServiceFactory::GetForProfile(profile, ServiceAccessType::IMPLICIT_ACCESS);
 +  }
@@ -1576,7 +1582,7 @@ diff --git a/chrome/browser/offline_pages/recent_tab_helper.cc b/chrome/browser/
  namespace {
  class DefaultRecentTabHelperDelegate
      : public offline_pages::RecentTabHelper::Delegate {
-@@ -181,6 +186,14 @@ bool RecentTabHelper::EnsureInitialized() {
+@@ -181,6 +186,13 @@ bool RecentTabHelper::EnsureInitialized() {
    // WebContents with its origin as well.
    snapshots_enabled_ = !tab_id_.empty() &&
                         !web_contents()->GetBrowserContext()->IsOffTheRecord();
@@ -1585,36 +1591,11 @@ diff --git a/chrome/browser/offline_pages/recent_tab_helper.cc b/chrome/browser/
 +          ->GetOriginalProfile()
 +          ->GetPrefs()->GetBoolean(prefs::kIncognitoTabHistoryEnabled) == true) {
 +      snapshots_enabled_ = true;
-+      always_incognito_mode_enabled_ = true;
 +    }
 +  }
  
    if (snapshots_enabled_) {
      page_model_ = OfflinePageModelFactory::GetForBrowserContext(
-@@ -458,7 +471,9 @@ void RecentTabHelper::ContinueSnapshotWithIdsToPurge(
- void RecentTabHelper::ContinueSnapshotAfterPurge(
-     SnapshotProgressInfo* snapshot_info,
-     OfflinePageModel::DeletePageResult result) {
--  if (result != OfflinePageModel::DeletePageResult::SUCCESS) {
-+  // remove snapshot save of recent tab if always incognito mode is active
-+  // so recents tab list is empty at every startup
-+  if ((always_incognito_mode_enabled_) || result != OfflinePageModel::DeletePageResult::SUCCESS) {
-     ReportSnapshotCompleted(snapshot_info, false);
-     return;
-   }
-diff --git a/chrome/browser/offline_pages/recent_tab_helper.h b/chrome/browser/offline_pages/recent_tab_helper.h
---- a/chrome/browser/offline_pages/recent_tab_helper.h
-+++ b/chrome/browser/offline_pages/recent_tab_helper.h
-@@ -143,6 +143,9 @@ class RecentTabHelper
-   // Not page-specific.
-   bool snapshots_enabled_ = false;
- 
-+  // If true, always incognito mode is enabled
-+  bool always_incognito_mode_enabled_ = false;
-+
-   // Snapshot progress information for an ongoing snapshot requested by
-   // downloads. Null if there's no ongoing request.
-   std::unique_ptr<SnapshotProgressInfo> downloads_ongoing_snapshot_info_;
 diff --git a/chrome/browser/offline_pages/request_coordinator_factory.h b/chrome/browser/offline_pages/request_coordinator_factory.h
 --- a/chrome/browser/offline_pages/request_coordinator_factory.h
 +++ b/chrome/browser/offline_pages/request_coordinator_factory.h
@@ -1630,16 +1611,15 @@ diff --git a/chrome/browser/offline_pages/request_coordinator_factory.h b/chrome
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -217,6 +217,8 @@
+@@ -215,6 +215,7 @@
  #endif
  
  #if BUILDFLAG(IS_ANDROID)
 +#include "chrome/browser/history/history_tab_helper.h"
-+
  #include "chrome/browser/android/bookmarks/partner_bookmarks_shim.h"
  #include "chrome/browser/android/explore_sites/history_statistics_reporter.h"
  #include "chrome/browser/android/ntp/recent_tabs_page_prefs.h"
-@@ -1333,6 +1335,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+@@ -1329,6 +1330,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
    // register incognito pref
    registry->RegisterBooleanPref(prefs::kAlwaysIncognitoEnabled,
                                /*default_value=*/false);
@@ -1752,7 +1732,7 @@ diff --git a/chrome/browser/ui/android/native_page/java/src/org/chromium/chrome/
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -990,6 +990,12 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -972,6 +972,12 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_UI_RELAUNCH_NOTICE" desc="Summary for always incognito mode">
          Your changes will take effect the next time you relaunch Bromite.
        </message>
@@ -1768,9 +1748,9 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 diff --git a/chrome/common/pref_names.cc b/chrome/common/pref_names.cc
 --- a/chrome/common/pref_names.cc
 +++ b/chrome/common/pref_names.cc
-@@ -3282,6 +3282,8 @@ const char kLacrosLaunchSwitch[] = "lacros_launch_switch";
+@@ -3279,6 +3279,8 @@ const char kLacrosLaunchSwitch[] = "lacros_launch_switch";
  
- #if defined(OS_ANDROID)
+ #if BUILDFLAG(IS_ANDROID)
  const char kAlwaysIncognitoEnabled[] = "always_incognito_enabled";
 +const char kIncognitoTabHistoryEnabled[] =
 +    "incognito_tab_history_enabled";
@@ -1780,14 +1760,14 @@ diff --git a/chrome/common/pref_names.cc b/chrome/common/pref_names.cc
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -1207,6 +1207,10 @@ extern const char kCorsNonWildcardRequestHeadersSupport[];
+@@ -1202,6 +1202,10 @@ extern const char kCorsNonWildcardRequestHeadersSupport[];
  extern const char kOriginAgentClusterDefaultEnabled[];
  
  extern const char kForceMajorVersionToMinorPositionInUserAgent[];
-+#if defined(OS_ANDROID)
++
++#if BUILDFLAG(IS_ANDROID)
 +extern const char kIncognitoTabHistoryEnabled[];
 +#endif
-+
  }  // namespace prefs
  
  #endif  // CHROME_COMMON_PREF_NAMES_H_
