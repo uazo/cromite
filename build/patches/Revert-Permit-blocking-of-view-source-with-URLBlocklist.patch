@@ -1,0 +1,223 @@
+From: csagan5 <32685696+csagan5@users.noreply.github.com>
+Date: Sun, 6 Mar 2022 11:29:27 +0100
+Subject: Revert "Permit blocking of view-source: with URLBlocklist"
+
+This reverts commit e72fc9b64116bf259e516096fcc60b58ae8ae1b3.
+---
+ .../test/url_blocklist_policy_browsertest.cc  | 78 -------------------
+ .../policy/url_blocking_policy_test_utils.cc  | 11 ---
+ .../policy/url_blocking_policy_test_utils.h   |  3 -
+ .../policy_blocklist_navigation_throttle.cc   | 28 +------
+ .../policy_blocklist_navigation_throttle.h    |  5 +-
+ 5 files changed, 3 insertions(+), 122 deletions(-)
+
+diff --git a/chrome/browser/policy/test/url_blocklist_policy_browsertest.cc b/chrome/browser/policy/test/url_blocklist_policy_browsertest.cc
+--- a/chrome/browser/policy/test/url_blocklist_policy_browsertest.cc
++++ b/chrome/browser/policy/test/url_blocklist_policy_browsertest.cc
+@@ -60,14 +60,6 @@ void CheckCanOpenURL(Browser* browser, const std::string& spec) {
+   EXPECT_NE(blocked_page_title, contents->GetTitle());
+ }
+ 
+-void CheckCanOpenViewSourceURL(Browser* browser, const std::string& spec) {
+-  GURL view_source_url("view-source:" + spec);
+-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, view_source_url));
+-  content::WebContents* contents =
+-      browser->tab_strip_model()->GetActiveWebContents();
+-  EXPECT_EQ(view_source_url, contents->GetLastCommittedURL());
+-}
+-
+ // Handler for embedded http-server, returns a small page with javascript
+ // variable and a link to increment it. It's for JavascriptBlocklistable test.
+ std::unique_ptr<net::test_server::HttpResponse> JSIncrementerPageHandler(
+@@ -148,76 +140,6 @@ IN_PROC_BROWSER_TEST_F(UrlBlockingPolicyTest, URLBlocklist) {
+   CheckCanOpenURL(browser(), kURLS[4]);
+ }
+ 
+-IN_PROC_BROWSER_TEST_F(UrlBlockingPolicyTest, URLBlocklistViewSource) {
+-  // Checks that blocklisted urls are blocked when accessed by via view-source:,
+-  // and that blocklisting view-source:* blocks all view-source urls.
+-
+-  ASSERT_TRUE(embedded_test_server()->Start());
+-
+-  const std::string kURL_A =
+-      embedded_test_server()->GetURL("aaa.com", "/empty.html").spec();
+-  const std::string kURL_B =
+-      embedded_test_server()->GetURL("bbb.com", "/empty.html").spec();
+-
+-  // Ensure that no urls are blocked by default.
+-  CheckCanOpenURL(browser(), kURL_A);
+-  CheckCanOpenURL(browser(), kURL_B);
+-  CheckCanOpenViewSourceURL(browser(), kURL_A);
+-  CheckCanOpenViewSourceURL(browser(), kURL_B);
+-
+-  // Block bbb.com urls.
+-  base::ListValue blocklist;
+-  blocklist.Append("bbb.com");
+-  PolicyMap policies;
+-  policies.Set(key::kURLBlocklist, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+-               POLICY_SOURCE_CLOUD, blocklist.Clone(), nullptr);
+-  UpdateProviderPolicy(policies);
+-  FlushBlocklistPolicy();
+-
+-  // Verify that blocking bbb.com also blocks view-source:bbb.com.
+-  CheckURLIsBlocked(browser(), kURL_B);
+-  CheckViewSourceURLIsBlocked(browser(), kURL_B);
+-
+-  // Block all view-source urls.
+-  blocklist.Append("view-source:*");
+-  policies.Set(key::kURLBlocklist, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+-               POLICY_SOURCE_CLOUD, blocklist.Clone(), nullptr);
+-  UpdateProviderPolicy(policies);
+-  FlushBlocklistPolicy();
+-
+-  // Verify that blocking view-source:* blocks view-source:aaa.com but does not
+-  // block http://aaa.com.
+-  CheckViewSourceURLIsBlocked(browser(), kURL_A);
+-  CheckCanOpenURL(browser(), kURL_A);
+-}
+-
+-IN_PROC_BROWSER_TEST_F(UrlBlockingPolicyTest, URLBlocklistNonStandardScheme) {
+-  // Checks that non-standard schemes can be blocklisted, and that the blocking
+-  // page mentions the URL's scheme.
+-  const std::string kURL = "mailto:nobody";
+-
+-  // Block mailto: urls.
+-  base::ListValue blocklist;
+-  blocklist.Append("mailto:*");
+-  PolicyMap policies;
+-  policies.Set(key::kURLBlocklist, POLICY_LEVEL_MANDATORY, POLICY_SCOPE_USER,
+-               POLICY_SOURCE_CLOUD, blocklist.Clone(), nullptr);
+-  UpdateProviderPolicy(policies);
+-  FlushBlocklistPolicy();
+-
+-  // Ensure the URL is blocked.
+-  CheckURLIsBlocked(browser(), kURL);
+-
+-  // Ensure the blocking page mentions the scheme.
+-  content::WebContents* contents =
+-      browser()->tab_strip_model()->GetActiveWebContents();
+-  std::string result;
+-  ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+-      contents, "domAutomationController.send(document.body.textContent);",
+-      &result));
+-  EXPECT_THAT(result, testing::HasSubstr("mailto"));
+-}
+-
+ IN_PROC_BROWSER_TEST_F(UrlBlockingPolicyTest, URLBlocklistIncognito) {
+   // Checks that URLs can be blocklisted, and that exceptions can be made to
+   // the blocklist.
+diff --git a/chrome/browser/policy/url_blocking_policy_test_utils.cc b/chrome/browser/policy/url_blocking_policy_test_utils.cc
+--- a/chrome/browser/policy/url_blocking_policy_test_utils.cc
++++ b/chrome/browser/policy/url_blocking_policy_test_utils.cc
+@@ -56,15 +56,4 @@ void UrlBlockingPolicyTest::CheckURLIsBlocked(Browser* browser,
+   CheckURLIsBlockedInWebContents(contents, url);
+ }
+ 
+-void UrlBlockingPolicyTest::CheckViewSourceURLIsBlocked(
+-    Browser* browser,
+-    const std::string& spec) {
+-  GURL url(spec);
+-  GURL view_source_url("view-source:" + spec);
+-  ASSERT_TRUE(ui_test_utils::NavigateToURL(browser, view_source_url));
+-  content::WebContents* contents =
+-      browser->tab_strip_model()->GetActiveWebContents();
+-  CheckURLIsBlockedInWebContents(contents, url);
+-}
+-
+ }  // namespace policy
+diff --git a/chrome/browser/policy/url_blocking_policy_test_utils.h b/chrome/browser/policy/url_blocking_policy_test_utils.h
+--- a/chrome/browser/policy/url_blocking_policy_test_utils.h
++++ b/chrome/browser/policy/url_blocking_policy_test_utils.h
+@@ -29,9 +29,6 @@ class UrlBlockingPolicyTest : public PolicyTest {
+ 
+   // Verifies that access to the given url |spec| is blocked.
+   void CheckURLIsBlocked(Browser* browser, const std::string& spec);
+-
+-  // Verifies that access to |view-source:spec| is blocked.
+-  void CheckViewSourceURLIsBlocked(Browser* browser, const std::string& spec);
+ };
+ 
+ }  // namespace policy
+diff --git a/components/policy/content/policy_blocklist_navigation_throttle.cc b/components/policy/content/policy_blocklist_navigation_throttle.cc
+--- a/components/policy/content/policy_blocklist_navigation_throttle.cc
++++ b/components/policy/content/policy_blocklist_navigation_throttle.cc
+@@ -17,7 +17,6 @@
+ #include "components/prefs/pref_service.h"
+ #include "components/user_prefs/user_prefs.h"
+ #include "content/public/browser/browser_context.h"
+-#include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "url/gurl.h"
+ 
+@@ -54,19 +53,6 @@ PolicyBlocklistNavigationThrottle::~PolicyBlocklistNavigationThrottle() {
+     policy_service_->RemoveObserver(policy::POLICY_DOMAIN_CHROME, this);
+ }
+ 
+-bool PolicyBlocklistNavigationThrottle::IsBlockedViewSourceNavigation() {
+-  content::NavigationEntry* nav_entry =
+-      navigation_handle()->GetNavigationEntry();
+-  if (!nav_entry || !nav_entry->IsViewSourceMode())
+-    return false;
+-
+-  GURL view_source_url = GURL(std::string("view-source:") +
+-                              navigation_handle()->GetURL().spec());
+-
+-  return (blocklist_service_->GetURLBlocklistState(view_source_url) ==
+-          URLBlocklistState::URL_IN_BLOCKLIST);
+-}
+-
+ content::NavigationThrottle::ThrottleCheckResult
+ PolicyBlocklistNavigationThrottle::WillStartRequest() {
+   const GURL& url = navigation_handle()->GetURL();
+@@ -80,8 +66,8 @@ PolicyBlocklistNavigationThrottle::WillStartRequest() {
+   if (policy_service_) {
+     // Defer until policies are loaded if there are no pref defines neither
+     // UrlBlocklist nor UrlAllowlist and the policies from the Chrome domain
+-    // have not been loaded yet. Otherwise we assume that we have all the
+-    // necessary info.
++    // have not been loaded yet. Otherwise we assume that we all the necessary
++    // info.
+     if (!prefs_->HasPrefPath(policy::policy_prefs::kUrlBlocklist) &&
+         !prefs_->HasPrefPath(policy::policy_prefs::kUrlAllowlist) &&
+         !policy_service_->IsFirstPolicyLoadComplete(
+@@ -111,11 +97,6 @@ PolicyBlocklistNavigationThrottle::WillStartRequest() {
+                                net::ERR_BLOCKED_BY_ADMINISTRATOR);
+   }
+ 
+-  if (IsBlockedViewSourceNavigation()) {
+-    return ThrottleCheckResult(BLOCK_REQUEST,
+-                               net::ERR_BLOCKED_BY_ADMINISTRATOR);
+-  }
+-
+   if (blocklist_state == URLBlocklistState::URL_IN_ALLOWLIST)
+     return PROCEED;
+ 
+@@ -177,11 +158,6 @@ void PolicyBlocklistNavigationThrottle::OnFirstPoliciesLoadedImpl(
+         ThrottleCheckResult(BLOCK_REQUEST, net::ERR_BLOCKED_BY_ADMINISTRATOR));
+   }
+ 
+-  if (IsBlockedViewSourceNavigation()) {
+-    return CancelDeferredNavigation(
+-        ThrottleCheckResult(BLOCK_REQUEST, net::ERR_BLOCKED_BY_ADMINISTRATOR));
+-  }
+-
+   if (CheckSafeSitesFilter(url).action() == PROCEED)
+     Resume();
+ }
+diff --git a/components/policy/content/policy_blocklist_navigation_throttle.h b/components/policy/content/policy_blocklist_navigation_throttle.h
+--- a/components/policy/content/policy_blocklist_navigation_throttle.h
++++ b/components/policy/content/policy_blocklist_navigation_throttle.h
+@@ -50,10 +50,7 @@ class PolicyBlocklistNavigationThrottle
+   void OnFirstPoliciesLoadedImpl(bool timeout);
+ 
+  private:
+-  // Returns TRUE if this navigation is to view-source: and view-source is on
+-  // the URLBlocklist.
+-  bool IsBlockedViewSourceNavigation();
+-
++  ThrottleCheckResult GetUrlThrottleResult(const GURL& url);
+   // To ensure both allow and block policies override Safe Sites,
+   // SafeSitesNavigationThrottle must be consulted as part of this throttle
+   // rather than added separately to the list of throttles.
+--
+2.25.1
