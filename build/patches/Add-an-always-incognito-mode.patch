@@ -1,11 +1,16 @@
-From: Your Name <you@example.com>
-Date: Tue, 22 Feb 2022 17:49:20 +0000
-Subject: Add-an-always-incognito-mode.patch
+From: Ryan Archer <ryan.bradley.archer@gmail.com>
+Date: Wed, 2 Aug 2017 01:41:28 -0400
+Subject: Add an always-incognito mode
 
+More specifically, add a preference that causes all new tabs and all
+clicked links to launch as incognito.
+Make sure initial incognito status is correctly recognized.
+Enable incognito custom tabs and fix crashes for incognito/custom tab intents (credits to @uazo)
+Use a native flag (credits to @uazo)
 ---
  chrome/android/chrome_java_sources.gni        |  1 +
  .../java/res/xml/privacy_preferences.xml      |  5 ++
- .../AlwaysIncognitoLinkInterceptor.java       | 52 +++++++++++++++++++
+ .../AlwaysIncognitoLinkInterceptor.java       | 53 +++++++++++++++++++
  .../chrome/browser/ChromeTabbedActivity.java  |  6 ++-
  .../chrome/browser/app/ChromeActivity.java    |  4 ++
  .../AppMenuPropertiesDelegateImpl.java        |  8 +++
@@ -20,7 +25,8 @@ Subject: Add-an-always-incognito-mode.patch
  .../tabmodel/TabModelSelectorImpl.java        |  3 ++
  .../browser/tabmodel/TabPersistentStore.java  | 10 ++++
  .../webapps/WebappIntentDataProvider.java     | 14 +++++
- .../chrome_autocomplete_provider_client.cc    |  3 ++
+ .../chrome_autocomplete_provider_client.cc    |  7 +++
+ .../chrome_autocomplete_provider_client.h     |  1 +
  .../host_content_settings_map_factory.cc      | 16 +++++-
  .../flags/android/chrome_feature_list.cc      |  2 +-
  chrome/browser/prefs/browser_prefs.cc         |  3 ++
@@ -28,8 +34,12 @@ Subject: Add-an-always-incognito-mode.patch
  chrome/browser/ui/messages/android/BUILD.gn   |  1 +
  .../snackbar/INeedSnackbarManager.java        | 27 ++++++++++
  chrome/common/pref_names.cc                   |  4 ++
- chrome/common/pref_names.h                    |  5 ++
- 26 files changed, 244 insertions(+), 37 deletions(-)
+ chrome/common/pref_names.h                    |  1 +
+ .../browser/autocomplete_provider_client.cc   |  4 ++
+ .../browser/autocomplete_provider_client.h    |  1 +
+ .../omnibox/browser/base_search_provider.cc   |  2 +-
+ components/omnibox/browser/search_provider.cc |  4 +-
+ 31 files changed, 255 insertions(+), 39 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/AlwaysIncognitoLinkInterceptor.java
  create mode 100644 chrome/browser/ui/messages/android/java/src/org/chromium/chrome/browser/ui/messages/snackbar/INeedSnackbarManager.java
 
@@ -63,7 +73,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/AlwaysIncognito
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/AlwaysIncognitoLinkInterceptor.java
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,53 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -86,6 +96,7 @@ new file mode 100644
 + */
 +public class AlwaysIncognitoLinkInterceptor {
 +
++    private static final String TAG = "AlwaysIncognito";
 +    public static final String PREF_ALWAYS_INCOGNITO = "always_incognito";
 +
 +    private static @Nullable Boolean cachedIsAlwaysIncognito = null;
@@ -110,7 +121,7 @@ new file mode 100644
 +        if (isAlwaysIncognito()) {
 +            PrefService prefService = UserPrefs.get(Profile.getLastUsedRegularProfile());
 +            if(!prefService.getBoolean(Pref.ALWAYS_INCOGNITO_ENABLED)) {
-+                Log.i("BROMITE", "Migration: always incognito pref from java to native");
++                Log.i(TAG, "Pref migration from java to native");
 +                prefService.setBoolean(Pref.ALWAYS_INCOGNITO_ENABLED, true);
 +            }
 +        }
@@ -127,7 +138,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
  import org.chromium.chrome.browser.IntentHandler.IntentHandlerDelegate;
  import org.chromium.chrome.browser.IntentHandler.TabOpenType;
  import org.chromium.chrome.browser.accessibility_tab_switcher.OverviewListLayout;
-@@ -1775,8 +1776,9 @@ public class ChromeTabbedActivity extends ChromeActivity<ChromeActivityComponent
+@@ -1788,8 +1789,9 @@ public class ChromeTabbedActivity extends ChromeActivity<ChromeActivityComponent
          Bundle savedInstanceState = getSavedInstanceState();
  
          // We determine the model as soon as possible so every systems get initialized coherently.
@@ -322,18 +333,18 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/StartupTab
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-@@ -31,6 +31,11 @@ import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
+@@ -29,6 +29,11 @@ import org.chromium.chrome.browser.privacy_sandbox.PrivacySandboxSettingsFragmen
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.settings.ChromeManagedPreferenceDelegate;
  import org.chromium.chrome.browser.settings.SettingsLauncherImpl;
- import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
- import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
 +import org.chromium.chrome.browser.AlwaysIncognitoLinkInterceptor;
 +import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 +import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
 +import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 +import org.chromium.chrome.browser.ApplicationLifetime;
+ import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
  import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
- import org.chromium.components.browser_ui.settings.ManagedPreferenceDelegate;
- import org.chromium.components.browser_ui.settings.SettingsLauncher;
 @@ -45,7 +50,12 @@ import org.chromium.ui.text.SpanApplier;
   * Fragment to keep track of the all the privacy related preferences.
   */
@@ -385,17 +396,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
          } else if (PREF_HTTPS_FIRST_MODE.equals(key)) {
              UserPrefs.get(Profile.getLastUsedRegularProfile())
                      .setBoolean(Pref.HTTPS_ONLY_MODE_ENABLED, (boolean) newValue);
-@@ -193,6 +226,10 @@ public class PrivacySettings
-         };
+@@ -220,4 +253,8 @@ public class PrivacySettings
+     public void setBottomSheetController(BottomSheetController controller) {
+         mBottomSheetController = controller;
      }
- 
++
 +    public void setSnackbarManager(SnackbarManager manager) {
 +        mSnackbarManager = manager;
 +    }
-+
-     @Override
-     public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
-         menu.clear();
+ }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
@@ -567,16 +576,31 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappI
 diff --git a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc b/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 --- a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 +++ b/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
-@@ -303,6 +303,9 @@ signin::IdentityManager* ChromeAutocompleteProviderClient::GetIdentityManager()
+@@ -302,6 +302,13 @@ signin::IdentityManager* ChromeAutocompleteProviderClient::GetIdentityManager()
+   return IdentityManagerFactory::GetForProfile(profile_);
  }
  
- bool ChromeAutocompleteProviderClient::IsOffTheRecord() const {
++bool ChromeAutocompleteProviderClient::IsAlwaysIncognitoEnabled() const {
 +  if (profile_->GetPrefs()->GetBoolean(prefs::kAlwaysIncognitoEnabled)) {
-+    return false;
++    return true;
 +  }
++  return false;
++}
++
+ bool ChromeAutocompleteProviderClient::IsOffTheRecord() const {
    return profile_->IsOffTheRecord();
  }
- 
+diff --git a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h b/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
+--- a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
++++ b/chrome/browser/autocomplete/chrome_autocomplete_provider_client.h
+@@ -78,6 +78,7 @@ class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
+       const override;
+   signin::IdentityManager* GetIdentityManager() const override;
+   bool IsOffTheRecord() const override;
++  bool IsAlwaysIncognitoEnabled() const override;
+   bool SearchSuggestEnabled() const override;
+   bool AllowDeletingBrowserHistory() const override;
+   bool IsPersonalizedUrlDataCollectionActive() const override;
 diff --git a/chrome/browser/content_settings/host_content_settings_map_factory.cc b/chrome/browser/content_settings/host_content_settings_map_factory.cc
 --- a/chrome/browser/content_settings/host_content_settings_map_factory.cc
 +++ b/chrome/browser/content_settings/host_content_settings_map_factory.cc
@@ -594,13 +618,13 @@ diff --git a/chrome/browser/content_settings/host_content_settings_map_factory.c
  
 +  bool always_incognito_enabled = false;
 +
-+#if defined(ALWAYS_INCOGNITO_ENABLED)
++
 +  PrefService* prefService = original_profile->GetPrefs();
 +  if (prefService->GetBoolean(prefs::kAlwaysIncognitoEnabled)) {
 +    profile = original_profile;
 +    always_incognito_enabled = true;
 +  }
-+#endif
++
 +
    scoped_refptr<HostContentSettingsMap> settings_map(new HostContentSettingsMap(
        profile->GetPrefs(),
@@ -717,7 +741,7 @@ diff --git a/chrome/common/pref_names.cc b/chrome/common/pref_names.cc
  const char kLacrosLaunchSwitch[] = "lacros_launch_switch";
  #endif
  
-+#if defined(OS_ANDROID)
++#if BUILDFLAG(IS_ANDROID)
 +const char kAlwaysIncognitoEnabled[] = "always_incognito_enabled";
 +#endif
 +
@@ -727,17 +751,61 @@ diff --git a/chrome/common/pref_names.cc b/chrome/common/pref_names.cc
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -1193,6 +1193,11 @@ extern const char kLastWhatsNewVersion[];
- extern const char kLensRegionSearchEnabled[];
+@@ -1161,6 +1161,7 @@ extern const char kCartDiscountConsentShown[];
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ extern const char kWebXRImmersiveArEnabled[];
++extern const char kAlwaysIncognitoEnabled[];
  #endif
  
-+#if defined(OS_ANDROID)
-+#define ALWAYS_INCOGNITO_ENABLED
-+extern const char kAlwaysIncognitoEnabled[];
-+#endif
+ #if !BUILDFLAG(IS_ANDROID)
+diff --git a/components/omnibox/browser/autocomplete_provider_client.cc b/components/omnibox/browser/autocomplete_provider_client.cc
+--- a/components/omnibox/browser/autocomplete_provider_client.cc
++++ b/components/omnibox/browser/autocomplete_provider_client.cc
+@@ -34,3 +34,7 @@ base::WeakPtr<AutocompleteProviderClient>
+ AutocompleteProviderClient::GetWeakPtr() {
+   return nullptr;
+ }
 +
- extern const char kPrivacyReviewShowWelcomeCard[];
- extern const char kPrivacyGuideViewed[];
++bool AutocompleteProviderClient::IsAlwaysIncognitoEnabled() const {
++  return false;
++}
+diff --git a/components/omnibox/browser/autocomplete_provider_client.h b/components/omnibox/browser/autocomplete_provider_client.h
+--- a/components/omnibox/browser/autocomplete_provider_client.h
++++ b/components/omnibox/browser/autocomplete_provider_client.h
+@@ -131,6 +131,7 @@ class AutocompleteProviderClient : public OmniboxAction::Client {
+   virtual signin::IdentityManager* GetIdentityManager() const = 0;
  
+   virtual bool IsOffTheRecord() const = 0;
++  virtual bool IsAlwaysIncognitoEnabled() const = 0;
+   virtual bool SearchSuggestEnabled() const = 0;
+ 
+   // True for almost all users except ones with a specific enterprise policy.
+diff --git a/components/omnibox/browser/base_search_provider.cc b/components/omnibox/browser/base_search_provider.cc
+--- a/components/omnibox/browser/base_search_provider.cc
++++ b/components/omnibox/browser/base_search_provider.cc
+@@ -422,7 +422,7 @@ bool BaseSearchProvider::CanSendURL(
+     return false;
+ 
+   // Don't run if in incognito mode.
+-  if (client->IsOffTheRecord())
++  if (client->IsOffTheRecord() && client->IsAlwaysIncognitoEnabled() == false)
+     return false;
+ 
+   // Don't run if we can't get preferences or search suggest is not enabled.
+diff --git a/components/omnibox/browser/search_provider.cc b/components/omnibox/browser/search_provider.cc
+--- a/components/omnibox/browser/search_provider.cc
++++ b/components/omnibox/browser/search_provider.cc
+@@ -770,7 +770,9 @@ bool SearchProvider::IsQuerySuitableForSuggest(bool* query_is_private) const {
+   // keyword input to a keyword suggest server, if any.)
+   const TemplateURL* default_url = providers_.GetDefaultProviderURL();
+   const TemplateURL* keyword_url = providers_.GetKeywordProviderURL();
+-  return !client()->IsOffTheRecord() && client()->SearchSuggestEnabled() &&
++  return (client()->IsOffTheRecord() == false ||
++                client()->IsAlwaysIncognitoEnabled() == true) &&
++         client()->SearchSuggestEnabled() &&
+          ((default_url && !default_url->suggestions_url().empty() &&
+            !*query_is_private) ||
+           (keyword_url && !keyword_url->suggestions_url().empty()));
 --
 2.25.1
