@@ -37,6 +37,8 @@ Added flag --fingerprinting-canvas-image-data-noise to disable Canvas image data
  third_party/blink/renderer/core/dom/range.cc  |  12 +-
  .../renderer/core/html/canvas/text_metrics.cc |  18 ++
  .../renderer/core/html/canvas/text_metrics.h  |   2 +
+ .../renderer/core/svg/svg_graphics_element.cc |   1 +
+ .../core/svg/svg_text_content_element.cc      |  17 +-
  .../canvas2d/base_rendering_context_2d.cc     |   5 +
  .../canvas2d/canvas_rendering_context_2d.cc   |   8 +-
  third_party/blink/renderer/platform/BUILD.gn  |   5 +-
@@ -48,7 +50,7 @@ Added flag --fingerprinting-canvas-image-data-noise to disable Canvas image data
  third_party/ungoogled/BUILD.gn                |  10 ++
  third_party/ungoogled/ungoogled_switches.cc   |  18 ++
  third_party/ungoogled/ungoogled_switches.h    |  18 ++
- 24 files changed, 346 insertions(+), 3 deletions(-)
+ 26 files changed, 360 insertions(+), 7 deletions(-)
  create mode 100644 third_party/ungoogled/BUILD.gn
  create mode 100644 third_party/ungoogled/ungoogled_switches.cc
  create mode 100644 third_party/ungoogled/ungoogled_switches.h
@@ -339,6 +341,76 @@ diff --git a/third_party/blink/renderer/core/html/canvas/text_metrics.h b/third_
   private:
    void Update(const Font&,
                const TextDirection&,
+diff --git a/third_party/blink/renderer/core/svg/svg_graphics_element.cc b/third_party/blink/renderer/core/svg/svg_graphics_element.cc
+--- a/third_party/blink/renderer/core/svg/svg_graphics_element.cc
++++ b/third_party/blink/renderer/core/svg/svg_graphics_element.cc
+@@ -193,6 +193,7 @@ SVGRectTearOff* SVGGraphicsElement::getBBoxFromJavascript() {
+ 
+     if (layout_object->IsSVGText() || layout_object->IsSVGInline())
+       UseCounter::Count(GetDocument(), WebFeature::kGetBBoxForText);
++    bounding_box.Scale(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
+   }
+   return SVGRectTearOff::CreateDetached(bounding_box);
+ }
+diff --git a/third_party/blink/renderer/core/svg/svg_text_content_element.cc b/third_party/blink/renderer/core/svg/svg_text_content_element.cc
+--- a/third_party/blink/renderer/core/svg/svg_text_content_element.cc
++++ b/third_party/blink/renderer/core/svg/svg_text_content_element.cc
+@@ -117,11 +117,14 @@ float SVGTextContentElement::getComputedTextLength() {
+   GetDocument().UpdateStyleAndLayoutForNode(this,
+                                             DocumentUpdateReason::kJavaScript);
+   auto* layout_object = GetLayoutObject();
++  float value = 0;
+   if (IsNGTextOrInline(layout_object)) {
+     NGSvgTextQuery query(*layout_object);
+-    return query.SubStringLength(0, query.NumberOfCharacters());
++    value = query.SubStringLength(0, query.NumberOfCharacters());
++  } else {
++    value = SVGTextQuery(layout_object).TextLength();
+   }
+-  return SVGTextQuery(layout_object).TextLength();
++  return value * GetDocument().GetNoiseFactorX();
+ }
+ 
+ float SVGTextContentElement::getSubStringLength(
+@@ -144,9 +147,12 @@ float SVGTextContentElement::getSubStringLength(
+     nchars = number_of_chars - charnum;
+ 
+   auto* layout_object = GetLayoutObject();
++  float value = 0;
+   if (IsNGTextOrInline(layout_object))
+-    return NGSvgTextQuery(*layout_object).SubStringLength(charnum, nchars);
+-  return SVGTextQuery(layout_object).SubStringLength(charnum, nchars);
++    value = NGSvgTextQuery(*layout_object).SubStringLength(charnum, nchars);
++  else
++    value = SVGTextQuery(layout_object).SubStringLength(charnum, nchars);
++  return value * GetDocument().GetNoiseFactorX();
+ }
+ 
+ SVGPointTearOff* SVGTextContentElement::getStartPositionOfChar(
+@@ -170,6 +176,7 @@ SVGPointTearOff* SVGTextContentElement::getStartPositionOfChar(
+   } else {
+     point = SVGTextQuery(layout_object).StartPositionOfCharacter(charnum);
+   }
++  point.Scale(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
+   return SVGPointTearOff::CreateDetached(point);
+ }
+ 
+@@ -194,6 +201,7 @@ SVGPointTearOff* SVGTextContentElement::getEndPositionOfChar(
+   } else {
+     point = SVGTextQuery(layout_object).EndPositionOfCharacter(charnum);
+   }
++  point.Scale(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
+   return SVGPointTearOff::CreateDetached(point);
+ }
+ 
+@@ -218,6 +226,7 @@ SVGRectTearOff* SVGTextContentElement::getExtentOfChar(
+   } else {
+     rect = SVGTextQuery(layout_object).ExtentOfCharacter(charnum);
+   }
++  rect.Scale(GetDocument().GetNoiseFactorX(), GetDocument().GetNoiseFactorY());
+   return SVGRectTearOff::CreateDetached(rect);
+ }
+ 
 diff --git a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 --- a/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
 +++ b/third_party/blink/renderer/modules/canvas/canvas2d/base_rendering_context_2d.cc
