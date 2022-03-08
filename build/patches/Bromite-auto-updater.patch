@@ -14,7 +14,7 @@ Enable checking for new versions, with notifications and proxy support
  .../browser/omaha/UpdateMenuItemHelper.java   |  81 +++++-
  .../browser/omaha/UpdateStatusProvider.java   | 161 +++++++++---
  .../browser/omaha/VersionNumberGetter.java    |   3 +-
- .../inline/BromiteInlineUpdateController.java | 241 ++++++++++++++++++
+ .../inline/BromiteInlineUpdateController.java | 242 ++++++++++++++++++
  .../omaha/inline/InlineUpdateController.java  |  51 ++++
  .../inline/InlineUpdateControllerFactory.java |  21 ++
  chrome/browser/endpoint_fetcher/BUILD.gn      |   2 +
@@ -22,11 +22,11 @@ Enable checking for new versions, with notifications and proxy support
  .../endpoint_fetcher/endpoint_fetcher.h       |  22 +-
  .../endpoint_fetcher/EndpointFetcher.java     |  22 +-
  .../EndpointHeaderResponse.java               |  31 +++
- .../flags/android/chrome_feature_list.cc      |   6 +-
+ .../flags/android/chrome_feature_list.cc      |   4 +
  .../flags/android/chrome_feature_list.h       |   1 +
  .../browser/flags/ChromeFeatureList.java      |   1 +
- .../strings/android_chrome_strings.grd        |  23 +-
- 22 files changed, 896 insertions(+), 56 deletions(-)
+ .../strings/android_chrome_strings.grd        |  26 +-
+ 22 files changed, 899 insertions(+), 55 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/BromiteInlineUpdateController.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/InlineUpdateController.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/InlineUpdateControllerFactory.java
@@ -737,7 +737,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/Br
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/BromiteInlineUpdateController.java
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,242 @@
 +// Copyright 2021 The Ungoogled Chromium Authors. All rights reserved.
 +//
 +// This file is part of Ungoogled Chromium Android.
@@ -879,8 +879,9 @@ new file mode 100644
 +                        postStatus(UpdateStatusProvider.UpdateState.INLINE_UPDATE_AVAILABLE, getDownloadUrl());
 +                    } else {
 +                        checkLatestUpstreamVersion((latestUpstreamVersion) -> {
-+                           if (latestUpstreamVersion == null) return;
-+                              postStatus(UpdateStatusProvider.UpdateState.VULNERABLE_VERSION, VULNERABLE_VERSION_DOC_URL);
++                            if (latestUpstreamVersion == null) return;
++                            if (OmahaBase.isNewVersionAvailableByVersion(latestUpstreamVersion))
++                                postStatus(UpdateStatusProvider.UpdateState.VULNERABLE_VERSION, VULNERABLE_VERSION_DOC_URL);
 +                        });
 +                    }
 +                });
@@ -1517,18 +1518,16 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
      &kPageAnnotationsService,
      &kBookmarksImprovedSaveFlow,
      &kBookmarksRefresh,
-@@ -680,7 +681,10 @@ const base::Feature kIncognitoReauthenticationForAndroid{
-     "IncognitoReauthenticationForAndroid", base::FEATURE_DISABLED_BY_DEFAULT};
- 
+@@ -682,6 +683,9 @@ const base::Feature kIncognitoReauthenticationForAndroid{
  const base::Feature kIncognitoScreenshot{"IncognitoScreenshot",
--                                         base::FEATURE_DISABLED_BY_DEFAULT};
-+                                         base::FEATURE_ENABLED_BY_DEFAULT};
-+
+                                          base::FEATURE_DISABLED_BY_DEFAULT};
+ 
 +const base::Feature kInlineUpdateFlow{"InlineUpdateFlow",
 +                                      base::FEATURE_ENABLED_BY_DEFAULT};
- 
++
  const base::Feature kInstantStart{"InstantStart",
                                    base::FEATURE_DISABLED_BY_DEFAULT};
+ 
 diff --git a/chrome/browser/flags/android/chrome_feature_list.h b/chrome/browser/flags/android/chrome_feature_list.h
 --- a/chrome/browser/flags/android/chrome_feature_list.h
 +++ b/chrome/browser/flags/android/chrome_feature_list.h
@@ -1554,7 +1553,7 @@ diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/f
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -1798,6 +1798,12 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -1798,6 +1798,15 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_DEPRECATION_WARNING" desc="Warning about Chrome updates no longer being supported">
          Chrome updates are no longer supported for this version of Android
        </message>
@@ -1564,10 +1563,13 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 +      <message name="IDS_ALLOW_INLINE_UPDATE_SUMMARY" desc="Summary for allow inline update preference">
 +        Notify about new releases by periodically checking for their availability
 +      </message>
++      <message name="IDS_MENU_UPDATE_SUMMARY_VULNERABLE" desc="Warning about vulnerable version found">
++        This version you are using has known vulnerabilities and should no longer be used
++      </message>
  
        <!-- Account management UI strings. -->
        <message name="IDS_ACCOUNT_MANAGEMENT_TITLE" desc="Header title for the account management screen. [CHAR_LIMIT=32]">
-@@ -3345,7 +3351,10 @@ To change this setting, <ph name="BEGIN_LINK">&lt;resetlink&gt;</ph>reset sync<p
+@@ -3345,7 +3354,10 @@ To change this setting, <ph name="BEGIN_LINK">&lt;resetlink&gt;</ph>reset sync<p
  
        <!-- Main menu items -->
        <message name="IDS_MENU_UPDATE" desc="Menu item for updating chrome. [CHAR_LIMIT=24]">
@@ -1579,7 +1581,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
        </message>
        <message name="IDS_MENU_UPDATE_SUMMARY_DEFAULT" desc="Summary string for update menu item explaining that a newer version of Chrome is available. [CHAR_LIMIT=30]">
          Newer version is available
-@@ -3356,6 +3365,18 @@ To change this setting, <ph name="BEGIN_LINK">&lt;resetlink&gt;</ph>reset sync<p
+@@ -3356,6 +3368,18 @@ To change this setting, <ph name="BEGIN_LINK">&lt;resetlink&gt;</ph>reset sync<p
        <message name="IDS_MENU_UPDATE_UNSUPPORTED_SUMMARY_DEFAULT" desc="Summary string for update menu item explaining that the Android version on the device is unsupported. [CHAR_LIMIT=30]">
          Android version is unsupported
        </message>
