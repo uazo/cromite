@@ -1,0 +1,251 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Fri, 10 Dec 2021 13:15:30 +0000
+Subject: Always ask for permissions
+
+Always ask for permissions for location, microphone and camera in every session
+---
+ .../java/res/xml/privacy_preferences.xml      |  5 ++
+ .../download/FileAccessPermissionHelper.java  |  2 +-
+ .../PermissionUpdateRequester.java            |  6 +-
+ .../strings/android_chrome_strings.grd        |  8 ++
+ .../strings/android/browser_ui_strings.grd    |  5 ++
+ .../PermissionParamsListBuilder.java          |  4 +
+ .../AndroidPermissionRequester.java           | 80 ++++++++++++++++++-
+ .../PermissionDialogController.java           |  3 +
+ 8 files changed, 110 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
+--- a/chrome/android/java/res/xml/privacy_preferences.xml
++++ b/chrome/android/java/res/xml/privacy_preferences.xml
+@@ -76,6 +76,11 @@
+         android:title="@string/open_external_links_incognito_title"
+         android:summary="@string/open_external_links_incognito_summary"
+         android:defaultValue="false" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="ask_permissions_to_user"
++        android:title="@string/ask_permissions_to_user_title"
++        android:summary="@string/ask_permissions_to_user_summary"
++        android:defaultValue="true" />
+     <PreferenceCategory
+         android:key="services_category"
+         android:title="@string/services_category_title">
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/FileAccessPermissionHelper.java b/chrome/android/java/src/org/chromium/chrome/browser/download/FileAccessPermissionHelper.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/FileAccessPermissionHelper.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/FileAccessPermissionHelper.java
+@@ -65,7 +65,7 @@ public class FileAccessPermissionHelper {
+                                 && grantResults[0] == PackageManager.PERMISSION_GRANTED,
+                         null));
+ 
+-        AndroidPermissionRequester.showMissingPermissionDialog(
++        AndroidPermissionRequester.showMissingPermissionDialogUnchecked(
+                 ApplicationStatus.getLastTrackedFocusedActivity(),
+                 org.chromium.chrome.R.string.missing_storage_permission_download_education_text,
+                 ()
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/permissions/PermissionUpdateRequester.java b/chrome/android/java/src/org/chromium/chrome/browser/permissions/PermissionUpdateRequester.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/permissions/PermissionUpdateRequester.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/permissions/PermissionUpdateRequester.java
+@@ -18,6 +18,7 @@ import org.chromium.base.annotations.NativeMethods;
+ import org.chromium.content_public.browser.WebContents;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.permissions.PermissionCallback;
++import org.chromium.components.permissions.AndroidPermissionRequester;
+ 
+ import java.util.Collections;
+ import java.util.HashSet;
+@@ -130,7 +131,10 @@ class PermissionUpdateRequester implements PermissionCallback {
+                 if (!mRequiredAndroidPermissions.contains(mAndroidPermisisons[i])) {
+                     continue;
+                 }
+-                hasAllPermissions &= windowAndroid.hasPermission(mAndroidPermisisons[i]);
++                boolean hasPermission = windowAndroid.hasPermission(mAndroidPermisisons[i]);
++                hasAllPermissions &= hasPermission;
++                if (hasPermission)
++                    AndroidPermissionRequester.setUserGrantedPermission(mAndroidPermisisons[i]);
+             }
+         }
+         if (mNativePtr != 0) {
+diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+--- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
++++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
+@@ -5558,6 +5558,14 @@ To change this setting, <ph name="BEGIN_LINK">&lt;resetlink&gt;</ph>reset sync<p
+         Upgrade navigations to HTTPS and warn you before loading sites that don’t support it
+       </message>
+ 
++      <!-- Ask permissions to user settings strings -->
++      <message name="IDS_ASK_PERMISSIONS_TO_USER_TITLE" desc="Title for always ask for permissions settings. [CHAR-LIMIT=32]">
++        Always ask for permissions
++      </message>
++      <message name="IDS_ASK_PERMISSIONS_TO_USER_SUMMARY" desc="Summary for always ask for permissions settings">
++        Always ask for permissions for location, microphone and camera in every session
++      </message>
++
+       <!-- Auto-darken web content -->
+       <message name="IDS_AUTO_DARK_MESSAGE_TITLE" desc="Message shown that informs the user auto darkening of website contents has been enabled.">
+         Dark theme for sites is on in Chrome
+diff --git a/components/browser_ui/strings/android/browser_ui_strings.grd b/components/browser_ui/strings/android/browser_ui_strings.grd
+--- a/components/browser_ui/strings/android/browser_ui_strings.grd
++++ b/components/browser_ui/strings/android/browser_ui_strings.grd
+@@ -581,6 +581,11 @@
+       <message name="IDS_PAGE_INFO_URL_TRUNCATED" desc="Accessibility announcement when the URL in PageInfo switches from full to truncated display">
+         URL truncated
+       </message>
++      <message name="IDS_PAGE_INFO_ANDROID_PERMISSION_USER_PERMISSION_REQUIRED"
++               desc="The label used in the About Page dialog to indicate an authorization has not yet been requested from the user">
++        User permission is required
++      </message>
++
+       <message name="IDS_PAGE_INFO_AD_PERSONALIZATION_TITLE" desc="The title of the 'Ad personalization' section in Page Info.">
+           Ad personalization
+       </message>
+diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java b/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java
+--- a/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java
++++ b/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java
+@@ -86,6 +86,10 @@ public class PermissionParamsListBuilder {
+                     permissionParams.warningTextResource =
+                             R.string.page_info_android_permission_blocked;
+                 }
++                if (AndroidPermissionRequester.alreadyAskedPermissionToUser(permission.type) == false) {
++                    permissionParams.warningTextResource =
++                            R.string.page_info_android_permission_user_permission_required;
++                }
+             }
+         }
+ 
+diff --git a/components/permissions/android/java/src/org/chromium/components/permissions/AndroidPermissionRequester.java b/components/permissions/android/java/src/org/chromium/components/permissions/AndroidPermissionRequester.java
+--- a/components/permissions/android/java/src/org/chromium/components/permissions/AndroidPermissionRequester.java
++++ b/components/permissions/android/java/src/org/chromium/components/permissions/AndroidPermissionRequester.java
+@@ -26,6 +26,10 @@ import org.chromium.ui.permissions.PermissionCallback;
+ 
+ import java.util.HashSet;
+ import java.util.Set;
++import java.util.Hashtable;
++import java.time.LocalDateTime;
++import java.time.temporal.ChronoUnit;
++import org.chromium.base.ContextUtils;
+ 
+ /**
+  * Methods to handle requesting native permissions from Android when the user grants a website a
+@@ -79,6 +83,9 @@ public class AndroidPermissionRequester {
+     public static boolean hasRequiredAndroidPermissionsForContentSetting(
+             AndroidPermissionDelegate permissionDelegate,
+             @ContentSettingsType int contentSettingsType) {
++        if (alreadyAskedPermissionToUser(contentSettingsType) == false)
++            return false;
++
+         Set<String> missingPermissions = filterPermissionsKeepMissing(permissionDelegate,
+                 PermissionUtil.getRequiredAndroidPermissionsForContentSetting(contentSettingsType));
+ 
+@@ -148,6 +155,8 @@ public class AndroidPermissionRequester {
+                         if (!windowAndroid.canRequestPermission(permissions[i])) {
+                             allRequestable = false;
+                         }
++                    } else if (grantResults[i] == PackageManager.PERMISSION_GRANTED) {
++                        setUserGrantedPermission(permissions[i]);
+                     }
+                 }
+ 
+@@ -198,6 +207,12 @@ public class AndroidPermissionRequester {
+         return true;
+     }
+ 
++    // do not re-request permissions for file access
++    public static void showMissingPermissionDialogUnchecked(Activity activity, @StringRes int messageId,
++            Runnable onPositiveButtonClicked, Runnable onCancelled) {
++        showMissingPermissionDialog(activity, messageId, onPositiveButtonClicked, onCancelled);
++    }
++
+     /**
+      * Shows a dialog that informs the user about a missing Android permission.
+      * @param activity Current Activity. It should implement {@link ModalDialogManagerHolder}.
+@@ -205,7 +220,7 @@ public class AndroidPermissionRequester {
+      * @param onPositiveButtonClicked Runnable that is executed on positive button click.
+      * @param onCancelled Runnable that is executed on cancellation.
+      */
+-    public static void showMissingPermissionDialog(Activity activity, @StringRes int messageId,
++    private static void showMissingPermissionDialog(Activity activity, @StringRes int messageId,
+             Runnable onPositiveButtonClicked, Runnable onCancelled) {
+         assert activity
+                 instanceof ModalDialogManagerHolder
+@@ -244,4 +259,67 @@ public class AndroidPermissionRequester {
+                         .build();
+         modalDialogManager.showDialog(dialogModel, ModalDialogManager.ModalDialogType.APP);
+     }
++
++    // Contains the time the user granted permission
++    static private Hashtable<Integer,LocalDateTime> m_LastPermissionRequestedDate =
++        new Hashtable<Integer,LocalDateTime>();
++
++    // Lazy array of the mapping between android permissions and contentsetting
++    static private SparseArray<Set<String>> m_ContentSettingsTypesToRequiredPermissionsMap;
++
++    private static SparseArray<Set<String>> getContentSettingsTypesToRequiredPermissionsMap() {
++        if (m_ContentSettingsTypesToRequiredPermissionsMap == null)
++        {
++            m_ContentSettingsTypesToRequiredPermissionsMap = new SparseArray<>();
++            for (@ContentSettingsType int type = 0; type < ContentSettingsType.NUM_TYPES; type++) {
++                final Set<String> requiredPermissions = CollectionUtil.newHashSet(
++                        PermissionUtil.getRequiredAndroidPermissionsForContentSetting(
++                                type));
++
++                m_ContentSettingsTypesToRequiredPermissionsMap.append(
++                        type, requiredPermissions);
++            }
++        }
++        return m_ContentSettingsTypesToRequiredPermissionsMap;
++    }
++
++    // check if authorization has already been requested from the user in this session
++    static public boolean alreadyAskedPermissionToUser(@ContentSettingsType int contentSettingsType) {
++        // user disabled
++        if (!ContextUtils.getAppSharedPreferences().getBoolean("ask_permissions_to_user", true))
++            return true;
++
++        // check if android permission is needed
++        if (PermissionUtil.getRequiredAndroidPermissionsForContentSetting(contentSettingsType).length == 0)
++            return true;
++
++        // check if already asked
++        if (!m_LastPermissionRequestedDate.containsKey(contentSettingsType)) {
++            return false;
++        } else {
++            LocalDateTime lastRequest = m_LastPermissionRequestedDate.get(contentSettingsType);
++            if (lastRequest.until(LocalDateTime.now(), ChronoUnit.MINUTES) > 240)
++                return false;
++        }
++        return true;
++    }
++
++    // sets the time of the user's positive authorization request
++    static public void setUserGrantedPermission(String permission)
++    {
++        // The following permissions are currently managed
++        // ContentSettingsType: GEOLOCATION, MEDIASTREAM_MIC, MEDIASTREAM_CAMERA, AR
++        // Permission: LOCATION, MICROPHONE, CAMERA
++        SparseArray<Set<String>> contentSettingsTypesToRequiredPermissionsMap =
++            getContentSettingsTypesToRequiredPermissionsMap();
++        final int grantedContentSetting = getContentSettingType(
++            contentSettingsTypesToRequiredPermissionsMap, permission);
++
++        setUserGrantedContentSettings(grantedContentSetting);
++    }
++
++    static public void setUserGrantedContentSettings(int contentSettings)
++    {
++        m_LastPermissionRequestedDate.put(contentSettings, LocalDateTime.now());
++    }
+ }
+diff --git a/components/permissions/android/java/src/org/chromium/components/permissions/PermissionDialogController.java b/components/permissions/android/java/src/org/chromium/components/permissions/PermissionDialogController.java
+--- a/components/permissions/android/java/src/org/chromium/components/permissions/PermissionDialogController.java
++++ b/components/permissions/android/java/src/org/chromium/components/permissions/PermissionDialogController.java
+@@ -146,6 +146,9 @@ public class PermissionDialogController
+     public void onAndroidPermissionAccepted() {
+         assert mState == State.REQUEST_ANDROID_PERMISSIONS;
+ 
++        for (int contentSettings : mDialogDelegate.getContentSettingsTypes())
++            AndroidPermissionRequester.setUserGrantedContentSettings(contentSettings);
++
+         // The tab may have navigated or been closed behind the Android permission prompt.
+         if (mDialogDelegate == null) {
+             mState = State.NOT_SHOWING;
+--
+2.25.1

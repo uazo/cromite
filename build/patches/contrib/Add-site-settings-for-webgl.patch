@@ -1,0 +1,1394 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Thu, 24 Feb 2022 08:01:48 +0000
+Subject: Add site settings for webgl
+
+the allowed options are three:
+1. active
+2. active with random data (default)
+3. deactivated
+
+random data is provided for all webgl1 and webgl2 functions
+which return information to javascript.
+the readPixel function is disturbing the image with random data
+
+part of the code was recovered from brave.
+---
+ .../browser/chrome_content_browser_client.cc  |  22 +-
+ .../browser/chrome_content_browser_client.h   |   3 +
+ .../browser_ui/site_settings/android/BUILD.gn |   3 +
+ .../BromiteCustomContentSettingImpl.java      |   1 +
+ .../BromiteWebGLContentSetting.java           | 100 +++++++
+ .../site_settings/SiteSettingsCategory.java   |   8 +-
+ .../strings/android/browser_ui_strings.grd    |   1 +
+ .../browser_ui/strings/android/webgl.grdp     |  21 ++
+ components/components_strings.grd             |   1 +
+ .../core/browser/content_settings_registry.cc |  15 +
+ .../core/browser/content_settings_utils.cc    |   2 +
+ .../core/common/content_settings.cc           |   4 +-
+ .../core/common/content_settings.h            |   1 +
+ .../core/common/content_settings.mojom        |   1 +
+ .../common/content_settings_mojom_traits.cc   |   3 +-
+ .../common/content_settings_mojom_traits.h    |   5 +
+ .../core/common/content_settings_types.h      |   2 +
+ .../renderer/content_settings_agent_impl.cc   |  10 +
+ .../renderer/content_settings_agent_impl.h    |   1 +
+ .../platform/web_content_settings_client.h    |   2 +
+ .../renderer/core/execution_context/build.gni |   2 +
+ .../execution_context/execution_context.cc    |  29 ++
+ .../execution_context/execution_context.h     |   5 +
+ .../core/execution_context/session_cache.cc   | 116 ++++++++
+ .../core/execution_context/session_cache.h    |  36 +++
+ .../webgl/webgl2_rendering_context_base.cc    |  36 ++-
+ .../webgl/webgl2_rendering_context_base.h     |   3 +-
+ .../webgl/webgl_rendering_context_base.cc     | 267 ++++++++++++++++--
+ .../webgl/webgl_rendering_context_base.h      |   5 +-
+ .../graphics/gpu/webgl_image_conversion.cc    |   6 +
+ .../graphics/gpu/webgl_image_conversion.h     |  12 +-
+ 31 files changed, 676 insertions(+), 47 deletions(-)
+ create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteWebGLContentSetting.java
+ create mode 100644 components/browser_ui/strings/android/webgl.grdp
+ create mode 100644 third_party/blink/renderer/core/execution_context/session_cache.cc
+ create mode 100644 third_party/blink/renderer/core/execution_context/session_cache.h
+
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -624,6 +624,8 @@
+ #include "base/win/windows_h_disallowed.h"
+ #endif  // defined(_WINDOWS_)
+ 
++#include "base/rand_util.h"
++
+ using blink::mojom::EffectiveConnectionType;
+ using blink::web_pref::WebPreferences;
+ using content::BrowserThread;
+@@ -1251,7 +1253,9 @@ bool IsTopChromeWebUIURL(const GURL& url) {
+ 
+ }  // namespace
+ 
+-ChromeContentBrowserClient::ChromeContentBrowserClient() {
++ChromeContentBrowserClient::ChromeContentBrowserClient()
++  : session_token_(base::RandUint64()),
++    incognito_session_token_(base::RandUint64()) {
+ #if BUILDFLAG(ENABLE_PLUGINS)
+   extra_parts_.push_back(new ChromeContentBrowserClientPluginsPart);
+ #endif
+@@ -2516,6 +2520,22 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+                                     switches::kChangeStackGuardOnForkEnabled);
+   }
+ #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++
++  if (process_type == switches::kRendererProcess) {
++    uint64_t session_token;
++    content::RenderProcessHost* process =
++        content::RenderProcessHost::FromID(child_process_id);
++    Profile* profile =
++        process ? Profile::FromBrowserContext(process->GetBrowserContext())
++                : nullptr;
++    if (profile && !profile->IsOffTheRecord()) {
++      session_token = session_token_;
++    } else {
++      session_token = incognito_session_token_;
++    }
++    command_line->AppendSwitchASCII("session_token",
++                                    base::NumberToString(session_token));
++  }
+ }
+ 
+ std::string
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -919,6 +919,9 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+   base::TimeTicks keepalive_deadline_;
+ #endif
+ 
++  uint64_t session_token_;
++  uint64_t incognito_session_token_;
++
+   base::WeakPtrFactory<ChromeContentBrowserClient> weak_factory_{this};
+ };
+ 
+diff --git a/components/browser_ui/site_settings/android/BUILD.gn b/components/browser_ui/site_settings/android/BUILD.gn
+--- a/components/browser_ui/site_settings/android/BUILD.gn
++++ b/components/browser_ui/site_settings/android/BUILD.gn
+@@ -72,6 +72,9 @@ android_library("java") {
+     "java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSetting.java",
+     "java/src/org/chromium/components/browser_ui/site_settings/TimezoneOverrideSiteSettingsPreference.java"
+   ]
++  sources += [
++    "java/src/org/chromium/components/browser_ui/site_settings/BromiteWebGLContentSetting.java",
++  ]
+   annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
+   resources_package = "org.chromium.components.browser_ui.site_settings"
+   deps = [
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
+--- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
+@@ -43,6 +43,7 @@ public abstract class BromiteCustomContentSettingImpl {
+ 
+     static {
+         mItemList = new ArrayList<BromiteCustomContentSetting>();
++        mItemList.add(new BromiteWebGLContentSetting());
+     }
+ 
+     public static SiteSettingsCategory createFromType(
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteWebGLContentSetting.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteWebGLContentSetting.java
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteWebGLContentSetting.java
+@@ -0,0 +1,100 @@
++/*
++    This file is part of Bromite.
++
++    Bromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Bromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Bromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.components.browser_ui.site_settings;
++
++import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
++import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
++import org.chromium.components.content_settings.ContentSettingValues;
++import org.chromium.components.content_settings.ContentSettingsType;
++import org.chromium.content_public.browser.BrowserContextHandle;
++
++import androidx.annotation.Nullable;
++import androidx.preference.Preference;
++import androidx.preference.PreferenceScreen;
++
++import java.util.ArrayList;
++
++public class BromiteWebGLContentSetting extends BromiteCustomContentSetting {
++    // CONTENT_SETTING_ALLOW   allow with fingerprinting protection
++    // CONTENT_SETTING_ASK     allow all
++    // CONTENT_SETTING_BLOCK   block
++
++    public BromiteWebGLContentSetting() {
++        super(/*contentSettingsType*/ ContentSettingsType.WEBGL,
++              /*siteSettingsCategory*/ SiteSettingsCategory.Type.WEBGL,
++              /*initialDefaultValue*/ ContentSettingValues.BLOCK,
++              /*defaultDisabledValue*/ ContentSettingValues.BLOCK,
++              /*allowException*/ true,
++              /*preferenceKey*/ "webgl",
++              /*profilePrefKey*/ "webgl");
++    }
++
++    @Override
++    public ContentSettingsResources.ResourceItem getResourceItem() {
++        return new ContentSettingsResources.ResourceItem(
++            /*icon*/ R.drawable.web_asset,
++            /*title*/ R.string.webgl_permission_title,
++            /*defaultEnabledValue*/ getInitialDefaultValue(),
++            /*defaultDisabledValue*/ getDefaultDisabledValue(),
++            /*enabledSummary*/ R.string.website_settings_category_webgl_enabled_antifingerprint,
++            /*disabledSummary*/ R.string.website_settings_category_webgl_disabled);
++    }
++
++    @Override
++    public int getCategorySummary(@Nullable @ContentSettingValues int value) {
++        switch (value) {
++            case ContentSettingValues.ALLOW:
++                return R.string.website_settings_category_webgl_enabled_antifingerprint;
++            case ContentSettingValues.ASK:
++                return R.string.website_settings_category_webgl_enabled;
++            case ContentSettingValues.BLOCK:
++                return R.string.website_settings_category_webgl_disabled;
++            default:
++                return 0;
++        }
++    }
++
++    @Override
++    public boolean requiresTriStateContentSetting() {
++        return true;
++    }
++
++    @Override
++    public int[] getTriStateSettingDescriptionIDs() {
++        int[] descriptionIDs = {
++                R.string.website_settings_category_webgl_enabled_antifingerprint,  // ALLOWED
++                R.string.website_settings_category_webgl_enabled,   // ASK
++                R.string.website_settings_category_webgl_disabled }; // BLOCKED
++        return descriptionIDs;
++    }
++
++    @Override
++    public boolean showOnlyDescriptions() {
++        return true;
++    }
++
++    @Override
++    public int getAddExceptionDialogMessage() {
++        return R.string.website_settings_category_webgl_enabled_antifingerprint;
++    }
++
++    @Override
++    public @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSettingValues int value) {
++        return value != ContentSettingValues.BLOCK;
++    }
++}
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
+--- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
+@@ -43,7 +43,8 @@ public class SiteSettingsCategory {
+             Type.JAVASCRIPT, Type.MICROPHONE, Type.NFC, Type.NOTIFICATIONS, Type.POPUPS,
+             Type.PROTECTED_MEDIA, Type.SENSORS, Type.SOUND, Type.USB, Type.VIRTUAL_REALITY,
+             Type.USE_STORAGE, Type.AUTO_DARK_WEB_CONTENT, Type.REQUEST_DESKTOP_SITE,
+-            Type.TIMEZONE_OVERRIDE, Type.AUTOPLAY, Type.JAVASCRIPT_JIT, Type.IMAGES})
++            Type.TIMEZONE_OVERRIDE, Type.AUTOPLAY, Type.JAVASCRIPT_JIT, Type.IMAGES,
++            Type.WEBGL})
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface Type {
+         // All updates here must also be reflected in {@link #preferenceKey(int)
+@@ -76,11 +77,12 @@ public class SiteSettingsCategory {
+         int TIMEZONE_OVERRIDE = 25;
+         int AUTOPLAY = 26;
+         int JAVASCRIPT_JIT = 27;
+-        int IMAGES = 27;
++        int IMAGES = 28;
++        int WEBGL = 29;
+         /**
+          * Number of handled categories used for calculating array sizes.
+          */
+-        int NUM_ENTRIES = 28;
++        int NUM_ENTRIES = 30;
+     }
+ 
+     private final BrowserContextHandle mBrowserContextHandle;
+diff --git a/components/browser_ui/strings/android/browser_ui_strings.grd b/components/browser_ui/strings/android/browser_ui_strings.grd
+--- a/components/browser_ui/strings/android/browser_ui_strings.grd
++++ b/components/browser_ui/strings/android/browser_ui_strings.grd
+@@ -170,6 +170,7 @@
+   <release seq="1">
+     <messages fallback_to_english="true">
+       <part file="site_settings.grdp" />
++      <part file="webgl.grdp" />
+ 
+       <message name="IDS_GOT_IT" desc="Button for the user to accept a disclosure/message">
+         Got it
+diff --git a/components/browser_ui/strings/android/webgl.grdp b/components/browser_ui/strings/android/webgl.grdp
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/strings/android/webgl.grdp
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++  <message name="IDS_SITE_SETTINGS_TYPE_WEBGL" desc="The label used for webgl site settings controls.">
++    Webgl
++  </message>
++  <message name="IDS_SITE_SETTINGS_TYPE_WEBGL_MID_SENTENCE" desc="The label used for webgl site settings controls when used mid-sentence.">
++    webgl
++  </message>
++  <message name="IDS_WEBGL_PERMISSION_TITLE" desc="Title of the permission to use webgl [CHAR-LIMIT=32]">
++    Webgl
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_WEBGL_ENABLED_ANTIFINGERPRINT" desc="Summary text explaining that webgl is enabled with fingerprinting protection.">
++    Enabled with fingerprinting protection
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_WEBGL_ENABLED" desc="Summary text explaining that webgl is full enabled.">
++    Enabled
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_WEBGL_DISABLED" desc="Summary text explaining that webgl is full disabled.">
++    Disabled
++  </message>
++</grit-part>
+diff --git a/components/components_strings.grd b/components/components_strings.grd
+--- a/components/components_strings.grd
++++ b/components/components_strings.grd
+@@ -339,6 +339,7 @@
+       <part file="version_ui_strings.grdp" />
+       <part file="webapps_strings.grdp" />
+       <part file="user_scripts/strings/userscripts_strings.grdp" />
++      <part file="browser_ui/strings/android/webgl.grdp" />
+ 
+       <if expr="not is_ios">
+         <part file="management_strings.grdp" />
+diff --git a/components/content_settings/core/browser/content_settings_registry.cc b/components/content_settings/core/browser/content_settings_registry.cc
+--- a/components/content_settings/core/browser/content_settings_registry.cc
++++ b/components/content_settings/core/browser/content_settings_registry.cc
+@@ -657,6 +657,21 @@ void ContentSettingsRegistry::Init() {
+            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
+            ContentSettingsInfo::PERSISTENT,
+            ContentSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
++
++  Register(ContentSettingsType::WEBGL, "webgl", CONTENT_SETTING_BLOCK,
++           WebsiteSettingsInfo::SYNCABLE,
++           AllowlistedSchemes(),
++           ValidSettings(CONTENT_SETTING_ALLOW,   // allow
++                         CONTENT_SETTING_ASK,     // allow with fingerprinting protection
++                         CONTENT_SETTING_BLOCK),  // block
++           WebsiteSettingsInfo::SINGLE_ORIGIN_WITH_EMBEDDED_EXCEPTIONS_SCOPE,
++           WebsiteSettingsRegistry::PLATFORM_ANDROID,
++           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
++           ContentSettingsInfo::PERSISTENT,
++           ContentSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS,
++           /*show_into_info_page*/ true,
++           /*permission_type_ui*/ IDS_SITE_SETTINGS_TYPE_WEBGL,
++           /*permission_type_ui_mid_sentence*/ IDS_SITE_SETTINGS_TYPE_WEBGL_MID_SENTENCE);
+ }
+ 
+ void ContentSettingsRegistry::Register(
+diff --git a/components/content_settings/core/browser/content_settings_utils.cc b/components/content_settings/core/browser/content_settings_utils.cc
+--- a/components/content_settings/core/browser/content_settings_utils.cc
++++ b/components/content_settings/core/browser/content_settings_utils.cc
+@@ -156,6 +156,8 @@ void GetRendererContentSettingRules(const HostContentSettingsMap* map,
+   std::string timezone;
+   map->GetTimezoneOverrideValue(timezone);
+   rules->timezone_override_value = timezone;
++  map->GetSettingsForOneType(ContentSettingsType::WEBGL,
++                             &(rules->webgl_rules));
+ }
+ 
+ bool IsMorePermissive(ContentSetting a, ContentSetting b) {
+diff --git a/components/content_settings/core/common/content_settings.cc b/components/content_settings/core/common/content_settings.cc
+--- a/components/content_settings/core/common/content_settings.cc
++++ b/components/content_settings/core/common/content_settings.cc
+@@ -103,6 +103,7 @@ constexpr HistogramValue kHistogramValue[] = {
+     {ContentSettingsType::FEDERATED_IDENTITY_ACTIVE_SESSION, 82},
+     {ContentSettingsType::AUTO_DARK_WEB_CONTENT, 83},
+     {ContentSettingsType::REQUEST_DESKTOP_SITE, 84},
++    {ContentSettingsType::WEBGL, 85},
+ };
+ 
+ }  // namespace
+@@ -192,7 +193,8 @@ bool RendererContentSettingRules::IsRendererContentSetting(
+          content_type == ContentSettingsType::POPUPS ||
+          content_type == ContentSettingsType::MIXEDSCRIPT ||
+          content_type == ContentSettingsType::AUTO_DARK_WEB_CONTENT ||
+-         content_type == ContentSettingsType::TIMEZONE_OVERRIDE;
++         content_type == ContentSettingsType::TIMEZONE_OVERRIDE ||
++         content_type == ContentSettingsType::WEBGL;
+ }
+ 
+ RendererContentSettingRules::RendererContentSettingRules() {}
+diff --git a/components/content_settings/core/common/content_settings.h b/components/content_settings/core/common/content_settings.h
+--- a/components/content_settings/core/common/content_settings.h
++++ b/components/content_settings/core/common/content_settings.h
+@@ -83,6 +83,7 @@ struct RendererContentSettingRules {
+   ContentSettingsForOneType auto_dark_content_rules;
+   ContentSettingsForOneType timezone_override_rules;
+   std::string timezone_override_value;
++  ContentSettingsForOneType webgl_rules;
+ };
+ 
+ namespace content_settings {
+diff --git a/components/content_settings/core/common/content_settings.mojom b/components/content_settings/core/common/content_settings.mojom
+--- a/components/content_settings/core/common/content_settings.mojom
++++ b/components/content_settings/core/common/content_settings.mojom
+@@ -81,4 +81,5 @@ struct RendererContentSettingRules {
+   array<ContentSettingPatternSource> auto_dark_content_rules;
+   array<ContentSettingPatternSource> timezone_override_rules;
+   string timezone_override_value;
++  array<ContentSettingPatternSource> webgl_rules;
+ };
+diff --git a/components/content_settings/core/common/content_settings_mojom_traits.cc b/components/content_settings/core/common/content_settings_mojom_traits.cc
+--- a/components/content_settings/core/common/content_settings_mojom_traits.cc
++++ b/components/content_settings/core/common/content_settings_mojom_traits.cc
+@@ -104,7 +104,8 @@ bool StructTraits<content_settings::mojom::RendererContentSettingRulesDataView,
+          data.ReadMixedContentRules(&out->mixed_content_rules) &&
+          data.ReadAutoDarkContentRules(&out->auto_dark_content_rules) &&
+          data.ReadTimezoneOverrideRules(&out->timezone_override_rules) &&
+-         data.ReadTimezoneOverrideValue(&out->timezone_override_value);
++         data.ReadTimezoneOverrideValue(&out->timezone_override_value) &&
++         data.ReadWebglRules(&out->webgl_rules);
+ }
+ 
+ }  // namespace mojo
+diff --git a/components/content_settings/core/common/content_settings_mojom_traits.h b/components/content_settings/core/common/content_settings_mojom_traits.h
+--- a/components/content_settings/core/common/content_settings_mojom_traits.h
++++ b/components/content_settings/core/common/content_settings_mojom_traits.h
+@@ -165,6 +165,11 @@ struct StructTraits<
+     return r.timezone_override_value;
+   }
+ 
++  static const std::vector<ContentSettingPatternSource>& webgl_rules(
++      const RendererContentSettingRules& r) {
++    return r.webgl_rules;
++  }
++
+   static bool Read(
+       content_settings::mojom::RendererContentSettingRulesDataView data,
+       RendererContentSettingRules* out);
+diff --git a/components/content_settings/core/common/content_settings_types.h b/components/content_settings/core/common/content_settings_types.h
+--- a/components/content_settings/core/common/content_settings_types.h
++++ b/components/content_settings/core/common/content_settings_types.h
+@@ -284,6 +284,8 @@ enum class ContentSettingsType : int32_t {
+   // site instead of the mobile one.
+   REQUEST_DESKTOP_SITE,
+ 
++  WEBGL,
++
+   NUM_TYPES,
+ };
+ 
+diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc b/components/content_settings/renderer/content_settings_agent_impl.cc
+--- a/components/content_settings/renderer/content_settings_agent_impl.cc
++++ b/components/content_settings/renderer/content_settings_agent_impl.cc
+@@ -479,6 +479,16 @@ void ContentSettingsAgentImpl::ClearBlockedContentSettings() {
+   cached_script_permissions_.clear();
+ }
+ 
++int ContentSettingsAgentImpl::AllowWebgl(
++    int enabled_per_settings) {
++  if (!content_setting_rules_)
++    return 0;
++  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
++  return GetContentSettingFromRules(
++             content_setting_rules_->webgl_rules, frame,
++             url::Origin(frame->GetDocument().GetSecurityOrigin()).GetURL());
++}
++
+ bool ContentSettingsAgentImpl::IsAllowlistedForContentSettings() const {
+   if (should_allowlist_)
+     return true;
+diff --git a/components/content_settings/renderer/content_settings_agent_impl.h b/components/content_settings/renderer/content_settings_agent_impl.h
+--- a/components/content_settings/renderer/content_settings_agent_impl.h
++++ b/components/content_settings/renderer/content_settings_agent_impl.h
+@@ -101,6 +101,7 @@ class ContentSettingsAgentImpl
+   bool AllowAutoplay(bool default_value) override;
+   bool AllowPopupsAndRedirects(bool default_value) override;
+   bool ShouldAutoupgradeMixedContent() override;
++  int AllowWebgl(int enabled_per_settings) override;
+ 
+   bool allow_running_insecure_content() const {
+     return allow_running_insecure_content_;
+diff --git a/third_party/blink/public/platform/web_content_settings_client.h b/third_party/blink/public/platform/web_content_settings_client.h
+--- a/third_party/blink/public/platform/web_content_settings_client.h
++++ b/third_party/blink/public/platform/web_content_settings_client.h
+@@ -99,6 +99,8 @@ class WebContentSettingsClient {
+     return default_value;
+   }
+ 
++  virtual int AllowWebgl(int default_value) { return default_value; }
++
+   // Reports that passive mixed content was found at the provided URL.
+   virtual void PassiveInsecureContentFound(const WebURL&) {}
+ 
+diff --git a/third_party/blink/renderer/core/execution_context/build.gni b/third_party/blink/renderer/core/execution_context/build.gni
+--- a/third_party/blink/renderer/core/execution_context/build.gni
++++ b/third_party/blink/renderer/core/execution_context/build.gni
+@@ -7,6 +7,8 @@ blink_core_sources_execution_context = [
+   "agent.h",
+   "execution_context.cc",
+   "execution_context.h",
++  "session_cache.cc",
++  "session_cache.h",
+   "execution_context_lifecycle_observer.cc",
+   "execution_context_lifecycle_observer.h",
+   "execution_context_lifecycle_state_observer.cc",
+diff --git a/third_party/blink/renderer/core/execution_context/execution_context.cc b/third_party/blink/renderer/core/execution_context/execution_context.cc
+--- a/third_party/blink/renderer/core/execution_context/execution_context.cc
++++ b/third_party/blink/renderer/core/execution_context/execution_context.cc
+@@ -64,6 +64,35 @@
+ 
+ namespace blink {
+ 
++blink::WebContentSettingsClient* GetContentSettingsClientFor(
++    ExecutionContext* context) {
++  blink::WebContentSettingsClient* settings = nullptr;
++  if (!context)
++    return settings;
++  if (auto* window = blink::DynamicTo<blink::LocalDOMWindow>(context)) {
++    auto* frame = window->GetFrame();
++    // if (!frame)
++    //   frame = window->GetDisconnectedFrame();
++    if (frame)
++      settings = frame->GetContentSettingsClient();
++  } else if (context->IsWorkerGlobalScope()) {
++    settings =
++        blink::To<blink::WorkerGlobalScope>(context)->ContentSettingsClient();
++  }
++  return settings;
++}
++
++int AllowWebgl(ExecutionContext* context) {
++  // enabled = 3
++  // with random data = 1
++  // disabled = 2
++  blink::WebContentSettingsClient* settings =
++      GetContentSettingsClientFor(context);
++  if (settings)
++    return settings->AllowWebgl(0);
++  return 0;
++}
++
+ ExecutionContext::ExecutionContext(v8::Isolate* isolate, Agent* agent)
+     : isolate_(isolate),
+       security_context_(this),
+diff --git a/third_party/blink/renderer/core/execution_context/execution_context.h b/third_party/blink/renderer/core/execution_context/execution_context.h
+--- a/third_party/blink/renderer/core/execution_context/execution_context.h
++++ b/third_party/blink/renderer/core/execution_context/execution_context.h
+@@ -96,6 +96,7 @@ class SecurityOrigin;
+ class ScriptState;
+ class ScriptWrappable;
+ class TrustedTypePolicyFactory;
++class WebContentSettingsClient;
+ 
+ enum ReasonForCallingCanExecuteScripts {
+   kAboutToExecuteScript,
+@@ -104,6 +105,10 @@ enum ReasonForCallingCanExecuteScripts {
+ 
+ enum ReferrerPolicySource { kPolicySourceHttpHeader, kPolicySourceMetaTag };
+ 
++CORE_EXPORT int AllowWebgl(ExecutionContext* context);
++CORE_EXPORT WebContentSettingsClient* GetContentSettingsClientFor(
++    ExecutionContext* context);
++
+ // An environment in which script can execute. This class exposes the common
+ // properties of script execution environments on the web (i.e, common between
+ // script executing in a window and script executing in a worker), such as:
+diff --git a/third_party/blink/renderer/core/execution_context/session_cache.cc b/third_party/blink/renderer/core/execution_context/session_cache.cc
+new file mode 100644
+--- /dev/null
++++ b/third_party/blink/renderer/core/execution_context/session_cache.cc
+@@ -0,0 +1,116 @@
++/* Copyright (c) 2020 The Brave Authors. All rights reserved.
++ * This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "third_party/blink/renderer/core/execution_context/session_cache.h"
++
++#include "base/command_line.h"
++#include "base/strings/string_number_conversions.h"
++#include "crypto/hmac.h"
++#include "third_party/blink/public/platform/web_content_settings_client.h"
++#include "third_party/blink/renderer/core/dom/document.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/workers/worker_global_scope.h"
++#include "third_party/blink/renderer/platform/bindings/script_state.h"
++#include "third_party/blink/renderer/platform/graphics/image_data_buffer.h"
++#include "third_party/blink/renderer/platform/graphics/static_bitmap_image.h"
++#include "third_party/blink/renderer/platform/graphics/unaccelerated_static_bitmap_image.h"
++#include "third_party/blink/renderer/platform/network/network_utils.h"
++#include "third_party/blink/renderer/platform/supplementable.h"
++#include "third_party/blink/renderer/platform/wtf/text/string_builder.h"
++
++namespace {
++
++const uint64_t zero = 0;
++
++inline uint64_t lfsr_next(uint64_t v) {
++  return ((v >> 1) | (((v << 62) ^ (v << 61)) & (~(~zero << 63) << 62)));
++}
++
++}
++
++namespace blink {
++
++class WebContentSettingsClient;
++class ExecutionContext;
++class MakeGarbageCollected;
++
++const char kSessionToken[] = "session_token";
++const char SessionCache::kSupplementName[] = "BlinkSessionCache";
++
++// acceptable letters for generating random strings
++const char kLettersForRandomStrings[] =
++    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789. ";
++// length of kLettersForRandomStrings array
++const size_t kLettersForRandomStringsLength = 64;
++
++SessionCache::SessionCache(ExecutionContext& context)
++    : Supplement<ExecutionContext>(context) {
++  scoped_refptr<const blink::SecurityOrigin> origin;
++  if (auto* window = blink::DynamicTo<blink::LocalDOMWindow>(context)) {
++    auto* frame = window->GetFrame();
++    // if (!frame)
++    //   frame = window->GetDisconnectedFrame();
++    if (frame)
++      origin = frame->Tree().Top().GetSecurityContext()->GetSecurityOrigin();
++  } else {
++    origin = context.GetSecurityContext().GetSecurityOrigin();
++  }
++  if (!origin || origin->IsOpaque())
++    return;
++  const auto host = origin->Host();
++  if (host.IsNull() || host.IsEmpty())
++    return;
++  const std::string domain =
++      blink::network_utils::GetDomainAndRegistry(
++          host, blink::network_utils::kIncludePrivateRegistries)
++          .Utf8();
++  if (domain.empty())
++    return;
++  base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
++  DCHECK(cmd_line->HasSwitch(kSessionToken));
++  base::StringToUint64(cmd_line->GetSwitchValueASCII(kSessionToken),
++                       &session_key_);
++  crypto::HMAC h(crypto::HMAC::SHA256);
++  CHECK(h.Init(reinterpret_cast<const unsigned char*>(&session_key_),
++               sizeof session_key_));
++  CHECK(h.Sign(domain, domain_key_, sizeof domain_key_));
++}
++
++SessionCache& SessionCache::From(ExecutionContext& context) {
++  SessionCache* cache =
++      Supplement<ExecutionContext>::From<SessionCache>(context);
++  if (!cache) {
++    cache = MakeGarbageCollected<SessionCache>(context);
++    ProvideTo(context, cache);
++  }
++  return *cache;
++}
++
++std::mt19937_64 SessionCache::MakePseudoRandomGenerator() {
++  uint64_t seed = *reinterpret_cast<uint64_t*>(domain_key_);
++  return std::mt19937_64(seed);
++}
++
++WTF::String SessionCache::GenerateRandomString(std::string seed,
++                                                    wtf_size_t length) {
++  uint8_t key[32];
++  crypto::HMAC h(crypto::HMAC::SHA256);
++  CHECK(h.Init(reinterpret_cast<const unsigned char*>(&domain_key_),
++               sizeof domain_key_));
++  CHECK(h.Sign(seed, key, sizeof key));
++  // initial PRNG seed based on session key and passed-in seed string
++  uint64_t v = *reinterpret_cast<uint64_t*>(key);
++  UChar* destination;
++  WTF::String value = WTF::String::CreateUninitialized(length, destination);
++  for (wtf_size_t i = 0; i < length; i++) {
++    destination[i] =
++        kLettersForRandomStrings[v % kLettersForRandomStringsLength];
++    v = lfsr_next(v);
++  }
++  return value;
++}
++
++}
+diff --git a/third_party/blink/renderer/core/execution_context/session_cache.h b/third_party/blink/renderer/core/execution_context/session_cache.h
+new file mode 100644
+--- /dev/null
++++ b/third_party/blink/renderer/core/execution_context/session_cache.h
+@@ -0,0 +1,36 @@
++/* Copyright (c) 2020 The Brave Authors. All rights reserved.
++ * This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
++ * You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_EXECUTION_CONTEXT_SESSION_CACHE_H_
++#define THIRD_PARTY_BLINK_RENDERER_CORE_EXECUTION_CONTEXT_SESSION_CACHE_H_
++
++#include "third_party/blink/renderer/core/execution_context/execution_context.h"
++
++#include <random>
++
++namespace blink {
++
++class CORE_EXPORT SessionCache final
++    : public GarbageCollected<SessionCache>,
++      public Supplement<ExecutionContext> {
++ public:
++  static const char kSupplementName[];
++
++  explicit SessionCache(ExecutionContext&);
++  virtual ~SessionCache() = default;
++
++  static SessionCache& From(ExecutionContext&);
++
++  WTF::String GenerateRandomString(std::string seed, wtf_size_t length);
++  std::mt19937_64 MakePseudoRandomGenerator();
++
++ private:
++  uint64_t session_key_;
++  uint8_t domain_key_[32];
++};
++
++} // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_EXECUTION_CONTEXT_SESSION_CACHE_H_
+diff --git a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.cc
+@@ -35,6 +35,8 @@
+ #include "third_party/blink/renderer/modules/webgl/webgl_vertex_array_object.h"
+ #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+ #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++#include "third_party/blink/renderer/core/execution_context/session_cache.h"
++#include "base/rand_util.h"
+ 
+ using WTF::String;
+ 
+@@ -365,6 +367,8 @@ void WebGL2RenderingContextBase::getBufferSubData(
+     MaybeShared<DOMArrayBufferView> dst_data,
+     GLuint dst_offset,
+     GLuint length) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return;
+   WebGLBuffer* source_buffer = nullptr;
+   void* destination_data_ptr = nullptr;
+   int64_t destination_byte_length = 0;
+@@ -802,8 +806,10 @@ void WebGL2RenderingContextBase::readPixels(
+                       "PIXEL_PACK buffer should not be bound");
+     return;
+   }
++  int setting = AllowWebglForHost(Host());
++  if (setting == 2 /*BLOCK*/) return;
+ 
+-  ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0);
++  ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0, setting == 1);
+ }
+ 
+ void WebGL2RenderingContextBase::readPixels(
+@@ -822,8 +828,10 @@ void WebGL2RenderingContextBase::readPixels(
+                       "PIXEL_PACK buffer should not be bound");
+     return;
+   }
++  int setting = AllowWebglForHost(Host());
++  if (setting == 2 /*BLOCK*/) return;
+ 
+-  ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), offset);
++  ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), offset, setting == 1);
+ }
+ 
+ void WebGL2RenderingContextBase::readPixels(GLint x,
+@@ -833,6 +841,8 @@ void WebGL2RenderingContextBase::readPixels(GLint x,
+                                             GLenum format,
+                                             GLenum type,
+                                             int64_t offset) {
++  int setting = AllowWebglForHost(Host());
++  if (setting == 2 /*BLOCK*/) return;
+   if (isContextLost())
+     return;
+ 
+@@ -5238,6 +5248,8 @@ void WebGL2RenderingContextBase::deleteFramebuffer(
+ 
+ ScriptValue WebGL2RenderingContextBase::getParameter(ScriptState* script_state,
+                                                      GLenum pname) {
++  // int settings = blink::AllowWebgl(ExecutionContext::From(script_state));
++
+   if (isContextLost())
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+   switch (pname) {
+@@ -5400,14 +5412,14 @@ ScriptValue WebGL2RenderingContextBase::getParameter(ScriptState* script_state,
+   }
+ }
+ 
+-ScriptValue WebGL2RenderingContextBase::GetInt64Parameter(
+-    ScriptState* script_state,
+-    GLenum pname) {
+-  GLint64 value = 0;
+-  if (!isContextLost())
+-    ContextGL()->GetInteger64v(pname, &value);
+-  return WebGLAny(script_state, value);
+-}
++// ScriptValue WebGL2RenderingContextBase::GetInt64Parameter(
++//     ScriptState* script_state,
++//     GLenum pname) {
++//   GLint64 value = 0;
++//   if (!isContextLost())
++//     ContextGL()->GetInteger64v(pname, &value);
++//   return WebGLAny(script_state, value);
++// }
+ 
+ bool WebGL2RenderingContextBase::ValidateCapability(const char* function_name,
+                                                     GLenum cap) {
+@@ -5793,6 +5805,8 @@ ScriptValue WebGL2RenderingContextBase::getFramebufferAttachmentParameter(
+     GLenum target,
+     GLenum attachment,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   const char kFunctionName[] = "getFramebufferAttachmentParameter";
+   if (isContextLost() || !ValidateGetFramebufferAttachmentParameterFunc(
+                              kFunctionName, target, attachment))
+@@ -6007,6 +6021,8 @@ ScriptValue WebGL2RenderingContextBase::getTexParameter(
+     ScriptState* script_state,
+     GLenum target,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (isContextLost() || !ValidateTextureBinding("getTexParameter", target))
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.h b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.h
+--- a/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.h
++++ b/third_party/blink/renderer/modules/webgl/webgl2_rendering_context_base.h
+@@ -1071,7 +1071,8 @@ class WebGL2RenderingContextBase : public WebGLRenderingContextBase {
+ 
+   bool ValidateUniformBlockIndex(const char*, WebGLProgram*, GLuint);
+ 
+-  ScriptValue GetInt64Parameter(ScriptState*, GLenum);
++  // use base method
++  // ScriptValue GetInt64Parameter(ScriptState*, GLenum);
+ 
+   void SamplerParameter(WebGLSampler*, GLenum, GLfloat, GLint, bool);
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.cc
+@@ -131,6 +131,10 @@
+ #include "third_party/blink/renderer/platform/wtf/threading_primitives.h"
+ #include "ui/gfx/geometry/size.h"
+ 
++#include "third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.h"
++#include "third_party/blink/renderer/core/execution_context/session_cache.h"
++#include "base/rand_util.h"
++
+ namespace blink {
+ 
+ bool WebGLRenderingContextBase::webgl_context_limits_initialized_ = false;
+@@ -217,6 +221,13 @@ void WebGLRenderingContextBase::InitializeWebGLContextLimits(
+   }
+ }
+ 
++int WebGLRenderingContextBase::AllowWebglForHost(blink::CanvasRenderingContextHost* host) {
++  if (!host)
++    return 0;
++  blink::ExecutionContext* context = host->GetTopExecutionContext();
++  return blink::AllowWebgl(context);
++}
++
+ unsigned WebGLRenderingContextBase::CurrentMaxGLContexts() {
+   MutexLocker locker(WebGLContextLimitMutex());
+   DCHECK(webgl_context_limits_initialized_);
+@@ -463,25 +474,6 @@ static String ExtractWebGLContextCreationError(
+     const Platform::GraphicsInfo& info) {
+   StringBuilder builder;
+   builder.Append("Could not create a WebGL context");
+-  FormatWebGLStatusString(
+-      "VENDOR",
+-      info.vendor_id ? String::Format("0x%04x", info.vendor_id) : "0xffff",
+-      builder);
+-  FormatWebGLStatusString(
+-      "DEVICE",
+-      info.device_id ? String::Format("0x%04x", info.device_id) : "0xffff",
+-      builder);
+-  FormatWebGLStatusString("GL_VENDOR", info.vendor_info, builder);
+-  FormatWebGLStatusString("GL_RENDERER", info.renderer_info, builder);
+-  FormatWebGLStatusString("GL_VERSION", info.driver_version, builder);
+-  FormatWebGLStatusString("Sandboxed", info.sandboxed ? "yes" : "no", builder);
+-  FormatWebGLStatusString("Optimus", info.optimus ? "yes" : "no", builder);
+-  FormatWebGLStatusString("AMD switchable", info.amd_switchable ? "yes" : "no",
+-                          builder);
+-  FormatWebGLStatusString(
+-      "Reset notification strategy",
+-      String::Format("0x%04x", info.reset_notification_strategy).Utf8().c_str(),
+-      builder);
+   FormatWebGLStatusString("ErrorMessage", info.error_message.Utf8().c_str(),
+                           builder);
+   builder.Append('.');
+@@ -549,6 +541,13 @@ WebGLRenderingContextBase::CreateWebGraphicsContext3DProvider(
+     const CanvasContextCreationAttributesCore& attributes,
+     Platform::ContextType context_type,
+     Platform::GraphicsInfo* graphics_info) {
++  int setting = AllowWebglForHost(host);
++  if (setting == 2) {
++    host->HostDispatchEvent(WebGLContextEvent::Create(
++        event_type_names::kWebglcontextcreationerror,
++        "disabled by site settings policy."));
++    return nullptr;
++  }
+   if ((context_type == Platform::kWebGL1ContextType &&
+        !host->IsWebGL1Enabled()) ||
+       (context_type == Platform::kWebGL2ContextType &&
+@@ -3028,6 +3027,8 @@ WebGLActiveInfo* WebGLRenderingContextBase::getActiveUniform(
+ 
+ absl::optional<HeapVector<Member<WebGLShader>>>
+ WebGLRenderingContextBase::getAttachedShaders(WebGLProgram* program) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return absl::nullopt;
+   if (!ValidateWebGLProgramOrShader("getAttachedShaders", program))
+     return absl::nullopt;
+ 
+@@ -3075,6 +3076,8 @@ ScriptValue WebGLRenderingContextBase::getBufferParameter(
+     ScriptState* script_state,
+     GLenum target,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (isContextLost() || !ValidateBufferTarget("getBufferParameter", target))
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+ 
+@@ -3182,6 +3185,12 @@ bool WebGLRenderingContextBase::TimerQueryExtensionsEnabled() {
+ 
+ ScriptValue WebGLRenderingContextBase::getExtension(ScriptState* script_state,
+                                                     const String& name) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) {
++    if (name != WebGLDebugRendererInfo::ExtensionName())
++      return ScriptValue::CreateNull(script_state->GetIsolate());
++  }
++
+   WebGLExtension* extension = nullptr;
+ 
+   if (name == WebGLDebugRendererInfo::ExtensionName()) {
+@@ -3218,6 +3227,8 @@ ScriptValue WebGLRenderingContextBase::getFramebufferAttachmentParameter(
+     GLenum target,
+     GLenum attachment,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (isContextLost() ||
+       !ValidateFramebufferFuncParameters("getFramebufferAttachmentParameter",
+                                          target, attachment))
+@@ -3342,6 +3353,24 @@ static const GLenum kIdentifiableGLParams[] = {
+     GL_RENDERBUFFER_SAMPLES,
+ };
+ 
++static const GLenum kIdentifiableGLParams2[] = {
++    GL_COPY_READ_BUFFER_BINDING,
++    GL_COPY_WRITE_BUFFER_BINDING,
++    GL_DRAW_FRAMEBUFFER_BINDING,
++    GL_MAX_VERTEX_UNIFORM_COMPONENTS,
++    GL_MAX_VERTEX_UNIFORM_BLOCKS,
++    GL_MAX_VERTEX_OUTPUT_COMPONENTS,
++    GL_MAX_VARYING_COMPONENTS,
++    GL_MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS,
++    GL_MAX_FRAGMENT_UNIFORM_COMPONENTS,
++    GL_MAX_FRAGMENT_UNIFORM_BLOCKS,
++    GL_MAX_FRAGMENT_INPUT_COMPONENTS,
++    GL_MAX_UNIFORM_BUFFER_BINDINGS,
++    GL_MAX_COMBINED_UNIFORM_BLOCKS,
++    GL_MAX_COMBINED_VERTEX_UNIFORM_COMPONENTS,
++    GL_MAX_COMBINED_FRAGMENT_UNIFORM_COMPONENTS,
++};
++
+ bool ShouldMeasureGLParam(GLenum pname) {
+   return IdentifiabilityStudySettings::Get()->ShouldSample(
+              blink::IdentifiableSurface::Type::kWebGLParameter) &&
+@@ -3350,6 +3379,34 @@ bool ShouldMeasureGLParam(GLenum pname) {
+                    pname) != std::end(kIdentifiableGLParams);
+ }
+ 
++bool IsIdentifiabilityParam(GLenum pname) {
++  auto index = std::find(std::begin(kIdentifiableGLParams),
++                   std::end(kIdentifiableGLParams),
++                   pname);
++  if (index != std::end(kIdentifiableGLParams)) return true;
++
++  index = std::find(std::begin(kIdentifiableGLParams2),
++                   std::end(kIdentifiableGLParams2),
++                   pname);
++  if (index != std::end(kIdentifiableGLParams2)) return true;
++  return false;
++}
++
++int GetIdentifiabilityParamIndex(GLenum pname) {
++  auto index = std::find(std::begin(kIdentifiableGLParams),
++                   std::end(kIdentifiableGLParams),
++                   pname);
++  if (index != std::end(kIdentifiableGLParams))
++    return 20 + (int)std::distance(kIdentifiableGLParams, index);
++
++  index = std::find(std::begin(kIdentifiableGLParams2),
++                   std::end(kIdentifiableGLParams2),
++                   pname);
++  if (index != std::end(kIdentifiableGLParams2))
++    return 50 + (int)std::distance(kIdentifiableGLParams2, index);
++  return false;
++}
++
+ }  // namespace
+ 
+ void WebGLRenderingContextBase::RecordIdentifiableGLParameterDigest(
+@@ -3398,6 +3455,7 @@ void WebGLRenderingContextBase::RecordUKMCanvasDrawnToAtFirstDrawCall() {
+ 
+ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+                                                     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
+   if (isContextLost())
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+   const int kIntZero = 0;
+@@ -3540,7 +3598,7 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+         RecordIdentifiableGLParameterDigest(
+             pname, IdentifiabilityBenignStringToken(String(
+                        ContextGL()->GetString(GL_SHADING_LANGUAGE_VERSION))));
+-      }
++      } //
+       return WebGLAny(
+           script_state,
+           "WebGL GLSL ES 1.0 (" +
+@@ -3608,7 +3666,7 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+         RecordIdentifiableGLParameterDigest(
+             pname, IdentifiabilityBenignStringToken(
+                        String(ContextGL()->GetString(GL_VERSION))));
+-      }
++      } //
+       return WebGLAny(
+           script_state,
+           "WebGL 1.0 (" + String(ContextGL()->GetString(GL_VERSION)) + ")");
+@@ -3624,6 +3682,13 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedRendererWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        if (setting != 3) {
++          return WebGLAny(
++              script_state,
++              String(blink::SessionCache::From(
++                        *(Host()->GetTopExecutionContext()))
++                        .GenerateRandomString("UNMASKED_RENDERER_WEBGL", 8)));
++        }
+         if (IdentifiabilityStudySettings::Get()->ShouldSample(
+                 blink::IdentifiableSurface::Type::kWebGLParameter)) {
+           RecordIdentifiableGLParameterDigest(
+@@ -3639,6 +3704,13 @@ ScriptValue WebGLRenderingContextBase::getParameter(ScriptState* script_state,
+       return ScriptValue::CreateNull(script_state->GetIsolate());
+     case WebGLDebugRendererInfo::kUnmaskedVendorWebgl:
+       if (ExtensionEnabled(kWebGLDebugRendererInfoName)) {
++        if (setting != 3) {
++          return WebGLAny(
++              script_state,
++              String(blink::SessionCache::From(
++                        *(Host()->GetTopExecutionContext()))
++                        .GenerateRandomString("UNMASKED_VENDOR_WEBGL", 8)));
++        }
+         if (IdentifiabilityStudySettings::Get()->ShouldSample(
+                 blink::IdentifiableSurface::Type::kWebGLParameter)) {
+           RecordIdentifiableGLParameterDigest(
+@@ -3793,6 +3865,8 @@ ScriptValue WebGLRenderingContextBase::getRenderbufferParameter(
+     ScriptState* script_state,
+     GLenum target,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (isContextLost())
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (target != GL_RENDERBUFFER) {
+@@ -3823,7 +3897,7 @@ ScriptValue WebGLRenderingContextBase::getRenderbufferParameter(
+     case GL_RENDERBUFFER_ALPHA_SIZE:
+     case GL_RENDERBUFFER_DEPTH_SIZE:
+     case GL_RENDERBUFFER_STENCIL_SIZE:
+-      ContextGL()->GetRenderbufferParameteriv(target, pname, &value);
++      ContextGL()->GetRenderbufferParameteriv(target, pname, &value); //
+       if (IdentifiabilityStudySettings::Get()->ShouldSample(
+               blink::IdentifiableSurface::Type::kWebGLParameter)) {
+         RecordIdentifiableGLParameterDigest(pname, value);
+@@ -3877,6 +3951,8 @@ ScriptValue WebGLRenderingContextBase::getShaderParameter(
+ String WebGLRenderingContextBase::getShaderInfoLog(WebGLShader* shader) {
+   if (!ValidateWebGLProgramOrShader("getShaderInfoLog", shader))
+     return String();
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return String();
+   GLStringQuery query(ContextGL());
+   return query.Run<GLStringQuery::ShaderInfoLog>(ObjectNonZero(shader));
+ }
+@@ -3907,6 +3983,12 @@ WebGLShaderPrecisionFormat* WebGLRenderingContextBase::getShaderPrecisionFormat(
+   GLint precision = 0;
+   ContextGL()->GetShaderPrecisionFormat(shader_type, precision_type, range,
+                                         &precision);
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) {
++    range[0] = 0;
++    range[1] = 0;
++    precision = 0;
++  }
+   auto* result = MakeGarbageCollected<WebGLShaderPrecisionFormat>(
+       range[0], range[1], precision);
+   if (IdentifiabilityStudySettings::Get()->ShouldSample(
+@@ -3917,6 +3999,8 @@ WebGLShaderPrecisionFormat* WebGLRenderingContextBase::getShaderPrecisionFormat(
+ }
+ 
+ String WebGLRenderingContextBase::getShaderSource(WebGLShader* shader) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return String();
+   if (!ValidateWebGLProgramOrShader("getShaderSource", shader))
+     return String();
+   return EnsureNotNull(shader->Source());
+@@ -3927,6 +4011,15 @@ WebGLRenderingContextBase::getSupportedExtensions() {
+   if (isContextLost())
+     return absl::nullopt;
+ 
++  // If fingerprinting is disallowed, claim that the only supported extension is
++  // WebGLDebugRendererInfo.
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) {
++    Vector<String> fake_extensions;
++    fake_extensions.push_back(WebGLDebugRendererInfo::ExtensionName());
++    return fake_extensions;
++  }
++
+   Vector<String> result;
+ 
+   for (ExtensionTracker* tracker : extensions_) {
+@@ -3946,6 +4039,8 @@ ScriptValue WebGLRenderingContextBase::getTexParameter(
+     ScriptState* script_state,
+     GLenum target,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (isContextLost())
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (!ValidateTextureBinding("getTexParameter", target))
+@@ -3980,6 +4075,8 @@ ScriptValue WebGLRenderingContextBase::getUniform(
+     ScriptState* script_state,
+     WebGLProgram* program,
+     const WebGLUniformLocation* uniform_location) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (!ValidateWebGLProgramOrShader("getUniform", program))
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+   DCHECK(uniform_location);
+@@ -4263,6 +4360,8 @@ ScriptValue WebGLRenderingContextBase::getVertexAttrib(
+     ScriptState* script_state,
+     GLuint index,
+     GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (isContextLost())
+     return ScriptValue::CreateNull(script_state->GetIsolate());
+   if (index >= max_vertex_attribs_) {
+@@ -4340,6 +4439,8 @@ ScriptValue WebGLRenderingContextBase::getVertexAttrib(
+ 
+ int64_t WebGLRenderingContextBase::getVertexAttribOffset(GLuint index,
+                                                          GLenum pname) {
++  int setting = AllowWebglForHost(Host());
++  if (setting != 3) return 0;
+   if (isContextLost())
+     return 0;
+   GLvoid* result = nullptr;
+@@ -4676,9 +4777,13 @@ void WebGLRenderingContextBase::readPixels(
+     GLenum format,
+     GLenum type,
+     MaybeShared<DOMArrayBufferView> pixels) {
+-  ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0);
++  int setting = AllowWebglForHost(Host());
++  if (setting == 2 /*BLOCK*/) return;
++  ReadPixelsHelper(x, y, width, height, format, type, pixels.Get(), 0, setting == 1);
+ }
+ 
++#define shuffleComponent(color, max, delta) ( (color) >= (max) ? ((max)-(delta)) : ((color)+(delta)) )
++
+ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+                                                  GLint y,
+                                                  GLsizei width,
+@@ -4686,7 +4791,8 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+                                                  GLenum format,
+                                                  GLenum type,
+                                                  DOMArrayBufferView* pixels,
+-                                                 int64_t offset) {
++                                                 int64_t offset,
++                                                 bool addnoise) {
+   if (isContextLost())
+     return;
+   // Due to WebGL's same-origin restrictions, it is not possible to
+@@ -4750,7 +4856,58 @@ void WebGLRenderingContextBase::ReadPixelsHelper(GLint x,
+ 
+   {
+     ScopedDrawingBufferBinder binder(GetDrawingBuffer(), framebuffer);
+-    ContextGL()->ReadPixels(x, y, width, height, format, type, data);
++
++    if (addnoise) {
++      uint32_t pixels = (width-x) * (height-y);
++      Vector<uint8_t> data_rgba;
++      data_rgba.resize(pixels*4);
++      uint8_t* data_ptr = data_rgba.data();
++
++      ContextGL()->ReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE,
++                              data_ptr);
++
++      // calculate randomisation amounts for each RGB component
++      double shuffleX = base::RandDouble();
++      double shuffleY = base::RandDouble();
++
++      // calculate random coordinates using bisection
++      auto currentW = width, currentH = height;
++
++      uint8_t* source = data_ptr;
++      for (unsigned i = 0; i < pixels; ++i) {
++        int x = currentW * shuffleX, y = currentH * shuffleY;
++
++        // calculate randomisation amounts for each RGB component
++        uint8_t shuffleR = base::RandInt(0, 4);
++        uint8_t shuffleG = (shuffleR + x) % 4;
++        uint8_t shuffleB = (shuffleG + y) % 4;
++
++        // apply
++        source[0] = shuffleComponent(source[0], UINT8_MAX-1, shuffleR);
++        source[1] = shuffleComponent(source[1], UINT8_MAX-1, shuffleG);
++        source[2] = shuffleComponent(source[2], UINT8_MAX-1, shuffleB);
++        source += 4;
++
++        // keep bisecting or reset current width/height as needed
++        if (x == 0) {
++          currentW = width;
++        } else {
++          currentW = x;
++        }
++        if (y == 0) {
++          currentH = height;
++        } else {
++          currentH = y;
++        }
++      }
++
++      WebGLImageConversion::DataFormat destinationFormat =
++                WebGLImageConversion::GetWebGLDataFormat(format,type);
++      WebGLImageConversion::PackPixels(data_ptr, destinationFormat,
++                pixels, data);
++    } else {
++      ContextGL()->ReadPixels(x, y, width, height, format, type, data);
++    }
+   }
+ }
+ 
+@@ -7418,6 +7575,18 @@ ScriptValue WebGLRenderingContextBase::GetFloatParameter(
+           blink::IdentifiableSurface::Type::kWebGLParameter)) {
+     RecordIdentifiableGLParameterDigest(pname, value);
+   }
++  int setting = AllowWebglForHost(Host());
++  if (IsIdentifiabilityParam(pname)) {
++    if (setting == 1 && value > 0 && IsIdentifiabilityParam(pname)) {
++      std::mt19937_64 prng =
++          blink::SessionCache::From(*ExecutionContext::From(script_state))
++              .MakePseudoRandomGenerator();
++      prng.discard(GetIdentifiabilityParamIndex(pname));
++      if (prng() % 2 != 0) {
++        value = value - 1;
++      }
++    }
++  }
+   return WebGLAny(script_state, value);
+ }
+ 
+@@ -7444,6 +7613,18 @@ ScriptValue WebGLRenderingContextBase::GetIntParameter(
+           blink::IdentifiableSurface::Type::kWebGLParameter)) {
+     RecordIdentifiableGLParameterDigest(pname, value);
+   }
++  int setting = AllowWebglForHost(Host());
++  if (IsIdentifiabilityParam(pname)) {
++    if (setting == 1 && value > 0) {
++      std::mt19937_64 prng =
++          blink::SessionCache::From(*ExecutionContext::From(script_state))
++              .MakePseudoRandomGenerator();
++      prng.discard(GetIdentifiabilityParamIndex(pname));
++      if (prng() % 2 != 0) {
++        value = value - 1;
++      }
++    }
++  }
+   return WebGLAny(script_state, value);
+ }
+ 
+@@ -7453,6 +7634,18 @@ ScriptValue WebGLRenderingContextBase::GetInt64Parameter(
+   GLint64 value = 0;
+   if (!isContextLost())
+     ContextGL()->GetInteger64v(pname, &value);
++  int setting = AllowWebglForHost(Host());
++  if (IsIdentifiabilityParam(pname)) {
++    if (setting == 1 && value > 0) {
++      std::mt19937_64 prng =
++          blink::SessionCache::From(*ExecutionContext::From(script_state))
++              .MakePseudoRandomGenerator();
++      prng.discard(GetIdentifiabilityParamIndex(pname));
++      if (prng() % 2 != 0) {
++        value = value - 1;
++      }
++    }
++  }
+   return WebGLAny(script_state, value);
+ }
+ 
+@@ -7492,6 +7685,18 @@ ScriptValue WebGLRenderingContextBase::GetWebGLFloatArrayParameter(
+     }
+     RecordIdentifiableGLParameterDigest(pname, builder.GetToken());
+   }
++  if (IsIdentifiabilityParam(pname)) {
++    int setting = blink::AllowWebgl(ExecutionContext::From(script_state));
++    if (setting == 1 && value[0] > 0 && IsIdentifiabilityParam(pname)) {
++      std::mt19937_64 prng =
++          blink::SessionCache::From(*ExecutionContext::From(script_state))
++              .MakePseudoRandomGenerator();
++      prng.discard(GetIdentifiabilityParamIndex(pname));
++      if (prng() % 2 != 0) {
++        value[0] = value[0] - 1;
++      }
++    }
++  }
+   return WebGLAny(script_state, DOMFloat32Array::Create(value, length));
+ }
+ 
+@@ -7520,6 +7725,18 @@ ScriptValue WebGLRenderingContextBase::GetWebGLIntArrayParameter(
+     }
+     RecordIdentifiableGLParameterDigest(pname, builder.GetToken());
+   }
++  if (IsIdentifiabilityParam(pname)) {
++    int setting = blink::AllowWebgl(ExecutionContext::From(script_state));
++    if (setting == 1 && value[0] > 0) {
++      std::mt19937_64 prng =
++          blink::SessionCache::From(*ExecutionContext::From(script_state))
++              .MakePseudoRandomGenerator();
++      prng.discard(GetIdentifiabilityParamIndex(pname));
++      if (prng() % 2 != 0) {
++        value[0] = value[0] - 1;
++      }
++    }
++  }
+   return WebGLAny(script_state, DOMInt32Array::Create(value, length));
+ }
+ 
+diff --git a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
+--- a/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
++++ b/third_party/blink/renderer/modules/webgl/webgl_rendering_context_base.h
+@@ -1824,7 +1824,10 @@ class MODULES_EXPORT WebGLRenderingContextBase : public CanvasRenderingContext,
+                         GLenum format,
+                         GLenum type,
+                         DOMArrayBufferView* pixels,
+-                        int64_t offset);
++                        int64_t offset,
++                        bool addnoise);
++
++  static int AllowWebglForHost(blink::CanvasRenderingContextHost* host);
+ 
+   // Record Canvas/OffscreenCanvas.RenderingContextDrawnTo at the first draw
+   // call.
+diff --git a/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.cc b/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.cc
+--- a/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.cc
++++ b/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.cc
+@@ -4099,6 +4099,12 @@ bool WebGLImageConversion::PackPixels(
+   return true;
+ }
+ 
++WebGLImageConversion::DataFormat
++  WebGLImageConversion::GetWebGLDataFormat(GLenum destination_format,
++                                      GLenum destination_type) {
++  return GetDataFormat(destination_format, destination_type);
++}
++
+ void WebGLImageConversion::UnpackPixels(const uint16_t* source_data,
+                                         DataFormat source_data_format,
+                                         unsigned pixels_per_row,
+diff --git a/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.h b/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.h
+--- a/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.h
++++ b/third_party/blink/renderer/platform/graphics/gpu/webgl_image_conversion.h
+@@ -263,6 +263,14 @@ class PLATFORM_EXPORT WebGLImageConversion final {
+ 
+   // End GraphicsContext3DImagePacking.cpp functions
+ 
++  static void PackPixels(const uint8_t* source_data,
++                         DataFormat source_data_format,
++                         unsigned pixels_per_row,
++                         uint8_t* destination_data);
++
++  static DataFormat GetWebGLDataFormat(GLenum destination_format,
++                                       GLenum destination_type);
++
+  private:
+   friend class WebGLImageConversionTest;
+   // Helper for packImageData/extractImageData/extractTextureData, which
+@@ -288,10 +296,6 @@ class PLATFORM_EXPORT WebGLImageConversion final {
+                            DataFormat source_data_format,
+                            unsigned pixels_per_row,
+                            uint8_t* destination_data);
+-  static void PackPixels(const uint8_t* source_data,
+-                         DataFormat source_data_format,
+-                         unsigned pixels_per_row,
+-                         uint8_t* destination_data);
+ };
+ 
+ }  // namespace blink
+--
+2.25.1
