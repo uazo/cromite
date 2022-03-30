@@ -65,11 +65,11 @@ The patch also includes tablet mode.
  .../top/TopToolbarOverlayCoordinator.java     |  7 +++
  .../top/TopToolbarOverlayProperties.java      |  8 ++-
  .../toolbar/top/TopToolbarSceneLayer.java     | 11 +++-
- .../res/xml/accessibility_preferences.xml     |  5 ++
- .../accessibility/AccessibilitySettings.java  | 11 ++++
- .../AccessibilitySettingsDelegate.java        |  2 +
+ .../res/xml/accessibility_preferences.xml     |  4 ++
+ .../accessibility/AccessibilitySettings.java  | 12 +++++
+ .../AccessibilitySettingsDelegate.java        |  4 ++
  .../render_widget_host_view_android.cc        |  3 ++
- 64 files changed, 610 insertions(+), 50 deletions(-)
+ 64 files changed, 612 insertions(+), 50 deletions(-)
 
 diff --git a/cc/base/features.cc b/cc/base/features.cc
 --- a/cc/base/features.cc
@@ -390,8 +390,8 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
-@@ -107,6 +107,24 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
-         return new ForceTabletUIDelegate();
+@@ -67,6 +67,24 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
+         return new ReaderForAccessibilityDelegate();
      }
  
 +    private static class MoveTopToolbarToBottomDelegate implements BooleanPreferenceDelegate {
@@ -413,8 +413,8 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/s
 +    }
 +
      @Override
-     public void requestRestart(Activity activity) {
-         Snackbar mSnackbar = Snackbar.make(activity.getString(R.string.ui_relaunch_notice),
+     public void addExtraPreferences(PreferenceFragmentCompat fragment) {
+         if (ImageDescriptionsController.getInstance().shouldShowImageDescriptionsMenuItem()) {
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
@@ -1153,7 +1153,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContai
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
-@@ -6399,6 +6399,11 @@ const FeatureEntry kFeatureEntries[] = {
+@@ -6410,6 +6410,11 @@ const FeatureEntry kFeatureEntries[] = {
       flag_descriptions::kImpulseScrollAnimationsDescription, kOsAll,
       FEATURE_VALUE_TYPE(features::kImpulseScrollAnimations)},
  
@@ -1254,7 +1254,7 @@ diff --git a/chrome/browser/browser_controls/android/java/src/org/chromium/chrom
 diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descriptions.cc
 --- a/chrome/browser/flag_descriptions.cc
 +++ b/chrome/browser/flag_descriptions.cc
-@@ -1571,6 +1571,10 @@ const char kImpulseScrollAnimationsDescription[] =
+@@ -1569,6 +1569,10 @@ const char kImpulseScrollAnimationsDescription[] =
      "Replaces the default scroll animation with Impulse-style scroll "
      "animations.";
  
@@ -1328,7 +1328,7 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
 +    &features::kMoveTopToolbarToBottom,
      &kNewWindowAppMenu,
      &kOfflineIndicatorV2,
-     &kInlineUpdateFlow,
+     &kPageAnnotationsService,
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
 --- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
 +++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
@@ -1605,7 +1605,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -1558,6 +1558,12 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -1391,6 +1391,12 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_FORCE_TABLET_UI_TITLE" desc="Title of the preference that allows the user to update force tablet UI settings.">
          Force Tablet Mode
        </message>
@@ -1616,8 +1616,8 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 +        Move toolbar to bottom
 +      </message>
  
-       <!-- Language Settings -->
-       <message name="IDS_LANGUAGE_SETTINGS" desc="Title for the Languages settings screen that allows users to manage their languages preferences. [CHAR_LIMIT=32]">
+       <!-- Safety check -->
+       <message name="IDS_PREFS_SAFETY_CHECK" desc="Title of the Safety check element in settings, allowing the user to check multiple areas of browser safety. [CHAR_LIMIT=32]">
 diff --git a/chrome/browser/ui/android/toolbar/BUILD.gn b/chrome/browser/ui/android/toolbar/BUILD.gn
 --- a/chrome/browser/ui/android/toolbar/BUILD.gn
 +++ b/chrome/browser/ui/android/toolbar/BUILD.gn
@@ -1956,36 +1956,35 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
 diff --git a/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml b/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml
 --- a/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml
 +++ b/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml
-@@ -39,4 +39,9 @@
-         android:summary="@string/force_tablet_ui_summary"
-         android:title="@string/force_tablet_ui_title" />
+@@ -39,4 +39,8 @@
+         android:key="captions"
+         android:title="@string/accessibility_captions_title"/>
  
 +    <org.chromium.components.browser_ui.settings.ChromeBaseCheckBoxPreference
 +        android:key="move_toolbar_bottom"
 +        android:summary="@string/move_toolbar_bottom_summary"
 +        android:title="@string/move_toolbar_bottom_title" />
-+
  </PreferenceScreen>
 diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java
 --- a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java
 +++ b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java
-@@ -27,6 +27,7 @@ public class AccessibilitySettings
-     public static final String PREF_READER_FOR_ACCESSIBILITY = "reader_for_accessibility";
+@@ -31,12 +31,15 @@ public class AccessibilitySettings
      public static final String PREF_CAPTIONS = "captions";
+ 
      static final String PREF_FORCE_TABLET_UI = "force_tablet_ui";
 +    static final String PREF_MOVE_TOOLBAR_TO_BOTTOM = "move_toolbar_bottom";
- 
++
      private TextScalePreference mTextScalePref;
      private ChromeBaseCheckBoxPreference mForceEnableZoomPref;
-@@ -35,6 +36,7 @@ public class AccessibilitySettings
+     private boolean mRecordFontSizeChangeOnStop;
+     private AccessibilitySettingsDelegate mDelegate;
      private BooleanPreferenceDelegate mReaderForAccessibilityDelegate;
      private BooleanPreferenceDelegate mAccessibilityTabSwitcherDelegate;
-     private BooleanPreferenceDelegate mForceTabletUIDelegate;
 +    private BooleanPreferenceDelegate mMoveTopToolbarToBottomDelegate;
  
      private FontSizePrefs mFontSizePrefs;
      private FontSizePrefsObserver mFontSizePrefsObserver = new FontSizePrefsObserver() {
-@@ -107,6 +109,12 @@ public class AccessibilitySettings
+@@ -105,6 +108,12 @@ public class AccessibilitySettings
              getPreferenceScreen().removePreference(accessibilityTabSwitcherPref);
          }
  
@@ -1998,7 +1997,7 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
          Preference captions = findPreference(PREF_CAPTIONS);
          captions.setOnPreferenceClickListener(preference -> {
              Intent intent = new Intent(Settings.ACTION_CAPTIONING_SETTINGS);
-@@ -151,6 +159,9 @@ public class AccessibilitySettings
+@@ -150,6 +159,9 @@ public class AccessibilitySettings
              if (mReaderForAccessibilityDelegate != null) {
                  mReaderForAccessibilityDelegate.setEnabled((Boolean) newValue);
              }
@@ -2011,15 +2010,17 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
 diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java
 --- a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java
 +++ b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java
-@@ -46,6 +46,8 @@ public interface AccessibilitySettingsDelegate {
+@@ -27,6 +27,10 @@ public interface AccessibilitySettingsDelegate {
+         void setEnabled(boolean value);
+     }
  
-     BooleanPreferenceDelegate getForceTabletUIDelegate();
- 
++    void requestRestart(Activity activity);
++
 +    BooleanPreferenceDelegate getMoveTopToolbarToBottomDelegate();
 +
-     void requestRestart(Activity activity);
- 
      /**
+      * @return The BrowserContextHandle that should be used to read and update settings.
+      */
 diff --git a/content/browser/renderer_host/render_widget_host_view_android.cc b/content/browser/renderer_host/render_widget_host_view_android.cc
 --- a/content/browser/renderer_host/render_widget_host_view_android.cc
 +++ b/content/browser/renderer_host/render_widget_host_view_android.cc
