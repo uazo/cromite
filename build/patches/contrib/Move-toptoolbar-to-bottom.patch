@@ -10,12 +10,12 @@ The patch also includes tablet mode.
  cc/input/browser_controls_offset_manager.cc   |  6 +++
  cc/trees/layer_tree_host_impl.cc              |  3 ++
  .../tab_management/TabGroupUiCoordinator.java |  7 ++-
- .../tab_management/TabGroupUiMediator.java    | 50 ++++++++++++++++++-
+ .../tab_management/TabGroupUiMediator.java    | 50 +++++++++++++++++-
  .../tab_management/TabGroupUiProperties.java  |  6 ++-
  .../tab_management/TabGroupUiToolbarView.java | 18 +++++++
  .../tab_management/TabGroupUiViewBinder.java  |  3 ++
  .../tab_management/TabSwitcherMediator.java   | 15 ++++++
- .../ChromeAccessibilitySettingsDelegate.java  | 18 +++++++
+ .../ChromeAccessibilitySettingsDelegate.java  | 52 +++++++++++++++++++
  .../chrome/browser/app/ChromeActivity.java    |  8 +++
  .../browser/app/flags/ChromeCachedFlags.java  |  1 +
  .../compositor/CompositorViewHolder.java      |  6 +++
@@ -24,7 +24,7 @@ The patch also includes tablet mode.
  .../overlays/strip/StripLayoutHelper.java     |  2 +-
  .../strip/StripLayoutHelperManager.java       | 35 +++++++++++--
  .../scene_layer/StaticTabSceneLayer.java      |  8 ++-
- .../scene_layer/TabListSceneLayer.java        | 14 ++++++
+ .../scene_layer/TabListSceneLayer.java        | 14 +++++
  .../scene_layer/TabStripSceneLayer.java       | 15 +++++-
  .../browser/findinpage/FindToolbarTablet.java | 11 ++--
  .../fullscreen/BrowserControlsManager.java    | 13 +++++
@@ -32,9 +32,10 @@ The patch also includes tablet mode.
  .../chrome/browser/ntp/NewTabPage.java        | 13 +++--
  .../chrome/browser/ntp/RecentTabsPage.java    | 22 ++++++--
  .../browser/searchwidget/SearchActivity.java  | 12 ++++-
+ .../browser/settings/SettingsActivity.java    |  5 ++
  .../StatusIndicatorCoordinator.java           | 10 ++++
  .../StatusIndicatorSceneLayer.java            |  7 ++-
- .../browser/toolbar/ToolbarManager.java       | 37 ++++++++++++--
+ .../browser/toolbar/ToolbarManager.java       | 37 +++++++++++--
  .../chrome/browser/ui/BottomContainer.java    | 19 +++++++
  chrome/browser/about_flags.cc                 |  5 ++
  .../scene_layer/tab_strip_scene_layer.cc      | 16 ++++--
@@ -50,7 +51,7 @@ The patch also includes tablet mode.
  .../omnibox/LocationBarCoordinator.java       |  9 +++-
  .../browser/omnibox/UrlBarCoordinator.java    | 11 +++-
  .../suggestions/AutocompleteCoordinator.java  | 16 +++++-
- .../OmniboxSuggestionsDropdown.java           | 23 ++++++++-
+ .../OmniboxSuggestionsDropdown.java           | 23 +++++++-
  .../OmniboxSuggestionsDropdownEmbedder.java   |  4 ++
  .../strings/android_chrome_strings.grd        |  6 +++
  chrome/browser/ui/android/toolbar/BUILD.gn    |  1 +
@@ -60,16 +61,16 @@ The patch also includes tablet mode.
  .../bottom/BottomControlsMediator.java        |  9 ++++
  .../bottom/BottomControlsProperties.java      |  5 +-
  .../bottom/BottomControlsViewBinder.java      |  2 +
- .../bottom/ScrollingBottomViewSceneLayer.java | 20 +++++++-
+ .../bottom/ScrollingBottomViewSceneLayer.java | 20 ++++++-
  .../toolbar/top/ToolbarControlContainer.java  | 11 ++++
  .../top/TopToolbarOverlayCoordinator.java     |  7 +++
  .../top/TopToolbarOverlayProperties.java      |  8 ++-
  .../toolbar/top/TopToolbarSceneLayer.java     | 11 +++-
  .../res/xml/accessibility_preferences.xml     |  4 ++
- .../accessibility/AccessibilitySettings.java  | 12 +++++
- .../AccessibilitySettingsDelegate.java        |  4 ++
+ .../accessibility/AccessibilitySettings.java  | 16 ++++++
+ .../AccessibilitySettingsDelegate.java        |  6 +++
  .../render_widget_host_view_android.cc        |  3 ++
- 64 files changed, 612 insertions(+), 50 deletions(-)
+ 65 files changed, 657 insertions(+), 50 deletions(-)
 
 diff --git a/cc/base/features.cc b/cc/base/features.cc
 --- a/cc/base/features.cc
@@ -390,7 +391,35 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
-@@ -67,6 +67,24 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
+@@ -18,6 +18,14 @@ import org.chromium.components.browser_ui.accessibility.AccessibilitySettingsDel
+ import org.chromium.components.user_prefs.UserPrefs;
+ import org.chromium.content_public.browser.BrowserContextHandle;
+ 
++import android.app.Activity;
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.flags.CachedFeatureFlags;
++import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
++import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
++import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
++import org.chromium.chrome.browser.ApplicationLifetime;
++
+ /** The Chrome implementation of AccessibilitySettingsDelegate. */
+ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySettingsDelegate {
+     private static final String READER_MODE_SELECTED_HISTOGRAM =
+@@ -34,6 +42,12 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
+         public void setEnabled(boolean value) {}
+     }
+ 
++    private SnackbarManager mSnackbarManager;
++
++    public void setSnackbarManager(SnackbarManager snackbarManager) {
++        mSnackbarManager = snackbarManager;
++    }
++
+     private static class ReaderForAccessibilityDelegate implements BooleanPreferenceDelegate {
+         @Override
+         public boolean isEnabled() {
+@@ -67,6 +81,44 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
          return new ReaderForAccessibilityDelegate();
      }
  
@@ -412,9 +441,29 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/s
 +        return new MoveTopToolbarToBottomDelegate();
 +    }
 +
-     @Override
-     public void addExtraPreferences(PreferenceFragmentCompat fragment) {
-         if (ImageDescriptionsController.getInstance().shouldShowImageDescriptionsMenuItem()) {
++    @Override
++    public void requestRestart(Activity activity) {
++        Snackbar mSnackbar = Snackbar.make(activity.getString(R.string.ui_relaunch_notice),
++                new SnackbarManager.SnackbarController() {
++                        @Override
++                        public void onDismissNoAction(Object actionData) { }
++
++                        @Override
++                        public void onAction(Object actionData) {
++                                ApplicationLifetime.terminate(true);
++                        }
++                }, Snackbar.TYPE_NOTIFICATION, Snackbar.UMA_UNKNOWN)
++                .setSingleLine(false)
++                .setAction(activity.getString(R.string.relaunch),
++                        /*actionData*/null)
++                .setDuration(/*durationMs*/70000);
++        if (!mSnackbarManager.isShowing())
++            mSnackbarManager.showSnackbar(mSnackbar);
++    }
++
+     private static class ForceTabletUIDelegate implements BooleanPreferenceDelegate {
+         @Override
+         public boolean isEnabled() {
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
@@ -967,6 +1016,21 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/searchwidget/Se
                  mProfileSupplier, PrivacyPreferencesManagerImpl.getInstance(),
                  mSearchBoxDataProvider, null, new WindowDelegate(getWindow()), getWindowAndroid(),
                  /*activityTabSupplier=*/() -> null, getModalDialogManagerSupplier(),
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/SettingsActivity.java
+@@ -252,6 +252,11 @@ public class SettingsActivity extends ChromeBaseAppCompatActivity
+         if (fragment instanceof INeedSnackbarManager) {
+             ((INeedSnackbarManager)fragment).setSnackbarManager(mSnackbarManager);
+         }
++        if (fragment instanceof AccessibilitySettings) {
++            ((ChromeAccessibilitySettingsDelegate)
++                ((AccessibilitySettings) fragment)
++                    .getDelegate()).setSnackbarManager(mSnackbarManager);
++        }
+     }
+ 
+     @Override
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/status_indicator/StatusIndicatorCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/status_indicator/StatusIndicatorCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/status_indicator/StatusIndicatorCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/status_indicator/StatusIndicatorCoordinator.java
@@ -1968,7 +2032,7 @@ diff --git a/components/browser_ui/accessibility/android/java/res/xml/accessibil
 diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java
 --- a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java
 +++ b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettings.java
-@@ -31,12 +31,15 @@ public class AccessibilitySettings
+@@ -28,6 +28,8 @@ public class AccessibilitySettings
      public static final String PREF_CAPTIONS = "captions";
  
      static final String PREF_FORCE_TABLET_UI = "force_tablet_ui";
@@ -1977,14 +2041,26 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
      private TextScalePreference mTextScalePref;
      private ChromeBaseCheckBoxPreference mForceEnableZoomPref;
      private boolean mRecordFontSizeChangeOnStop;
-     private AccessibilitySettingsDelegate mDelegate;
+@@ -35,6 +37,7 @@ public class AccessibilitySettings
+     private BooleanPreferenceDelegate mForceTabletUIDelegate;
      private BooleanPreferenceDelegate mReaderForAccessibilityDelegate;
      private BooleanPreferenceDelegate mAccessibilityTabSwitcherDelegate;
 +    private BooleanPreferenceDelegate mMoveTopToolbarToBottomDelegate;
  
      private FontSizePrefs mFontSizePrefs;
      private FontSizePrefsObserver mFontSizePrefsObserver = new FontSizePrefsObserver() {
-@@ -105,6 +108,12 @@ public class AccessibilitySettings
+@@ -54,6 +57,10 @@ public class AccessibilitySettings
+         mFontSizePrefs = FontSizePrefs.getInstance(delegate.getBrowserContextHandle());
+     }
+ 
++    public AccessibilitySettingsDelegate getDelegate() {
++        return mDelegate;
++    }
++
+     @Override
+     public void onActivityCreated(Bundle savedInstanceState) {
+         super.onActivityCreated(savedInstanceState);
+@@ -103,6 +110,12 @@ public class AccessibilitySettings
              getPreferenceScreen().removePreference(accessibilityTabSwitcherPref);
          }
  
@@ -1997,7 +2073,7 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
          Preference captions = findPreference(PREF_CAPTIONS);
          captions.setOnPreferenceClickListener(preference -> {
              Intent intent = new Intent(Settings.ACTION_CAPTIONING_SETTINGS);
-@@ -150,6 +159,9 @@ public class AccessibilitySettings
+@@ -147,6 +160,9 @@ public class AccessibilitySettings
              if (mReaderForAccessibilityDelegate != null) {
                  mReaderForAccessibilityDelegate.setEnabled((Boolean) newValue);
              }
@@ -2010,7 +2086,16 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
 diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java
 --- a/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java
 +++ b/components/browser_ui/accessibility/android/java/src/org/chromium/components/browser_ui/accessibility/AccessibilitySettingsDelegate.java
-@@ -27,6 +27,10 @@ public interface AccessibilitySettingsDelegate {
+@@ -4,6 +4,8 @@
+ 
+ package org.chromium.components.browser_ui.accessibility;
+ 
++import android.app.Activity;
++
+ import androidx.annotation.NonNull;
+ import androidx.preference.PreferenceFragmentCompat;
+ 
+@@ -27,6 +29,10 @@ public interface AccessibilitySettingsDelegate {
          void setEnabled(boolean value);
      }
  
