@@ -52,13 +52,13 @@ See also: components/user_scripts/README.md
  .../java/res/layout/scripts_preference.xml    |  40 +
  .../android/java/res/values/dimens.xml        |  11 +
  .../java/res/xml/userscripts_preferences.xml  |  34 +
- .../user_scripts/UserScriptsUtils.java        |  84 ++
+ .../user_scripts/UserScriptsUtils.java        |  87 ++
  .../user_scripts/FragmentWindowAndroid.java   |  90 ++
  .../user_scripts/IUserScriptsUtils.java       |  22 +
  .../components/user_scripts/ScriptInfo.java   |  37 +
  .../user_scripts/ScriptListBaseAdapter.java   | 163 ++++
  .../user_scripts/ScriptListPreference.java    | 171 ++++
- .../user_scripts/UserScriptsBridge.java       | 200 +++++
+ .../user_scripts/UserScriptsBridge.java       | 208 +++++
  .../user_scripts/UserScriptsPreferences.java  | 116 +++
  .../user_scripts/android/java_sources.gni     |  18 +
  .../android/user_scripts_bridge.cc            | 173 ++++
@@ -72,7 +72,7 @@ See also: components/user_scripts/README.md
  .../user-script-ui/user-scripts-ui.js         |   9 +
  .../browser/ui/user_scripts_ui.cc             | 147 ++++
  .../user_scripts/browser/ui/user_scripts_ui.h |  37 +
- .../browser/user_script_loader.cc             | 714 ++++++++++++++++
+ .../browser/user_script_loader.cc             | 759 +++++++++++++++++
  .../user_scripts/browser/user_script_loader.h | 169 ++++
  .../browser/user_script_pref_info.cc          |  34 +
  .../browser/user_script_pref_info.h           |  72 ++
@@ -133,7 +133,7 @@ See also: components/user_scripts/README.md
  .../renderer/web_ui_injection_host.h          |  27 +
  .../strings/userscripts_strings.grdp          |  55 ++
  tools/gritsettings/resource_ids.spec          |   6 +
- 111 files changed, 9576 insertions(+), 2 deletions(-)
+ 111 files changed, 9632 insertions(+), 2 deletions(-)
  create mode 100644 components/user_scripts/README.md
  create mode 100755 components/user_scripts/android/BUILD.gn
  create mode 100644 components/user_scripts/android/java/res/layout/accept_script_item.xml
@@ -1227,7 +1227,7 @@ diff --git a/components/user_scripts/android/java/src/org/chromium/chrome/browse
 new file mode 100755
 --- /dev/null
 +++ b/components/user_scripts/android/java/src/org/chromium/chrome/browser/user_scripts/UserScriptsUtils.java
-@@ -0,0 +1,84 @@
+@@ -0,0 +1,87 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -1277,6 +1277,7 @@ new file mode 100755
 +    }
 +
 +    public static UserScriptsUtils getInstance() {
++        if (instance == null) Initialize();
 +        return instance;
 +    }
 +
@@ -1286,11 +1287,13 @@ new file mode 100755
 +
 +        Context context = ContextUtils.getApplicationContext();
 +
-+        if (ContentUriUtils.isContentUri(filePath))
-+            filePath = ContentUriUtils.getDisplayName(contentUri, context,
++        String visibleName = filePath;
++        if (ContentUriUtils.isContentUri(visibleName)) {
++            visibleName = ContentUriUtils.getDisplayName(contentUri, context,
 +                MediaStore.MediaColumns.DISPLAY_NAME);
++        }
 +
-+        if (filePath.toUpperCase().endsWith(".USER.JS") == false) return false;
++        if (visibleName.toUpperCase().endsWith(".USER.JS") == false) return false;
 +
 +        SettingsLauncher settingsLauncher = new SettingsLauncherImpl();
 +        Intent intent = settingsLauncher.createSettingsActivityIntent(
@@ -1312,7 +1315,6 @@ new file mode 100755
 +        IntentHandler.startChromeLauncherActivityForTrustedIntent(intent);
 +    }
 +}
-\ No newline at end of file
 diff --git a/components/user_scripts/android/java/src/org/chromium/components/user_scripts/FragmentWindowAndroid.java b/components/user_scripts/android/java/src/org/chromium/components/user_scripts/FragmentWindowAndroid.java
 new file mode 100644
 --- /dev/null
@@ -1826,7 +1828,7 @@ diff --git a/components/user_scripts/android/java/src/org/chromium/components/us
 new file mode 100644
 --- /dev/null
 +++ b/components/user_scripts/android/java/src/org/chromium/components/user_scripts/UserScriptsBridge.java
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,208 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -1857,6 +1859,7 @@ new file mode 100644
 +import android.content.Context;
 +import android.content.Intent;
 +import android.net.Uri;
++import android.provider.MediaStore;
 +import androidx.annotation.Nullable;
 +import android.app.AlertDialog;
 +import android.content.DialogInterface;
@@ -1864,6 +1867,7 @@ new file mode 100644
 +import org.chromium.base.annotations.CalledByNative;
 +import org.chromium.base.annotations.JNINamespace;
 +import org.chromium.base.annotations.NativeMethods;
++import org.chromium.base.ContentUriUtils;
 +import org.chromium.base.Log;
 +import org.chromium.ui.base.WindowAndroid;
 +
@@ -1942,7 +1946,13 @@ new file mode 100644
 +            }
 +        };
 +
-+        String message = context.getString(R.string.ask_to_install, ScriptFullPath);
++        String scriptName = ScriptFullPath;
++        if (ContentUriUtils.isContentUri(scriptName)) {
++            scriptName = ContentUriUtils.getDisplayName(Uri.parse(scriptName), context,
++                MediaStore.MediaColumns.DISPLAY_NAME);
++        }
++
++        String message = context.getString(R.string.ask_to_install, scriptName);
 +
 +        AlertDialog.Builder builder = new AlertDialog.Builder(context);
 +        builder.setMessage(message)
@@ -2828,7 +2838,7 @@ diff --git a/components/user_scripts/browser/user_script_loader.cc b/components/
 new file mode 100755
 --- /dev/null
 +++ b/components/user_scripts/browser/user_script_loader.cc
-@@ -0,0 +1,714 @@
+@@ -0,0 +1,759 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -2936,6 +2946,49 @@ new file mode 100755
 +
 +  base::TrimWhitespaceASCII(temp, base::TRIM_ALL, value);
 +  return true;
++}
++
++const std::u16string FileErrorString(base::File::Error error) {
++  switch (error) {
++    case base::File::FILE_ERROR_FAILED:
++      return u"No further details.";
++    case base::File::FILE_ERROR_IN_USE:
++      return u"File currently in use.";
++    case base::File::FILE_ERROR_EXISTS:
++      return u"File already exists.";
++    case base::File::FILE_ERROR_NOT_FOUND:
++      return u"File not found.";
++    case base::File::FILE_ERROR_ACCESS_DENIED:
++      return u"Access denied.";
++    case base::File::FILE_ERROR_TOO_MANY_OPENED:
++      return u"Too many files open.";
++    case base::File::FILE_ERROR_NO_MEMORY:
++      return u"Out of memory.";
++    case base::File::FILE_ERROR_NO_SPACE:
++      return u"No space left on drive.";
++    case base::File::FILE_ERROR_NOT_A_DIRECTORY:
++      return u"Not a directory.";
++    case base::File::FILE_ERROR_INVALID_OPERATION:
++      return u"Invalid operation.";
++    case base::File::FILE_ERROR_SECURITY:
++      return u"Security error.";
++    case base::File::FILE_ERROR_ABORT:
++      return u"File operation aborted.";
++    case base::File::FILE_ERROR_NOT_A_FILE:
++      return u"The supplied path was not a file.";
++    case base::File::FILE_ERROR_NOT_EMPTY:
++      return u"The file was not empty.";
++    case base::File::FILE_ERROR_INVALID_URL:
++      return u"Invalid URL.";
++    case base::File::FILE_ERROR_IO:
++      return u"OS or hardware error.";
++    case base::File::FILE_OK:
++      return u"OK.";
++    case base::File::FILE_ERROR_MAX:
++      NOTREACHED();
++  }
++  NOTIMPLEMENTED();
++  return u"Unknown error.";
 +}
 +
 +}  // namespace
@@ -3054,7 +3107,9 @@ new file mode 100755
 +    }
 +
 +    if (!infile.IsValid()) {
-+      *error = u"Cannot open script source.";
++      base::File::Error out_error = infile.error_details();
++      *error = u"Cannot open script source. Error: " +
++               FileErrorString(out_error);
 +      return false;
 +    }
 +
@@ -3087,12 +3142,12 @@ new file mode 100755
 +      return false;
 +    }
 +
-+    script->set_name(user_script_path.BaseName().value());
 +    script->set_match_origin_as_fallback(MatchOriginAsFallbackBehavior::kNever);
 +
 +    std::unique_ptr<UserScript::File> file(new UserScript::File());
 +    file->set_content(content);
-+    file->set_url(GURL(base::StrCat({"https://userscripts/file/", script->name(), ".js"})));
++    file->set_url(GURL(base::StrCat({"https://userscripts/file/",
++      user_script_path.BaseName().value(), ".js"})));
 +
 +    // create SHA256 of file
 +    char raw[crypto::kSHA256Length] = {0};
