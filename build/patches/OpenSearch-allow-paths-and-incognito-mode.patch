@@ -2,13 +2,33 @@ From: csagan5 <32685696+csagan5@users.noreply.github.com>
 Date: Sun, 6 Mar 2022 18:55:58 +0100
 Subject: OpenSearch: allow paths and incognito mode
 
+Fix bug with recently added engines prematurely discarded
+because they have no last-visit timestamp
 Allow adding search engines in incognito mode
 Allow using search engine URLs with non-empty paths
-Add debug logging
+Add verbose logging
 ---
- .../search_engine_tab_helper.cc               | 37 +++++++++++++------
- 1 file changed, 26 insertions(+), 11 deletions(-)
+ .../settings/SearchEngineAdapter.java         |  4 ++-
+ .../search_engine_tab_helper.cc               | 34 +++++++++++++------
+ .../renderer/chrome_render_frame_observer.cc  |  2 ++
+ .../search_engines/template_url_fetcher.cc    | 19 ++++++++---
+ .../search_engines/template_url_service.cc    |  1 -
+ 5 files changed, 44 insertions(+), 16 deletions(-)
 
+diff --git a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
+--- a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
++++ b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
+@@ -247,7 +247,9 @@ public class SearchEngineAdapter extends BaseAdapter
+                 continue;
+             }
+             if (recentEngineNum < MAX_RECENT_ENGINE_NUM
+-                    && templateUrl.getLastVisitedTime() > displayTime) {
++                    // just-added search engines have never been visited
++                    && (templateUrl.getLastVisitedTime() == 0 ||
++                        templateUrl.getLastVisitedTime() > displayTime)) {
+                 recentEngineNum++;
+             } else {
+                 iterator.remove();
 diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chrome/browser/ui/search_engines/search_engine_tab_helper.cc
 --- a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc
 +++ b/chrome/browser/ui/search_engines/search_engine_tab_helper.cc
@@ -90,7 +110,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
  
    // If the current page is a form submit, find the last page that was not a
    // form submit and use its url to generate the keyword from.
-@@ -141,14 +152,17 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+@@ -141,8 +152,10 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
         (index > 0) && IsFormSubmit(entry);
         entry = controller.GetEntryAtIndex(index))
      --index;
@@ -102,15 +122,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
  
    // Autogenerate a keyword for the autodetected case; in the other cases we'll
    // generate a keyword later after fetching the OSDD.
-   std::u16string keyword = GenerateKeywordFromNavigationEntry(entry);
--  if (keyword.empty())
-+  if (keyword.empty()) {
-     return;
-+  }
- 
-   auto* frame = web_contents()->GetMainFrame();
-   mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory;
-@@ -157,6 +171,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+@@ -157,6 +170,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
  
    // Download the OpenSearch description document. If this is successful, a
    // new keyword will be created when done.
@@ -118,5 +130,68 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
    TemplateURLFetcherFactory::GetForProfile(profile)->ScheduleDownload(
        keyword, osdd_url, entry->GetFavicon().url,
        frame->GetLastCommittedOrigin(), url_loader_factory.get(),
+diff --git a/chrome/renderer/chrome_render_frame_observer.cc b/chrome/renderer/chrome_render_frame_observer.cc
+--- a/chrome/renderer/chrome_render_frame_observer.cc
++++ b/chrome/renderer/chrome_render_frame_observer.cc
+@@ -13,6 +13,7 @@
+ 
+ #include "base/bind.h"
+ #include "base/command_line.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/no_destructor.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -202,6 +203,7 @@ void ChromeRenderFrameObserver::DidFinishLoad() {
+ 
+   GURL osdd_url = frame->GetDocument().OpenSearchDescriptionURL();
+   if (!osdd_url.is_empty()) {
++    LOG(INFO) << "OpenSearch: found OSDD URL: " << osdd_url;
+     mojo::AssociatedRemote<chrome::mojom::OpenSearchDescriptionDocumentHandler>
+         osdd_handler;
+     render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(
+diff --git a/components/search_engines/template_url_fetcher.cc b/components/search_engines/template_url_fetcher.cc
+--- a/components/search_engines/template_url_fetcher.cc
++++ b/components/search_engines/template_url_fetcher.cc
+@@ -260,14 +260,25 @@ void TemplateURLFetcher::ScheduleDownload(
+ 
+   const TemplateURL* template_url =
+       template_url_service_->GetTemplateURLForKeyword(keyword);
+-  if (template_url && (!template_url->safe_for_autoreplace() ||
+-                       template_url->originating_url() == osdd_url))
+-    return;
++  if (template_url) {
++    if (!template_url->safe_for_autoreplace()) {
++      LOG(INFO) << "OpenSearch: OSDD URL not safe for autoreplace: " << osdd_url;
++      return;
++    }
++    if (template_url->originating_url() == osdd_url) {
++      // Either there is a user created TemplateURL for this keyword, or the
++      // keyword has the same OSDD url and we've parsed it.
++      LOG(INFO) << "OpenSearch: OSDD URL was already parsed: " << osdd_url;
++      return;
++    }
++  }
+ 
+   // Make sure we aren't already downloading this request.
+   for (const auto& request : requests_) {
+-    if ((request->url() == osdd_url) || (request->keyword() == keyword))
++    if ((request->url() == osdd_url) || (request->keyword() == keyword)) {
++      LOG(INFO) << "OpenSearch: already downloading OSDD URL: " << osdd_url;
+       return;
++    }
+   }
+ 
+   requests_.push_back(std::make_unique<RequestDelegate>(
+diff --git a/components/search_engines/template_url_service.cc b/components/search_engines/template_url_service.cc
+--- a/components/search_engines/template_url_service.cc
++++ b/components/search_engines/template_url_service.cc
+@@ -462,7 +462,6 @@ TemplateURL* TemplateURLService::Add(
+       (!FindTemplateURLForExtension(template_url->extension_info_->extension_id,
+                                     template_url->type()) &&
+        template_url->id() == kInvalidTemplateURLID));
+-
+   return Add(std::move(template_url), true);
+ }
+ 
 --
 2.25.1

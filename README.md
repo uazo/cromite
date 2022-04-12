@@ -150,6 +150,7 @@ New flags:
 * `#omnibox-autocomplete-filtering`, can be used to restrict omnibox autocomplete results
 * `#disable-external-intent-requests`
 * `#enable-userscripts-log`, see https://github.com/bromite/bromite/wiki/UserScripts#flags
+* `#certificate-transparency-enabled`, enabled by default; see https://chromium.googlesource.com/chromium/src/+/master/net/docs/certificate-transparency.md
 
 # Privacy limitations
 

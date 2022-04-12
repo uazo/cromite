@@ -48,9 +48,7 @@ It is not on the official F-Droid repository and there are no (more) plans to su
 You can use F-Droid client to install and receive updates via [the official Bromite F-Droid repository](https://www.bromite.org/fdroid).
 
 ## Does Bromite support WebRTC?
-Yes, since version 69. While the desktop version of Chromium has an option to disable it (video/audio site settings), the Android version cannot.
-
-The WebRTC functionality has always been using safe defaults to prevent leaks (disabled multiple routes and non-proxied UDP).
+Partially, see https://github.com/bromite/bromite/wiki/WebRTC
 
 ## Using Bromite will favour the monopoly of the Chromium/Blink engine, why do you develop and maintain Bromite?
 In short, to show what a Chromium-based engine could do **for the user** if the user experience and needs were the main focus of modern browser design.

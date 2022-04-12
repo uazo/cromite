@@ -1,3 +1,18 @@
+# 100.0.4896.83
+* update zh_CN translations (thanks to @zhmars)
+* fix custom UA reported via Javascript (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/1936)
+* introduce session granularity for permissions (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/1549)
+* disable crash reporting
+* avoid script injection on some sites
+* fix upstream OpenSearch bug with search engines prematurely discarded
+* fix upstream DNS bug with inconsistent Android system DNS configuration (fixes https://github.com/bromite/bromite/issues/1960)
+* use less invasive approach to protect local IP address when using webRTC (fixes https://github.com/bromite/bromite/issues/589)
+* add menu entry to select all bookmarks (fixes https://github.com/bromite/bromite/issues/1959)
+* save only ContentSettings in always-incognito mode (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/1942)
+* fix Note 9 crash on startup (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/1871)
+* remove passwords menu entry for leak check
+* remove privacy menu entry to use phone as a security key
+
 # 100.0.4896.57
 * allow OpenSearch search engine URLs with path
 * disable AsyncDNS by default
@@ -7,6 +22,7 @@
 * improve description for JIT site settings (fixes https://github.com/bromite/bromite/issues/1931)
 * remove more signin integration (fixes https://github.com/bromite/bromite/issues/1902)
 * miscellaneous fixes for AMP and background video playback (fixes https://github.com/bromite/bromite/issues/1921)
+* update zh_CN translations (thanks to @zhmars)
 
 # 99.0.4844.77
 * fix missing adaptive icon for updates

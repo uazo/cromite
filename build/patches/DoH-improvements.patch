@@ -1,0 +1,92 @@
+From: csagan5 <32685696+csagan5@users.noreply.github.com>
+Date: Sat, 26 Sep 2020 14:23:19 +0100
+Subject: DoH improvements
+
+Enable secure mode by default
+Always enforce DoH even with inconsistent system DNS configuration
+---
+ .../browser/net/stub_resolver_config_reader.cc  | 17 +----------------
+ net/dns/dns_client.cc                           | 11 ++++++++---
+ net/dns/host_resolver_manager.cc                |  1 +
+ 3 files changed, 10 insertions(+), 19 deletions(-)
+
+diff --git a/chrome/browser/net/stub_resolver_config_reader.cc b/chrome/browser/net/stub_resolver_config_reader.cc
+--- a/chrome/browser/net/stub_resolver_config_reader.cc
++++ b/chrome/browser/net/stub_resolver_config_reader.cc
+@@ -155,7 +155,7 @@ StubResolverConfigReader::StubResolverConfigReader(PrefService* local_state,
+       if (entries.count("dns-over-https@1")) {
+         // The user has "Enabled" selected.
+         local_state_->SetString(prefs::kDnsOverHttpsMode,
+-                                SecureDnsConfig::kModeAutomatic);
++                                SecureDnsConfig::kModeSecure);
+       } else if (entries.count("dns-over-https@2")) {
+         // The user has "Disabled" selected.
+         local_state_->SetString(prefs::kDnsOverHttpsMode,
+@@ -335,22 +335,7 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
+     check_parental_controls = false;
+   }
+ 
+-  // Check parental controls last because it can be expensive and should only be
+-  // checked if necessary for the otherwise-determined mode.
+   if (check_parental_controls) {
+-    if (ShouldDisableDohForParentalControls()) {
+-      forced_management_mode =
+-          SecureDnsConfig::ManagementMode::kDisabledParentalControls;
+-      secure_dns_mode = net::SecureDnsMode::kOff;
+-      mode_details =
+-          SecureDnsModeDetailsForHistogram::kOffByDetectedParentalControls;
+-
+-      // If parental controls had not previously been checked, need to update
+-      // network service.
+-      if (!parental_controls_checked_)
+-        update_network_service = true;
+-    }
+-
+     parental_controls_checked_ = true;
+   }
+ 
+diff --git a/net/dns/dns_client.cc b/net/dns/dns_client.cc
+--- a/net/dns/dns_client.cc
++++ b/net/dns/dns_client.cc
+@@ -241,11 +241,14 @@ class DnsClientImpl : public DnsClient {
+  private:
+   absl::optional<DnsConfig> BuildEffectiveConfig() const {
+     DnsConfig config;
+-    if (config_overrides_.OverridesEverything()) {
++    // in Bromite it is sufficient to have secure DoH enabled to give the overrides priority
++    if (config_overrides_.dns_over_https_config && config_overrides_.secure_dns_mode) {
+       config = config_overrides_.ApplyOverrides(DnsConfig());
+     } else {
+-      if (!system_config_)
++      if (!system_config_) {
++        LOG(WARNING) << "BuildEffectiveConfig(): no system configuration";
+         return absl::nullopt;
++      }
+ 
+       config = config_overrides_.ApplyOverrides(system_config_.value());
+     }
+@@ -260,8 +263,10 @@ class DnsClientImpl : public DnsClient {
+     if (config.unhandled_options)
+       config.nameservers.clear();
+ 
+-    if (!config.IsValid())
++    if (!config.IsValid()) {
++        LOG(WARNING) << "BuildEffectiveConfig(): invalid configuration";
+       return absl::nullopt;
++    }
+ 
+     return config;
+   }
+diff --git a/net/dns/host_resolver_manager.cc b/net/dns/host_resolver_manager.cc
+--- a/net/dns/host_resolver_manager.cc
++++ b/net/dns/host_resolver_manager.cc
+@@ -3120,6 +3120,7 @@ void HostResolverManager::SetDnsConfigOverrides(DnsConfigOverrides overrides) {
+   bool changed = dns_client_->SetConfigOverrides(std::move(overrides));
+ 
+   if (changed) {
++    LOG(INFO) << "triggering non-system DNS change";
+     NetworkChangeNotifier::TriggerNonSystemDnsChange();
+ 
+     // Only invalidate cache if new overrides have resulted in a config change.
+--
+2.25.1
