@@ -1,0 +1,97 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Tue, 12 Apr 2022 15:58:01 +0000
+Subject: Add support for writing URIs
+
+Allows native-side URI file writing
+---
+ base/android/content_uri_utils.cc             | 10 ++++++
+ base/android/content_uri_utils.h              |  4 +++
+ .../org/chromium/base/ContentUriUtils.java    | 33 +++++++++++++++++++
+ 3 files changed, 47 insertions(+)
+
+diff --git a/base/android/content_uri_utils.cc b/base/android/content_uri_utils.cc
+--- a/base/android/content_uri_utils.cc
++++ b/base/android/content_uri_utils.cc
+@@ -30,6 +30,16 @@ File OpenContentUriForRead(const FilePath& content_uri) {
+   return File(fd);
+ }
+ 
++File OpenContentUriForWrite(const FilePath& content_uri) {
++  JNIEnv* env = base::android::AttachCurrentThread();
++  ScopedJavaLocalRef<jstring> j_uri =
++      ConvertUTF8ToJavaString(env, content_uri.value());
++  jint fd = Java_ContentUriUtils_openContentUriForWrite(env, j_uri);
++  if (fd < 0)
++    return File();
++  return File(fd);
++}
++
+ std::string GetContentUriMimeType(const FilePath& content_uri) {
+   JNIEnv* env = base::android::AttachCurrentThread();
+   ScopedJavaLocalRef<jstring> j_uri =
+diff --git a/base/android/content_uri_utils.h b/base/android/content_uri_utils.h
+--- a/base/android/content_uri_utils.h
++++ b/base/android/content_uri_utils.h
+@@ -18,6 +18,10 @@ namespace base {
+ // Returns -1 if the URI is invalid.
+ BASE_EXPORT File OpenContentUriForRead(const FilePath& content_uri);
+ 
++// Opens a content URI for write and returns the file descriptor to the caller.
++// Returns -1 if the URI is invalid.
++BASE_EXPORT File OpenContentUriForWrite(const FilePath& content_uri);
++
+ // Check whether a content URI exists.
+ BASE_EXPORT bool ContentUriExists(const FilePath& content_uri);
+ 
+diff --git a/base/android/java/src/org/chromium/base/ContentUriUtils.java b/base/android/java/src/org/chromium/base/ContentUriUtils.java
+--- a/base/android/java/src/org/chromium/base/ContentUriUtils.java
++++ b/base/android/java/src/org/chromium/base/ContentUriUtils.java
+@@ -23,6 +23,9 @@ import org.chromium.base.annotations.CalledByNative;
+ import java.io.File;
+ import java.io.IOException;
+ 
++import android.system.Os;
++import android.content.ContentProviderClient;
++
+ /**
+  * This class provides methods to access content URI schemes.
+  */
+@@ -89,6 +92,36 @@ public abstract class ContentUriUtils {
+         return -1;
+     }
+ 
++    @CalledByNative
++    public static int openContentUriForWrite(String uriString) {
++        try {
++            Uri uri = Uri.parse(uriString);
++            ContentResolver resolver = ContextUtils.getApplicationContext().getContentResolver();
++            ContentProviderClient client = resolver.acquireContentProviderClient(
++                                            uri.getAuthority());
++            ParcelFileDescriptor pfd = client.openFile(uri, "rw");
++            int fd = pfd.detachFd();
++            client.close();
++            return fd;
++        } catch (Exception e) {
++            Log.e(TAG, "Cannot open intermediate URI", e);
++        }
++        return -1;
++    }
++
++    public static String getFilePathFromContentUri(Uri uri) {
++        String path = null;
++        try {
++            ContentResolver resolver = ContextUtils.getApplicationContext().getContentResolver();
++            ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r");
++            path = Os.readlink("/proc/self/fd/" + pfd.getFd());
++            pfd.close();
++        } catch (Exception e) {
++            Log.e(TAG, "Cannot get file path from content URI", e);
++        }
++        return path;
++    }
++
+     /**
+      * Check whether a content URI exists.
+      *
+--
+2.25.1

@@ -1,0 +1,292 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Thu, 24 Mar 2022 10:08:00 +0000
+Subject: Disable TLS resumption
+
+Disable resumption feature for all HTTPS and QUIC connections;
+the feature could be used to track users even without cookies.
+
+Sessions are not currently saved to disk in Chromium (although
+there is support for it) but are long enough to constitute a
+privacy risk (2h for TLS 1.2 and 7 days for TLS 1.3) if user
+does not frequently close the browser.
+
+Since session information is not kept in the HTTP cache it is
+not cleared when deleting navigation data (although it is possible
+to clear it by selecting "passwords").
+
+Two new user configurable flags are introduced:
+* kDisableTLSResumption, active by default
+* kLogTLSResumption, that would allow to find in logcat reused
+  sessions in lines matching "SSL Log:"
+
+See also:
+* https://arxiv.org/abs/1810.07304
+---
+ chrome/browser/about_flags.cc        |  6 +++
+ chrome/browser/flag_descriptions.cc  |  8 ++++
+ chrome/browser/flag_descriptions.h   |  6 +++
+ net/base/features.cc                 |  6 +++
+ net/base/features.h                  |  6 +++
+ net/http/http_network_session.cc     |  1 +
+ net/quic/quic_stream_factory.cc      | 35 ++++++++++++++++-
+ net/socket/ssl_client_socket_impl.cc | 59 ++++++++++++++++++++++++++++
+ net/socket/ssl_client_socket_impl.h  |  2 +
+ 9 files changed, 128 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -4233,6 +4233,12 @@ const FeatureEntry kFeatureEntries[] = {
+     {"enable-tls13-early-data", flag_descriptions::kEnableTLS13EarlyDataName,
+      flag_descriptions::kEnableTLS13EarlyDataDescription, kOsAll,
+      FEATURE_VALUE_TYPE(net::features::kEnableTLS13EarlyData)},
++    {"disable-tls-resumption", flag_descriptions::kDisableTLSResumptionName,
++     flag_descriptions::kDisableTLSResumptionDescription, kOsAll,
++     FEATURE_VALUE_TYPE(net::features::kDisableTLSResumption)},
++    {"log-tls-resumption", flag_descriptions::kLogTLSResumptionName,
++     flag_descriptions::kLogTLSResumptionDescription, kOsAll,
++     FEATURE_VALUE_TYPE(net::features::kLogTLSResumption)},
+     {"post-quantum-cecpq2", flag_descriptions::kPostQuantumCECPQ2Name,
+      flag_descriptions::kPostQuantumCECPQ2Description, kOsAll,
+      FEATURE_VALUE_TYPE(net::features::kPostQuantumCECPQ2)},
+diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descriptions.cc
+--- a/chrome/browser/flag_descriptions.cc
++++ b/chrome/browser/flag_descriptions.cc
+@@ -952,6 +952,14 @@ const char kEnableTLS13EarlyDataDescription[] =
+     "during the handshake when resuming a connection to a compatible TLS 1.3 "
+     "server.";
+ 
++const char kDisableTLSResumptionName[] = "Disable TLS Session Resumption";
++const char kDisableTLSResumptionDescription[] =
++    "Disable TLS session resumption.";
++
++const char kLogTLSResumptionName[] = "Log TLS Session Resumption";
++const char kLogTLSResumptionDescription[] =
++    "Log TLS session resumption";
++
+ const char kEnhancedNetworkVoicesName[] = "Enhanced network voices";
+ const char kEnhancedNetworkVoicesDescription[] =
+     "This option enables high-quality, network-based voices in "
+diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
+--- a/chrome/browser/flag_descriptions.h
++++ b/chrome/browser/flag_descriptions.h
+@@ -553,6 +553,12 @@ extern const char kEnableSyncRequiresPoliciesLoadedDescription[];
+ extern const char kEnableTLS13EarlyDataName[];
+ extern const char kEnableTLS13EarlyDataDescription[];
+ 
++extern const char kDisableTLSResumptionName[];
++extern const char kDisableTLSResumptionDescription[];
++
++extern const char kLogTLSResumptionName[];
++extern const char kLogTLSResumptionDescription[];
++
+ extern const char kEnhancedNetworkVoicesName[];
+ extern const char kEnhancedNetworkVoicesDescription[];
+ 
+diff --git a/net/base/features.cc b/net/base/features.cc
+--- a/net/base/features.cc
++++ b/net/base/features.cc
+@@ -92,6 +92,12 @@ const base::FeatureParam<int> kUseDnsHttpsSvcbExtraTimePercent{
+ const base::Feature kEnableTLS13EarlyData{"EnableTLS13EarlyData",
+                                           base::FEATURE_DISABLED_BY_DEFAULT};
+ 
++const base::Feature kDisableTLSResumption{"DisableTLSResumption",
++                                          base::FEATURE_ENABLED_BY_DEFAULT};
++
++const base::Feature kLogTLSResumption{"LogTLSResumption",
++                                      base::FEATURE_DISABLED_BY_DEFAULT};
++
+ const base::Feature kEncryptedClientHello{"EncryptedClientHello",
+                                           base::FEATURE_DISABLED_BY_DEFAULT};
+ 
+diff --git a/net/base/features.h b/net/base/features.h
+--- a/net/base/features.h
++++ b/net/base/features.h
+@@ -153,6 +153,12 @@ NET_EXPORT extern const base::FeatureParam<int>
+ // Enables TLS 1.3 early data.
+ NET_EXPORT extern const base::Feature kEnableTLS13EarlyData;
+ 
++// Disables TLS resumption.
++NET_EXPORT extern const base::Feature kDisableTLSResumption;
++
++// Log TLS resumption.
++NET_EXPORT extern const base::Feature kLogTLSResumption;
++
+ // Enables the TLS Encrypted ClientHello feature.
+ // https://datatracker.ietf.org/doc/html/draft-ietf-tls-esni-13
+ //
+diff --git a/net/http/http_network_session.cc b/net/http/http_network_session.cc
+--- a/net/http/http_network_session.cc
++++ b/net/http/http_network_session.cc
+@@ -233,6 +233,7 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
+ 
+   next_protos_.push_back(kProtoHTTP11);
+ 
++  DCHECK(context.quic_context->params()->max_server_configs_stored_in_properties == 0);
+   http_server_properties_->SetMaxServerConfigsStoredInProperties(
+       context.quic_context->params()->max_server_configs_stored_in_properties);
+ 
+diff --git a/net/quic/quic_stream_factory.cc b/net/quic/quic_stream_factory.cc
+--- a/net/quic/quic_stream_factory.cc
++++ b/net/quic/quic_stream_factory.cc
+@@ -73,6 +73,7 @@
+ #include "net/third_party/quiche/src/quic/core/quic_utils.h"
+ #include "net/third_party/quiche/src/quic/platform/api/quic_flags.h"
+ #include "third_party/boringssl/src/include/openssl/aead.h"
++#include "third_party/boringssl/src/include/openssl/ssl.h"
+ #include "url/gurl.h"
+ #include "url/scheme_host_port.h"
+ #include "url/url_constants.h"
+@@ -229,6 +230,38 @@ std::set<std::string> HostsFromOrigins(std::set<HostPortPair> origins) {
+ 
+ }  // namespace
+ 
++class BromiteSessionCache : public quic::QuicClientSessionCache {
++ public:
++  BromiteSessionCache() = default;
++  ~BromiteSessionCache() override = default;
++
++  void Insert(const quic::QuicServerId& server_id,
++              bssl::UniquePtr<SSL_SESSION> session,
++              const quic::TransportParameters& params,
++              const quic::ApplicationState* application_state) override {
++    if (base::FeatureList::IsEnabled(net::features::kDisableTLSResumption))
++      SSL_SESSION_set_timeout(session.get(), 0);
++    if (base::FeatureList::IsEnabled(net::features::kLogTLSResumption)) {
++      LOG(INFO) << "SSL Log: new quic session created "
++                << server_id.host();
++    }
++    quic::QuicClientSessionCache::Insert(server_id,
++      std::move(session), params, application_state);
++  }
++
++  std::unique_ptr<quic::QuicResumptionState> Lookup(
++        const quic::QuicServerId& server_id, quic::QuicWallTime now,
++        const SSL_CTX* ctx) override {
++    auto value = quic::QuicClientSessionCache::Lookup(server_id, now, ctx);
++    if (value != nullptr &&
++        base::FeatureList::IsEnabled(net::features::kLogTLSResumption)) {
++      LOG(INFO) << "SSL Log: QUIC session resumed "
++                << server_id.host();
++    }
++    return value;
++  }
++};
++
+ // Refcounted class that owns quic::QuicCryptoClientConfig and tracks how many
+ // consumers are using it currently. When the last reference is freed, the
+ // QuicCryptoClientConfigHandle informs the owning QuicStreamFactory, moves it
+@@ -2210,7 +2243,7 @@ QuicStreamFactory::CreateCryptoConfigHandle(
+               sct_auditing_delegate_,
+               HostsFromOrigins(params_.origins_to_force_quic_on),
+               actual_network_isolation_key),
+-          std::make_unique<quic::QuicClientSessionCache>(), this);
++          std::make_unique<BromiteSessionCache>(), this);
+ 
+   quic::QuicCryptoClientConfig* crypto_config = crypto_config_owner->config();
+   crypto_config->set_user_agent_id(params_.user_agent_id);
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -405,7 +405,33 @@ SSLClientSocketImpl::SSLClientSocketImpl(
+   CHECK(context_);
+ }
+ 
++void SSLClientSocketImpl::Log_ssl_session_data(const std::string& tag, SSL_SESSION* session) {
++  if (session == NULL) {
++    LOG(INFO) << "SSL Log: "
++              << tag
++              << " host: " << host_and_port_.ToString()
++              << " NIK: " << ssl_config_.network_isolation_key.ToDebugString();
++    return;
++  }
++
++  unsigned len;
++  auto* session_id = SSL_SESSION_get_id(session, &len);
++
++  const uint8_t *ticket;
++  size_t ticklen;
++  SSL_SESSION_get0_ticket(session, &ticket, &ticklen);
++
++  LOG(INFO) << "SSL Log: "
++            << tag
++            << " host: " << host_and_port_.ToString()
++            << " NIK: " << ssl_config_.network_isolation_key.ToDebugString()
++            << " sessionid: " << base::HexEncode(session_id, len)
++            << (ticklen > 0 ? " ticket:" + base::HexEncode(ticket, ticklen) : "");
++}
++
+ SSLClientSocketImpl::~SSLClientSocketImpl() {
++  if (base::FeatureList::IsEnabled(net::features::kLogTLSResumption))
++    Log_ssl_session_data("Disconnect", NULL);
+   Disconnect();
+ }
+ 
+@@ -804,6 +830,8 @@ int SSLClientSocketImpl::Init() {
+     }
+     if (session)
+       SSL_set_session(ssl_.get(), session.get());
++    if (session && base::FeatureList::IsEnabled(net::features::kLogTLSResumption))
++      Log_ssl_session_data("Old session resumed", session.get());
+   }
+ 
+   transport_adapter_ = std::make_unique<SocketBIOAdapter>(
+@@ -1089,6 +1117,35 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
+                     : SSLHandshakeDetails::kTLS13Full;
+     }
+   }
++  if (base::FeatureList::IsEnabled(net::features::kLogTLSResumption)) {
++    switch(details)
++    {
++      case SSLHandshakeDetails::kTLS13Early:
++        Log_ssl_session_data("SSL Log: session reused: kTLS13Early mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS13ResumeWithHelloRetryRequest:
++        Log_ssl_session_data("SSL Log: session reused: kTLS13ResumeWithHelloRetryRequest mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS13Resume:
++        Log_ssl_session_data("SSL Log: session reused: kTLS13Resume mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS12Resume:
++        Log_ssl_session_data("SSL Log: session reused: kTLS12Resume mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS12Full:
++        Log_ssl_session_data("SSL Log: session reused: kTLS12Full mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS12FalseStart:
++        Log_ssl_session_data("SSL Log: session reused: kTLS12FalseStart mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS13Full:
++        Log_ssl_session_data("SSL Log: session reused: kTLS13Full mode", NULL);
++        break;
++      case SSLHandshakeDetails::kTLS13FullWithHelloRetryRequest:
++        Log_ssl_session_data("SSL Log: session reused: kTLS13FullWithHelloRetryRequest mode", NULL);
++        break;
++    }
++  }
+   UMA_HISTOGRAM_ENUMERATION("Net.SSLHandshakeDetails", details);
+ 
+   // Measure TLS connections that implement the renegotiation_info extension.
+@@ -1762,6 +1819,8 @@ bool SSLClientSocketImpl::IsRenegotiationAllowed() const {
+ }
+ 
+ bool SSLClientSocketImpl::IsCachingEnabled() const {
++  if (base::FeatureList::IsEnabled(net::features::kDisableTLSResumption))
++    return false;
+   return context_->ssl_client_session_cache() != nullptr;
+ }
+ 
+diff --git a/net/socket/ssl_client_socket_impl.h b/net/socket/ssl_client_socket_impl.h
+--- a/net/socket/ssl_client_socket_impl.h
++++ b/net/socket/ssl_client_socket_impl.h
+@@ -129,6 +129,8 @@ class SSLClientSocketImpl : public SSLClientSocket,
+   friend class SSLClientSocket;
+   friend class SSLContext;
+ 
++  void Log_ssl_session_data(const std::string& tag, SSL_SESSION* session);
++
+   int Init();
+   void DoReadCallback(int result);
+   void DoWriteCallback(int result);
+--
+2.25.1

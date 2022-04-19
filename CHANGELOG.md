@@ -1,3 +1,14 @@
+# 100.0.4896.135
+* remove mremap from seccomp baseline policy
+* add flag to move top toolbar to bottom (thanks to @uazo)
+
+# 100.0.4896.92
+* improve user script errors and visualized name (thanks to @uazo)
+* fix autofill password not working anymore (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/1956)
+* mark sites as visited when they have an already-parsed OpenSearch descriptor
+* disable TLS resumption by default (thanks to @uazo)
+* partition DoH requests by top-frame NIK (thanks to @uazo)
+
 # 100.0.4896.83
 * update zh_CN translations (thanks to @zhmars)
 * fix custom UA reported via Javascript (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/1936)

@@ -21,6 +21,8 @@ document-idle), homepage, url_source
 The UI also allows you to see the source of the script.
 
 See also: components/user_scripts/README.md
+
+Need: Adds-support-for-writing-URIs.patch
 ---
  chrome/android/BUILD.gn                       |   5 +
  .../android/java/res/xml/main_preferences.xml |   5 +
@@ -58,7 +60,7 @@ See also: components/user_scripts/README.md
  .../components/user_scripts/ScriptInfo.java   |  37 +
  .../user_scripts/ScriptListBaseAdapter.java   | 163 ++++
  .../user_scripts/ScriptListPreference.java    | 171 ++++
- .../user_scripts/UserScriptsBridge.java       | 208 +++++
+ .../user_scripts/UserScriptsBridge.java       | 212 +++++
  .../user_scripts/UserScriptsPreferences.java  | 116 +++
  .../user_scripts/android/java_sources.gni     |  18 +
  .../android/user_scripts_bridge.cc            | 173 ++++
@@ -72,7 +74,7 @@ See also: components/user_scripts/README.md
  .../user-script-ui/user-scripts-ui.js         |   9 +
  .../browser/ui/user_scripts_ui.cc             | 147 ++++
  .../user_scripts/browser/ui/user_scripts_ui.h |  37 +
- .../browser/user_script_loader.cc             | 759 +++++++++++++++++
+ .../browser/user_script_loader.cc             | 716 ++++++++++++++++
  .../user_scripts/browser/user_script_loader.h | 169 ++++
  .../browser/user_script_pref_info.cc          |  34 +
  .../browser/user_script_pref_info.h           |  72 ++
@@ -131,9 +133,9 @@ See also: components/user_scripts/README.md
  .../renderer/user_scripts_renderer_client.h   |  37 +
  .../renderer/web_ui_injection_host.cc         |  40 +
  .../renderer/web_ui_injection_host.h          |  27 +
- .../strings/userscripts_strings.grdp          |  55 ++
+ .../strings/userscripts_strings.grdp          |  57 ++
  tools/gritsettings/resource_ids.spec          |   6 +
- 111 files changed, 9632 insertions(+), 2 deletions(-)
+ 111 files changed, 9595 insertions(+), 2 deletions(-)
  create mode 100644 components/user_scripts/README.md
  create mode 100755 components/user_scripts/android/BUILD.gn
  create mode 100644 components/user_scripts/android/java/res/layout/accept_script_item.xml
@@ -1828,7 +1830,7 @@ diff --git a/components/user_scripts/android/java/src/org/chromium/components/us
 new file mode 100644
 --- /dev/null
 +++ b/components/user_scripts/android/java/src/org/chromium/components/user_scripts/UserScriptsBridge.java
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,212 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -1948,8 +1950,12 @@ new file mode 100644
 +
 +        String scriptName = ScriptFullPath;
 +        if (ContentUriUtils.isContentUri(scriptName)) {
-+            scriptName = ContentUriUtils.getDisplayName(Uri.parse(scriptName), context,
-+                MediaStore.MediaColumns.DISPLAY_NAME);
++            scriptName = ContentUriUtils.getFilePathFromContentUri(Uri.parse(scriptName));
++            if (scriptName == null) {
++                // fallback to content uri name if fail
++                scriptName = ContentUriUtils.getDisplayName(Uri.parse(ScriptFullPath), context,
++                    MediaStore.MediaColumns.DISPLAY_NAME);
++            }
 +        }
 +
 +        String message = context.getString(R.string.ask_to_install, scriptName);
@@ -2838,7 +2844,7 @@ diff --git a/components/user_scripts/browser/user_script_loader.cc b/components/
 new file mode 100755
 --- /dev/null
 +++ b/components/user_scripts/browser/user_script_loader.cc
-@@ -0,0 +1,759 @@
+@@ -0,0 +1,716 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -2946,49 +2952,6 @@ new file mode 100755
 +
 +  base::TrimWhitespaceASCII(temp, base::TRIM_ALL, value);
 +  return true;
-+}
-+
-+const std::u16string FileErrorString(base::File::Error error) {
-+  switch (error) {
-+    case base::File::FILE_ERROR_FAILED:
-+      return u"No further details.";
-+    case base::File::FILE_ERROR_IN_USE:
-+      return u"File currently in use.";
-+    case base::File::FILE_ERROR_EXISTS:
-+      return u"File already exists.";
-+    case base::File::FILE_ERROR_NOT_FOUND:
-+      return u"File not found.";
-+    case base::File::FILE_ERROR_ACCESS_DENIED:
-+      return u"Access denied.";
-+    case base::File::FILE_ERROR_TOO_MANY_OPENED:
-+      return u"Too many files open.";
-+    case base::File::FILE_ERROR_NO_MEMORY:
-+      return u"Out of memory.";
-+    case base::File::FILE_ERROR_NO_SPACE:
-+      return u"No space left on drive.";
-+    case base::File::FILE_ERROR_NOT_A_DIRECTORY:
-+      return u"Not a directory.";
-+    case base::File::FILE_ERROR_INVALID_OPERATION:
-+      return u"Invalid operation.";
-+    case base::File::FILE_ERROR_SECURITY:
-+      return u"Security error.";
-+    case base::File::FILE_ERROR_ABORT:
-+      return u"File operation aborted.";
-+    case base::File::FILE_ERROR_NOT_A_FILE:
-+      return u"The supplied path was not a file.";
-+    case base::File::FILE_ERROR_NOT_EMPTY:
-+      return u"The file was not empty.";
-+    case base::File::FILE_ERROR_INVALID_URL:
-+      return u"Invalid URL.";
-+    case base::File::FILE_ERROR_IO:
-+      return u"OS or hardware error.";
-+    case base::File::FILE_OK:
-+      return u"OK.";
-+    case base::File::FILE_ERROR_MAX:
-+      NOTREACHED();
-+  }
-+  NOTIMPLEMENTED();
-+  return u"Unknown error.";
 +}
 +
 +}  // namespace
@@ -3109,7 +3072,7 @@ new file mode 100755
 +    if (!infile.IsValid()) {
 +      base::File::Error out_error = infile.error_details();
 +      *error = u"Cannot open script source. Error: " +
-+               FileErrorString(out_error);
++                base::ASCIIToUTF16(base::File::ErrorToString(out_error));
 +      return false;
 +    }
 +
@@ -3146,8 +3109,6 @@ new file mode 100755
 +
 +    std::unique_ptr<UserScript::File> file(new UserScript::File());
 +    file->set_content(content);
-+    file->set_url(GURL(base::StrCat({"https://userscripts/file/",
-+      user_script_path.BaseName().value(), ".js"})));
 +
 +    // create SHA256 of file
 +    char raw[crypto::kSHA256Length] = {0};
@@ -3155,6 +3116,8 @@ new file mode 100755
 +    crypto::SHA256HashString(content, raw, crypto::kSHA256Length);
 +    base::Base64Encode(base::StringPiece(raw, crypto::kSHA256Length), &key);
 +    file->set_key(key);
++
++    file->set_url(GURL(base::StrCat({"https://userscripts/file/", key, ".js"})));
 +
 +    script->js_scripts().push_back(std::move(file));
 +
@@ -9939,7 +9902,7 @@ new file mode 100755
 +  bool is_subframe = web_frame->Parent();
 +  if (!script->MatchesDocument(effective_document_url, is_subframe)) {
 +    if (base::FeatureList::IsEnabled(features::kEnableLoggingUserScripts))
-+      LOG(INFO) << "UserScripts: Match name=" << script->name() <<
++      LOG(INFO) << "UserScripts: No Match name=" << script->name() <<
 +                                      " id=" << script->host_id().id() <<
 +                                      " url=" << effective_document_url.spec();
 +    return injection;
@@ -10604,7 +10567,7 @@ diff --git a/components/user_scripts/strings/userscripts_strings.grdp b/componen
 new file mode 100755
 --- /dev/null
 +++ b/components/user_scripts/strings/userscripts_strings.grdp
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,57 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<grit-part>
 +
@@ -10648,9 +10611,11 @@ new file mode 100755
 +  </message>
 +
 +  <message name="IDS_ASK_TO_INSTALL" desc=". [CHAR-LIMIT=32]" formatter_data="android_java">
-+    Only install user scripts that you have verified are secure, user scripts can steal your credentials and data.
++    Do you want to install this user script from following location?
 +
-+Do you want to install <ph name="FILE">%s</ph>?
++<ph name="FILE">%s</ph>
++
++NOTE: only install user scripts that you have verified are secure, user scripts can steal your credentials and data.
 +  </message>
 +  <message name="IDS_YES" desc=". [CHAR-LIMIT=32]" formatter_data="android_java">
 +    Yes
@@ -10660,7 +10625,6 @@ new file mode 100755
 +  </message>
 +
 +</grit-part>
-\ No newline at end of file
 diff --git a/tools/gritsettings/resource_ids.spec b/tools/gritsettings/resource_ids.spec
 --- a/tools/gritsettings/resource_ids.spec
 +++ b/tools/gritsettings/resource_ids.spec

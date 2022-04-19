@@ -1,9 +1,10 @@
 From: csagan5 <32685696+csagan5@users.noreply.github.com>
 Date: Sun, 6 Mar 2022 18:55:58 +0100
-Subject: OpenSearch: allow paths and incognito mode
+Subject: OpenSearch: miscellaneous
 
-Fix bug with recently added engines prematurely discarded
+Fix upstream bug with recently added engines prematurely discarded
 because they have no last-visit timestamp
+Fix upstream bug with visited engines visit time not updated
 Allow adding search engines in incognito mode
 Allow using search engine URLs with non-empty paths
 Add verbose logging
@@ -11,9 +12,10 @@ Add verbose logging
  .../settings/SearchEngineAdapter.java         |  4 ++-
  .../search_engine_tab_helper.cc               | 34 +++++++++++++------
  .../renderer/chrome_render_frame_observer.cc  |  2 ++
- .../search_engines/template_url_fetcher.cc    | 19 ++++++++---
+ .../search_engines/template_url_fetcher.cc    | 23 ++++++++++---
  .../search_engines/template_url_service.cc    |  1 -
- 5 files changed, 44 insertions(+), 16 deletions(-)
+ .../search_engines/template_url_service.h     |  8 ++---
+ 6 files changed, 51 insertions(+), 21 deletions(-)
 
 diff --git a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
 --- a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
@@ -152,9 +154,12 @@ diff --git a/chrome/renderer/chrome_render_frame_observer.cc b/chrome/renderer/c
 diff --git a/components/search_engines/template_url_fetcher.cc b/components/search_engines/template_url_fetcher.cc
 --- a/components/search_engines/template_url_fetcher.cc
 +++ b/components/search_engines/template_url_fetcher.cc
-@@ -260,14 +260,25 @@ void TemplateURLFetcher::ScheduleDownload(
+@@ -258,16 +258,29 @@ void TemplateURLFetcher::ScheduleDownload(
+     return;
+   }
  
-   const TemplateURL* template_url =
+-  const TemplateURL* template_url =
++  TemplateURL* template_url =
        template_url_service_->GetTemplateURLForKeyword(keyword);
 -  if (template_url && (!template_url->safe_for_autoreplace() ||
 -                       template_url->originating_url() == osdd_url))
@@ -168,6 +173,8 @@ diff --git a/components/search_engines/template_url_fetcher.cc b/components/sear
 +      // Either there is a user created TemplateURL for this keyword, or the
 +      // keyword has the same OSDD url and we've parsed it.
 +      LOG(INFO) << "OpenSearch: OSDD URL was already parsed: " << osdd_url;
++      // always update the visit timestamp
++      template_url_service_->UpdateTemplateURLVisitTime(template_url);
 +      return;
 +    }
 +  }
@@ -192,6 +199,31 @@ diff --git a/components/search_engines/template_url_service.cc b/components/sear
 -
    return Add(std::move(template_url), true);
  }
+ 
+diff --git a/components/search_engines/template_url_service.h b/components/search_engines/template_url_service.h
+--- a/components/search_engines/template_url_service.h
++++ b/components/search_engines/template_url_service.h
+@@ -277,7 +277,10 @@ class TemplateURLService : public WebDataServiceConsumer,
+   void UpdateProviderFavicons(const GURL& potential_search_url,
+                               const GURL& favicon_url);
+ 
+-  // Return true if the given |url| can be made the default. This returns false
++   // Updates the last_visited time of |url| to the current time.
++  void UpdateTemplateURLVisitTime(TemplateURL* url);
++
++ // Return true if the given |url| can be made the default. This returns false
+   // regardless of |url| if the default search provider is managed by policy or
+   // controlled by an extension.
+   bool CanMakeDefault(const TemplateURL* url) const;
+@@ -598,9 +601,6 @@ class TemplateURLService : public WebDataServiceConsumer,
+   // SetKeywordSearchTermsForURL is invoked.
+   void UpdateKeywordSearchTermsForURL(const URLVisitedDetails& details);
+ 
+-  // Updates the last_visited time of |url| to the current time.
+-  void UpdateTemplateURLVisitTime(TemplateURL* url);
+-
+   // If necessary, generates a visit for the site http:// + t_url.keyword().
+   void AddTabToSearchVisit(const TemplateURL& t_url);
  
 --
 2.25.1

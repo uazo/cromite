@@ -5,10 +5,9 @@ Subject: Add bookmark import/export actions
 Add bookmark import/export actions in bookmarks activity and page
 Reduce permissions needed for bookmarks import/export
 Completely remove contacts picker permission from the file dialog
+
+Need: Adds-support-for-writing-URIs.patch
 ---
- base/android/content_uri_utils.cc             |  10 +
- base/android/content_uri_utils.h              |   4 +
- .../org/chromium/base/ContentUriUtils.java    |  33 ++
  chrome/android/java/AndroidManifest.xml       |   1 -
  .../res/menu/bookmark_action_bar_menu.xml     |  14 +
  .../browser/TabbedModeTabDelegateFactory.java |   5 +-
@@ -44,92 +43,8 @@ Completely remove contacts picker permission from the file dialog
  ui/shell_dialogs/select_file_dialog.h         |   2 +
  .../select_file_dialog_android.cc             |   6 +
  ui/shell_dialogs/select_file_dialog_android.h |   2 +
- 38 files changed, 893 insertions(+), 29 deletions(-)
+ 35 files changed, 846 insertions(+), 29 deletions(-)
 
-diff --git a/base/android/content_uri_utils.cc b/base/android/content_uri_utils.cc
---- a/base/android/content_uri_utils.cc
-+++ b/base/android/content_uri_utils.cc
-@@ -30,6 +30,16 @@ File OpenContentUriForRead(const FilePath& content_uri) {
-   return File(fd);
- }
- 
-+File OpenContentUriForWrite(const FilePath& content_uri) {
-+  JNIEnv* env = base::android::AttachCurrentThread();
-+  ScopedJavaLocalRef<jstring> j_uri =
-+      ConvertUTF8ToJavaString(env, content_uri.value());
-+  jint fd = Java_ContentUriUtils_openContentUriForWrite(env, j_uri);
-+  if (fd < 0)
-+    return File();
-+  return File(fd);
-+}
-+
- std::string GetContentUriMimeType(const FilePath& content_uri) {
-   JNIEnv* env = base::android::AttachCurrentThread();
-   ScopedJavaLocalRef<jstring> j_uri =
-diff --git a/base/android/content_uri_utils.h b/base/android/content_uri_utils.h
---- a/base/android/content_uri_utils.h
-+++ b/base/android/content_uri_utils.h
-@@ -18,6 +18,10 @@ namespace base {
- // Returns -1 if the URI is invalid.
- BASE_EXPORT File OpenContentUriForRead(const FilePath& content_uri);
- 
-+// Opens a content URI for write and returns the file descriptor to the caller.
-+// Returns -1 if the URI is invalid.
-+BASE_EXPORT File OpenContentUriForWrite(const FilePath& content_uri);
-+
- // Check whether a content URI exists.
- BASE_EXPORT bool ContentUriExists(const FilePath& content_uri);
- 
-diff --git a/base/android/java/src/org/chromium/base/ContentUriUtils.java b/base/android/java/src/org/chromium/base/ContentUriUtils.java
---- a/base/android/java/src/org/chromium/base/ContentUriUtils.java
-+++ b/base/android/java/src/org/chromium/base/ContentUriUtils.java
-@@ -23,6 +23,9 @@ import org.chromium.base.annotations.CalledByNative;
- import java.io.File;
- import java.io.IOException;
- 
-+import android.system.Os;
-+import android.content.ContentProviderClient;
-+
- /**
-  * This class provides methods to access content URI schemes.
-  */
-@@ -89,6 +92,36 @@ public abstract class ContentUriUtils {
-         return -1;
-     }
- 
-+    @CalledByNative
-+    public static int openContentUriForWrite(String uriString) {
-+        try {
-+            Uri uri = Uri.parse(uriString);
-+            ContentResolver resolver = ContextUtils.getApplicationContext().getContentResolver();
-+            ContentProviderClient client = resolver.acquireContentProviderClient(
-+                                            uri.getAuthority());
-+            ParcelFileDescriptor pfd = client.openFile(uri, "rw");
-+            int fd = pfd.detachFd();
-+            client.close();
-+            return fd;
-+        } catch (Exception e) {
-+            Log.e(TAG, "Cannot open intermediate URI", e);
-+        }
-+        return -1;
-+    }
-+
-+    public static String getFilePathFromContentUri(Uri uri) {
-+        String path = null;
-+        try {
-+            ContentResolver resolver = ContextUtils.getApplicationContext().getContentResolver();
-+            ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r");
-+            path = Os.readlink("/proc/self/fd/" + pfd.getFd());
-+            pfd.close();
-+        } catch (Exception e) {
-+            Log.w(TAG, "Cannot get file path from content URI", e);
-+        }
-+        return path;
-+    }
-+
-     /**
-      * Check whether a content URI exists.
-      *
 diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
 --- a/chrome/android/java/AndroidManifest.xml
 +++ b/chrome/android/java/AndroidManifest.xml
