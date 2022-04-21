@@ -12,14 +12,14 @@ Disable seed-based field trials
  .../firstrun/VariationsSeedFetcher.java       | 23 ++++---------------
  .../variations/net/omnibox_http_headers.cc    |  2 +-
  .../variations/net/variations_http_headers.cc |  3 +++
- .../service/variations_field_trial_creator.cc | 18 +++------------
+ .../service/variations_field_trial_creator.cc | 14 +++--------
  .../variations/service/variations_service.cc  | 15 +++---------
- 10 files changed, 20 insertions(+), 52 deletions(-)
+ 10 files changed, 20 insertions(+), 48 deletions(-)
 
 diff --git a/android_webview/nonembedded/BUILD.gn b/android_webview/nonembedded/BUILD.gn
 --- a/android_webview/nonembedded/BUILD.gn
 +++ b/android_webview/nonembedded/BUILD.gn
-@@ -100,7 +100,6 @@ android_library("services_java") {
+@@ -101,7 +101,6 @@ android_library("services_java") {
    sources = [
      "java/src/org/chromium/android_webview/services/AwMinidumpUploadJobService.java",
      "java/src/org/chromium/android_webview/services/AwMinidumpUploaderDelegate.java",
@@ -27,7 +27,7 @@ diff --git a/android_webview/nonembedded/BUILD.gn b/android_webview/nonembedded/
      "java/src/org/chromium/android_webview/services/ComponentUpdaterSafeModeUtils.java",
      "java/src/org/chromium/android_webview/services/ComponentsProviderPathUtil.java",
      "java/src/org/chromium/android_webview/services/ComponentsProviderService.java",
-@@ -111,7 +110,6 @@ android_library("services_java") {
+@@ -112,7 +111,6 @@ android_library("services_java") {
      "java/src/org/chromium/android_webview/services/MetricsUploadService.java",
      "java/src/org/chromium/android_webview/services/SafeModeContentProvider.java",
      "java/src/org/chromium/android_webview/services/SafeModeService.java",
@@ -87,7 +87,7 @@ diff --git a/components/variations/android/java/src/org/chromium/components/vari
 diff --git a/components/variations/android/java/src/org/chromium/components/variations/firstrun/VariationsSeedFetcher.java b/components/variations/android/java/src/org/chromium/components/variations/firstrun/VariationsSeedFetcher.java
 --- a/components/variations/android/java/src/org/chromium/components/variations/firstrun/VariationsSeedFetcher.java
 +++ b/components/variations/android/java/src/org/chromium/components/variations/firstrun/VariationsSeedFetcher.java
-@@ -70,7 +70,7 @@ public class VariationsSeedFetcher {
+@@ -75,7 +75,7 @@ public class VariationsSeedFetcher {
      }
  
      private static final String VARIATIONS_SERVER_URL =
@@ -96,7 +96,7 @@ diff --git a/components/variations/android/java/src/org/chromium/components/vari
  
      private static final int READ_TIMEOUT = 3000; // time in ms
      private static final int REQUEST_TIMEOUT = 1000; // time in ms
-@@ -209,24 +209,9 @@ public class VariationsSeedFetcher {
+@@ -273,24 +273,9 @@ public class VariationsSeedFetcher {
          assert !ThreadUtils.runningOnUiThread();
          // Prevent multiple simultaneous fetches
          synchronized (sLock) {
@@ -112,8 +112,8 @@ diff --git a/components/variations/android/java/src/org/chromium/components/vari
 -            }
 +            VariationsSeedBridge.clearFirstRunPrefs();
  
--            SeedFetchInfo fetchInfo =
--                    downloadContent(VariationsPlatform.ANDROID, restrictMode, milestone, channel);
+-            SeedFetchInfo fetchInfo = downloadContent(
+-                    VariationsPlatform.ANDROID, restrictMode, milestone, channel, null);
 -            if (fetchInfo.seedInfo != null) {
 -                SeedInfo info = fetchInfo.seedInfo;
 -                VariationsSeedBridge.setVariationsFirstRunSeed(info.seedData, info.signature,
@@ -123,13 +123,13 @@ diff --git a/components/variations/android/java/src/org/chromium/components/vari
              // VARIATIONS_INITIALIZED_PREF should still be set to true when exceptions occur
              prefs.edit().putBoolean(VARIATIONS_INITIALIZED_PREF, true).apply();
          }
-@@ -255,7 +240,7 @@ public class VariationsSeedFetcher {
-      * @param channel the channel parameter to pass to the server via a URL param.
+@@ -320,7 +305,7 @@ public class VariationsSeedFetcher {
+      * @param curSeedInfo optional currently saved seed info to set the `If-None-Match` header.
       * @return the object holds the request result and seed data with its related header fields.
       */
 -    public SeedFetchInfo downloadContent(@VariationsPlatform int platform, String restrictMode,
 +    private SeedFetchInfo downloadContent(@VariationsPlatform int platform, String restrictMode,
-             String milestone, String channel) {
+             String milestone, String channel, @Nullable SeedInfo curSeedInfo) {
          SeedFetchInfo fetchInfo = new SeedFetchInfo();
          HttpURLConnection connection = null;
 diff --git a/components/variations/net/omnibox_http_headers.cc b/components/variations/net/omnibox_http_headers.cc
@@ -160,12 +160,11 @@ diff --git a/components/variations/net/variations_http_headers.cc b/components/v
 diff --git a/components/variations/service/variations_field_trial_creator.cc b/components/variations/service/variations_field_trial_creator.cc
 --- a/components/variations/service/variations_field_trial_creator.cc
 +++ b/components/variations/service/variations_field_trial_creator.cc
-@@ -158,20 +158,6 @@ Study::CpuArchitecture GetCurrentCpuArchitecture() {
+@@ -159,16 +159,6 @@ Study::CpuArchitecture GetCurrentCpuArchitecture() {
  // "--variations-server-url" switches are passed. It is however possible to
  // apply the testing config as well as specify additional field trials (using
  // "--force-fieldtrials") by using the "--enable-field-trial-config" switch.
 -bool ShouldUseFieldTrialTestingConfig(const base::CommandLine* command_line) {
--#if BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
 -#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
 -  return command_line->HasSwitch(switches::kEnableFieldTrialTestingConfig);
 -#else
@@ -174,25 +173,23 @@ diff --git a/components/variations/service/variations_field_trial_creator.cc b/c
 -          !command_line->HasSwitch(::switches::kForceFieldTrials) &&
 -          !command_line->HasSwitch(switches::kVariationsServerURL));
 -#endif  // BUILDFLAG(GOOGLE_CHROME_BRANDING)
--#else
--  return false;
--#endif  // BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
 -}
+ #endif  // BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
  
  }  // namespace
- 
-@@ -273,17 +259,19 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
+@@ -271,6 +261,8 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
    // instance is set.
    feature_list->RegisterExtraFeatureOverrides(extra_overrides);
  
 +  bool used_seed = false;
 +#if defined(FIELDTRIAL_SEED_ENABLED)
    bool used_testing_config = false;
+ #if BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
    if (ShouldUseFieldTrialTestingConfig(command_line)) {
-     ApplyFieldTrialTestingConfig(feature_list.get());
-     used_testing_config = true;
+@@ -285,11 +277,11 @@ bool VariationsFieldTrialCreator::SetUpFieldTrials(
+                            switches::kEnableFieldTrialTestingConfig));
    }
- 
+ #endif  // BUILDFLAG(FIELDTRIAL_TESTING_ENABLED)
 -  bool used_seed = false;
    if (!used_testing_config) {
      used_seed = CreateTrialsFromSeed(low_entropy_provider.get(),
@@ -205,7 +202,7 @@ diff --git a/components/variations/service/variations_field_trial_creator.cc b/c
 diff --git a/components/variations/service/variations_service.cc b/components/variations/service/variations_service.cc
 --- a/components/variations/service/variations_service.cc
 +++ b/components/variations/service/variations_service.cc
-@@ -234,17 +234,8 @@ bool GetInstanceManipulations(const net::HttpResponseHeaders* headers,
+@@ -235,17 +235,8 @@ bool GetInstanceManipulations(const net::HttpResponseHeaders* headers,
  // Variations seed fetching is only enabled in official Chrome builds, if a URL
  // is specified on the command line, and for testing.
  bool IsFetchingEnabled() {
@@ -225,7 +222,7 @@ diff --git a/components/variations/service/variations_service.cc b/components/va
  }
  
  std::unique_ptr<SeedResponse> MaybeImportFirstRunSeed(
-@@ -602,7 +593,7 @@ bool VariationsService::DoFetchFromURL(const GURL& url, bool is_http_retry) {
+@@ -603,7 +594,7 @@ bool VariationsService::DoFetchFromURL(const GURL& url, bool is_http_retry) {
    // debugger or if the machine was suspended) and OnURLFetchComplete() hasn't
    // had a chance to run yet from the previous request. In this case, don't
    // start a new request and just let the previous one finish.

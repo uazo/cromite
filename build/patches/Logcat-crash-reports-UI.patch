@@ -16,12 +16,12 @@ Subject: Logcat crash reports UI
  .../crash/core/browser/resources/crashes.js   |  40 +++--
  components/crash_strings.grdp                 |  22 ++-
  .../minidump_uploader/CrashFileManager.java   |   7 +-
- .../MinidumpUploadCallable.java               |  20 +--
+ .../MinidumpUploadCallable.java               |  21 +--
  .../minidump_uploader/MinidumpUploader.java   |  29 +--
  .../upload_list/text_log_upload_list.cc       |   1 +
  components/upload_list/upload_list.cc         |  17 +-
  components/upload_list/upload_list.h          |   9 +
- 18 files changed, 374 insertions(+), 80 deletions(-)
+ 18 files changed, 374 insertions(+), 81 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
@@ -155,7 +155,7 @@ diff --git a/chrome/browser/net/chrome_network_delegate.cc b/chrome/browser/net/
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -620,6 +620,7 @@ static_library("ui") {
+@@ -622,6 +622,7 @@ static_library("ui") {
      "//third_party/re2",
      "//third_party/webrtc_overrides:webrtc_component",
      "//third_party/zlib",
@@ -206,16 +206,16 @@ diff --git a/chrome/browser/ui/webui/crashes_ui.cc b/chrome/browser/ui/webui/cra
    CrashesDOMHandler& operator=(const CrashesDOMHandler&) = delete;
 @@ -99,6 +114,8 @@ class CrashesDOMHandler : public WebUIMessageHandler {
    // Asynchronously fetches the list of crashes. Called from JS.
-   void HandleRequestCrashes(base::Value::ConstListView args);
+   void HandleRequestCrashes(const base::Value::List& args);
  
 +  void RequestCrashesList();
 +
  #if BUILDFLAG(IS_CHROMEOS_ASH)
    // Asynchronously triggers crash uploading. Called from JS.
-   void HandleRequestUploads(base::Value::ConstListView args);
+   void HandleRequestUploads(const base::Value::List& args);
 @@ -110,13 +127,26 @@ class CrashesDOMHandler : public WebUIMessageHandler {
    // Asynchronously requests a user triggered upload. Called from JS.
-   void HandleRequestSingleCrashUpload(base::Value::ConstListView args);
+   void HandleRequestSingleCrashUpload(const base::Value::List& args);
  
 +  std::string RequestSingleUpload(const std::string& local_id) const;
 +  void RequestSingleUploadCallback(const std::string& local_id, const std::string& filename);
@@ -258,7 +258,7 @@ diff --git a/chrome/browser/ui/webui/crashes_ui.cc b/chrome/browser/ui/webui/cra
 +                          base::Unretained(this)));
  }
  
- void CrashesDOMHandler::HandleRequestCrashes(base::Value::ConstListView args) {
+ void CrashesDOMHandler::HandleRequestCrashes(const base::Value::List& args) {
    AllowJavascript();
 +  RequestCrashesList();
 +}
@@ -280,7 +280,7 @@ diff --git a/chrome/browser/ui/webui/crashes_ui.cc b/chrome/browser/ui/webui/cra
 @@ -236,14 +279,112 @@ void CrashesDOMHandler::UpdateUI() {
  
  void CrashesDOMHandler::HandleRequestSingleCrashUpload(
-     base::Value::ConstListView args) {
+     const base::Value::List& args) {
 -  // Only allow manual uploads if crash uploads aren’t disabled by policy.
 -  if (!ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled() &&
 -      IsMetricsReportingPolicyManaged()) {
@@ -409,7 +409,7 @@ diff --git a/chrome/browser/ui/webui/crashes_ui.cc b/chrome/browser/ui/webui/cra
 diff --git a/components/crash/core/browser/crashes_ui_util.cc b/components/crash/core/browser/crashes_ui_util.cc
 --- a/components/crash/core/browser/crashes_ui_util.cc
 +++ b/components/crash/core/browser/crashes_ui_util.cc
-@@ -40,6 +40,8 @@ const CrashesUILocalizedString kCrashesUILocalizedStrings[] = {
+@@ -39,6 +39,8 @@ const CrashesUILocalizedString kCrashesUILocalizedStrings[] = {
      {"uploadId", IDS_CRASH_REPORT_UPLOADED_ID},
      {"uploadNowLinkText", IDS_CRASH_UPLOAD_NOW_LINK_TEXT},
      {"uploadTime", IDS_CRASH_REPORT_UPLOADED_TIME},
@@ -418,7 +418,7 @@ diff --git a/components/crash/core/browser/crashes_ui_util.cc b/components/crash
  };
  
  const size_t kCrashesUILocalizedStringsCount =
-@@ -53,6 +55,8 @@ const char kCrashesUIRequestCrashUpload[] = "requestCrashUpload";
+@@ -52,6 +54,8 @@ const char kCrashesUIRequestCrashUpload[] = "requestCrashUpload";
  const char kCrashesUIShortProductName[] = "shortProductName";
  const char kCrashesUIUpdateCrashList[] = "update-crash-list";
  const char kCrashesUIRequestSingleCrashUpload[] = "requestSingleCrashUpload";
@@ -720,13 +720,14 @@ diff --git a/components/minidump_uploader/android/java/src/org/chromium/componen
 diff --git a/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploadCallable.java b/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploadCallable.java
 --- a/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploadCallable.java
 +++ b/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploadCallable.java
-@@ -63,26 +63,8 @@ public class MinidumpUploadCallable implements Callable<Integer> {
+@@ -63,27 +63,8 @@ public class MinidumpUploadCallable implements Callable<Integer> {
          if (mPermManager.isUploadEnabledForTests()) {
              Log.i(TAG, "Minidump upload enabled for tests, skipping other checks.");
          } else if (!CrashFileManager.isForcedUpload(mFileToUpload)) {
--            if (!mPermManager.isUsageAndCrashReportingPermittedByUser()) {
--                Log.i(TAG, "Minidump upload is not permitted by user. Marking file as skipped for "
--                                + "cleanup to prevent future uploads.");
+-            if (!mPermManager.isUsageAndCrashReportingPermitted()) {
+-                Log.i(TAG,
+-                        "Minidump upload is not permitted. Marking file as skipped "
+-                                + "for cleanup to prevent future uploads.");
 -                CrashFileManager.markUploadSkipped(mFileToUpload);
 -                return MinidumpUploadStatus.USER_DISABLED;
 -            }

@@ -7,16 +7,16 @@ Permanently removes FLoC support, disabling the download of LSH clusters,
 the marking the history navigation and the javascript API and permission policies.
 Also added the disabling of blink features through the DisabledForBromite tag
 ---
- .../java/res/xml/privacy_preferences.xml      |  4 --
- .../privacy/settings/PrivacySettings.java     | 16 ------
- .../browser/chrome_content_browser_client.cc  |  3 ++
+ .../java/res/xml/privacy_preferences.xml      |  4 ----
+ .../privacy/settings/PrivacySettings.java     | 22 -----------------
+ .../browser/chrome_content_browser_client.cc  |  3 +++
  .../privacy_sandbox/generated_floc_pref.cc    |  2 +-
- .../history/core/browser/history_backend.cc   | 13 +----
+ .../history/core/browser/history_backend.cc   | 13 +---------
  .../history/core/browser/history_service.cc   |  2 +-
- .../privacy_sandbox/privacy_sandbox_prefs.cc  |  4 +-
- .../privacy_sandbox_settings.cc               | 51 +++++--------------
+ .../privacy_sandbox/privacy_sandbox_prefs.cc  |  4 ++--
+ .../privacy_sandbox_settings.cc               | 24 ++++++++++++++-----
  .../privacy_sandbox_settings.h                |  1 -
- 9 files changed, 21 insertions(+), 75 deletions(-)
+ 9 files changed, 26 insertions(+), 49 deletions(-)
 
 diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
 --- a/chrome/android/java/res/xml/privacy_preferences.xml
@@ -35,7 +35,7 @@ diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/androi
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-@@ -73,7 +73,6 @@ public class PrivacySettings
+@@ -74,7 +74,6 @@ public class PrivacySettings
      private static final String PREF_SECURE_DNS = "secure_dns";
      private static final String PREF_DO_NOT_TRACK = "do_not_track";
      private static final String PREF_CLEAR_BROWSING_DATA = "clear_browsing_data";
@@ -43,23 +43,29 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
      private static final String PREF_PRIVACY_REVIEW = "privacy_review";
      private static final String PREF_INCOGNITO_LOCK = "incognito_lock";
      private static final String PREF_PHONE_AS_A_SECURITY_KEY = "phone_as_a_security_key";
-@@ -103,15 +102,6 @@ public class PrivacySettings
+@@ -104,21 +103,6 @@ public class PrivacySettings
          SettingsUtils.addPreferencesFromResource(this, R.xml.privacy_preferences);
          getActivity().setTitle(R.string.prefs_privacy_security);
  
 -        Preference sandboxPreference = findPreference(PREF_PRIVACY_SANDBOX);
--        sandboxPreference.setSummary(PrivacySandboxSettingsFragment.getStatusString(getContext()));
--        // Overwrite the click listener to pass a correct referrer to the fragment.
--        sandboxPreference.setOnPreferenceClickListener(preference -> {
--            PrivacySandboxSettingsFragmentV3.launchPrivacySandboxSettings(getContext(),
--                    new SettingsLauncherImpl(), PrivacySandboxReferrer.PRIVACY_SETTINGS);
--            return true;
--        });
+-        // Hide the Privacy Sandbox if it is restricted.
+-        if (PrivacySandboxBridge.isPrivacySandboxRestricted()) {
+-            getPreferenceScreen().removePreference(sandboxPreference);
+-        } else {
+-            sandboxPreference.setSummary(
+-                    PrivacySandboxSettingsFragment.getStatusString(getContext()));
+-            // Overwrite the click listener to pass a correct referrer to the fragment.
+-            sandboxPreference.setOnPreferenceClickListener(preference -> {
+-                PrivacySandboxSettingsFragmentV3.launchPrivacySandboxSettings(getContext(),
+-                        new SettingsLauncherImpl(), PrivacySandboxReferrer.PRIVACY_SETTINGS);
+-                return true;
+-            });
+-        }
 -
          Preference privacyReviewPreference = findPreference(PREF_PRIVACY_REVIEW);
          if (!ChromeFeatureList.isEnabled(ChromeFeatureList.PRIVACY_REVIEW)) {
              getPreferenceScreen().removePreference(privacyReviewPreference);
-@@ -284,12 +274,6 @@ public class PrivacySettings
+@@ -291,12 +275,6 @@ public class PrivacySettings
              secureDnsPref.setSummary(SecureDnsSettings.getSummary(getContext()));
          }
  
@@ -75,7 +81,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -2808,6 +2808,9 @@ bool ChromeContentBrowserClient::IsConversionMeasurementOperationAllowed(
+@@ -2829,6 +2829,9 @@ bool ChromeContentBrowserClient::IsConversionMeasurementOperationAllowed(
      const url::Origin* impression_origin,
      const url::Origin* conversion_origin,
      const url::Origin* reporting_origin) {
@@ -84,7 +90,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
 +    return false;
    Profile* profile = Profile::FromBrowserContext(browser_context);
  
-   PrivacySandboxSettings* privacy_sandbox_settings =
+   auto* privacy_sandbox_settings =
 diff --git a/chrome/browser/privacy_sandbox/generated_floc_pref.cc b/chrome/browser/privacy_sandbox/generated_floc_pref.cc
 --- a/chrome/browser/privacy_sandbox/generated_floc_pref.cc
 +++ b/chrome/browser/privacy_sandbox/generated_floc_pref.cc
@@ -100,7 +106,7 @@ diff --git a/chrome/browser/privacy_sandbox/generated_floc_pref.cc b/chrome/brow
 diff --git a/components/history/core/browser/history_backend.cc b/components/history/core/browser/history_backend.cc
 --- a/components/history/core/browser/history_backend.cc
 +++ b/components/history/core/browser/history_backend.cc
-@@ -495,18 +495,7 @@ void HistoryBackend::SetBrowsingTopicsAllowed(ContextID context_id,
+@@ -496,18 +496,7 @@ void HistoryBackend::SetBrowsingTopicsAllowed(ContextID context_id,
    if (!visit_id)
      return;
  
@@ -123,7 +129,7 @@ diff --git a/components/history/core/browser/history_backend.cc b/components/his
 diff --git a/components/history/core/browser/history_service.cc b/components/history/core/browser/history_service.cc
 --- a/components/history/core/browser/history_service.cc
 +++ b/components/history/core/browser/history_service.cc
-@@ -392,7 +392,7 @@ void HistoryService::AddPage(const GURL& url,
+@@ -393,7 +393,7 @@ void HistoryService::AddPage(const GURL& url,
    AddPage(HistoryAddPageArgs(
        url, time, context_id, nav_entry_id, referrer, redirects, transition,
        !ui::PageTransitionIsMainFrame(transition), visit_source,
@@ -135,7 +141,7 @@ diff --git a/components/history/core/browser/history_service.cc b/components/his
 diff --git a/components/privacy_sandbox/privacy_sandbox_prefs.cc b/components/privacy_sandbox/privacy_sandbox_prefs.cc
 --- a/components/privacy_sandbox/privacy_sandbox_prefs.cc
 +++ b/components/privacy_sandbox/privacy_sandbox_prefs.cc
-@@ -48,7 +48,7 @@ namespace privacy_sandbox {
+@@ -71,7 +71,7 @@ namespace privacy_sandbox {
  
  void RegisterProfilePrefs(PrefRegistrySimple* registry) {
    registry->RegisterBooleanPref(
@@ -143,22 +149,22 @@ diff --git a/components/privacy_sandbox/privacy_sandbox_prefs.cc b/components/pr
 +      prefs::kPrivacySandboxApisEnabled, false,
        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
    registry->RegisterBooleanPref(prefs::kPrivacySandboxApisEnabledV2, false);
-   registry->RegisterBooleanPref(
-@@ -60,7 +60,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-   registry->RegisterTimePref(prefs::kPrivacySandboxFlocDataAccessibleSince,
+   registry->RegisterBooleanPref(prefs::kPrivacySandboxApisEnabledV2Init, false);
+@@ -88,7 +88,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
+   registry->RegisterTimePref(prefs::kPrivacySandboxTopicsDataAccessibleSince,
                               base::Time());
    registry->RegisterBooleanPref(
 -      prefs::kPrivacySandboxFlocEnabled, true,
 +      prefs::kPrivacySandboxFlocEnabled, false,
        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+   registry->RegisterListPref(prefs::kPrivacySandboxBlockedTopics);
    registry->RegisterDictionaryPref(prefs::kPrivacySandboxFledgeJoinBlocked);
-   registry->RegisterBooleanPref(prefs::kPrivacySandboxNoticeDisplayed, false);
 diff --git a/components/privacy_sandbox/privacy_sandbox_settings.cc b/components/privacy_sandbox/privacy_sandbox_settings.cc
 --- a/components/privacy_sandbox/privacy_sandbox_settings.cc
 +++ b/components/privacy_sandbox/privacy_sandbox_settings.cc
-@@ -82,8 +82,7 @@ PrivacySandboxSettings::PrivacySandboxSettings(
-     bool incognito_profile)
-     : host_content_settings_map_(host_content_settings_map),
+@@ -67,8 +67,7 @@ PrivacySandboxSettings::PrivacySandboxSettings(
+     : delegate_(std::move(delegate)),
+       host_content_settings_map_(host_content_settings_map),
        cookie_settings_(cookie_settings),
 -      pref_service_(pref_service),
 -      incognito_profile_(incognito_profile) {
@@ -166,98 +172,110 @@ diff --git a/components/privacy_sandbox/privacy_sandbox_settings.cc b/components
    DCHECK(pref_service_);
    DCHECK(host_content_settings_map_);
    DCHECK(cookie_settings_);
-@@ -104,22 +103,13 @@ PrivacySandboxSettings::PrivacySandboxSettings(
+@@ -89,6 +88,7 @@ PrivacySandboxSettings::PrivacySandboxSettings(
  PrivacySandboxSettings::~PrivacySandboxSettings() = default;
  
- bool PrivacySandboxSettings::IsFlocAllowed() const {
--  return pref_service_->GetBoolean(prefs::kPrivacySandboxFlocEnabled) &&
--         IsPrivacySandboxEnabled();
-+  return false;
- }
- 
- bool PrivacySandboxSettings::IsFlocAllowedForContext(
+ bool PrivacySandboxSettings::IsTopicsAllowed() const {
++  if ((true)) return false;
+   // Topics API calculation should be prevented if the user has blocked 3PC
+   // cookies, as there will be no context specific check.
+   const auto cookie_controls_mode =
+@@ -107,6 +107,7 @@ bool PrivacySandboxSettings::IsTopicsAllowed() const {
+ bool PrivacySandboxSettings::IsTopicsAllowedForContext(
      const GURL& url,
      const absl::optional<url::Origin>& top_frame_origin) const {
--  // If FLoC is disabled completely, it is not available in any context.
--  if (!IsFlocAllowed())
--    return false;
--
--  ContentSettingsForOneType cookie_settings;
--  cookie_settings_->GetCookieSettings(&cookie_settings);
--
--  return IsPrivacySandboxEnabledForContext(url, top_frame_origin,
--                                           cookie_settings);
-+  return false;
++  if ((true)) return false;
+   // If the Topics API is disabled completely, it is not available in any
+   // context.
+   if (!IsTopicsAllowed())
+@@ -120,6 +121,7 @@ bool PrivacySandboxSettings::IsTopicsAllowedForContext(
  }
  
- base::Time PrivacySandboxSettings::FlocDataAccessibleSince() const {
-@@ -128,11 +118,8 @@ base::Time PrivacySandboxSettings::FlocDataAccessibleSince() const {
+ bool PrivacySandboxSettings::IsTopicAllowed(const CanonicalTopic& topic) {
++  if ((true)) return false;
+   auto* blocked_topics =
+       pref_service_->GetList(prefs::kPrivacySandboxBlockedTopics);
  
- void PrivacySandboxSettings::SetFlocDataAccessibleFromNow(
-     bool reset_calculate_timer) const {
--  pref_service_->SetTime(prefs::kPrivacySandboxFlocDataAccessibleSince,
--                         base::Time::Now());
--
--  for (auto& observer : observers_)
--    observer.OnFlocDataAccessibleSinceUpdated(reset_calculate_timer);
-+  // don't tell anyone, thanks.
-+  pref_service_->ClearPref(prefs::kPrivacySandboxFlocDataAccessibleSince);
- }
+@@ -137,6 +139,7 @@ bool PrivacySandboxSettings::IsTopicAllowed(const CanonicalTopic& topic) {
  
- bool PrivacySandboxSettings::IsConversionMeasurementAllowed(
-@@ -262,6 +249,8 @@ bool PrivacySandboxSettings::IsFledgeJoiningAllowed(
+ void PrivacySandboxSettings::SetTopicAllowed(const CanonicalTopic& topic,
+                                              bool allowed) {
++  if ((true)) return;
+   ListPrefUpdate scoped_pref_update(pref_service_,
+                                     prefs::kPrivacySandboxBlockedTopics);
+ 
+@@ -199,6 +202,7 @@ bool PrivacySandboxSettings::ShouldSendConversionReport(
+     const url::Origin& impression_origin,
+     const url::Origin& conversion_origin,
+     const url::Origin& reporting_origin) const {
++  if ((true)) return false;
+   // Re-using the |cookie_settings| allows this function to be faster
+   // than simply calling IsConversionMeasurementAllowed() twice
+   ContentSettingsForOneType cookie_settings;
+@@ -217,6 +221,7 @@ bool PrivacySandboxSettings::ShouldSendConversionReport(
+ void PrivacySandboxSettings::SetFledgeJoiningAllowed(
+     const std::string& top_frame_etld_plus1,
+     bool allowed) {
++  if ((true)) allowed = false;
+   DictionaryPrefUpdate scoped_pref_update(
+       pref_service_, prefs::kPrivacySandboxFledgeJoinBlocked);
+   auto* pref_data = scoped_pref_update.Get();
+@@ -292,6 +297,7 @@ void PrivacySandboxSettings::ClearFledgeJoiningAllowedSettings(
+ 
+ bool PrivacySandboxSettings::IsFledgeJoiningAllowed(
+     const url::Origin& top_frame_origin) const {
++  if ((true)) return false;
+   DictionaryPrefUpdate scoped_pref_update(
+       pref_service_, prefs::kPrivacySandboxFledgeJoinBlocked);
+   auto* pref_data = scoped_pref_update.Get();
+@@ -312,6 +318,8 @@ bool PrivacySandboxSettings::IsFledgeJoiningAllowed(
  bool PrivacySandboxSettings::IsFledgeAllowed(
      const url::Origin& top_frame_origin,
      const url::Origin& auction_party) {
 +  if ((true))
 +    return false;
-   // If the sandbox is disabled, then FLEDGE is never allowed.
-   if (!IsPrivacySandboxEnabled())
-     return false;
-@@ -290,30 +279,17 @@ std::vector<GURL> PrivacySandboxSettings::FilterFledgeAllowedParties(
+   ContentSettingsForOneType cookie_settings;
+   cookie_settings_->GetCookieSettings(&cookie_settings);
+   return IsPrivacySandboxEnabledForContext(auction_party.GetURL(),
+@@ -339,6 +347,7 @@ std::vector<GURL> PrivacySandboxSettings::FilterFledgeAllowedParties(
  }
  
  bool PrivacySandboxSettings::IsPrivacySandboxEnabled() const {
--  // Which preference is consulted is dependent on whether release 3 of the
--  // settings is available.
--  if (base::FeatureList::IsEnabled(privacy_sandbox::kPrivacySandboxSettings3)) {
--    // For Privacy Sandbox Settings 3, APIs are disabled in incognito.
--    if (incognito_profile_)
--      return false;
--
--    // The V2 pref was introduced with the 3rd Privacy Sandbox release.
--    return pref_service_->GetBoolean(prefs::kPrivacySandboxApisEnabledV2);
--  }
--
--  return pref_service_->GetBoolean(prefs::kPrivacySandboxApisEnabled);
-+  return false;
++  if ((true)) return false;
+   // If the delegate is restricting access, or indicates confirmation has not
+   // occurred, the Privacy Sandbox is disabled.
+   if (delegate_->IsPrivacySandboxRestricted() ||
+@@ -375,6 +384,8 @@ bool PrivacySandboxSettings::IsPrivacySandboxEnabled() const {
  }
  
  void PrivacySandboxSettings::SetPrivacySandboxEnabled(bool enabled) {
-   pref_service_->SetBoolean(prefs::kPrivacySandboxManuallyControlled, true);
- 
--  // Only apply the decision to the appropriate preference. Confirmation logic
--  // DCHECKS that the user has not been able to enable the V2 preference
--  // without seeing a dialog.
 +  // in Bromite never enable the privacy sandbox
++  enabled = false;
+   // Only apply the decision to the appropriate preference.
    if (base::FeatureList::IsEnabled(privacy_sandbox::kPrivacySandboxSettings3)) {
--    pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabledV2, enabled);
-+    pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabledV2, false);
-   } else {
--    pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabled, enabled);
-+    pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabled, false);
-   }
+     pref_service_->SetBoolean(prefs::kPrivacySandboxApisEnabledV2, enabled);
+@@ -384,6 +395,7 @@ void PrivacySandboxSettings::SetPrivacySandboxEnabled(bool enabled) {
  }
  
-@@ -327,7 +303,6 @@ bool PrivacySandboxSettings::IsTrustTokensAllowed() {
+ bool PrivacySandboxSettings::IsTrustTokensAllowed() {
++  if ((true)) return false;
+   // The PrivacySandboxSettings is only involved in Trust Token access
+   // decisions when the Release 3 flag is enabled.
+   if (!base::FeatureList::IsEnabled(privacy_sandbox::kPrivacySandboxSettings3))
+@@ -393,11 +405,10 @@ bool PrivacySandboxSettings::IsTrustTokensAllowed() {
+ }
+ 
+ bool PrivacySandboxSettings::IsPrivacySandboxRestricted() {
+-  return delegate_->IsPrivacySandboxRestricted();
++  return true;
  }
  
  void PrivacySandboxSettings::OnCookiesCleared() {
--  SetFlocDataAccessibleFromNow(/*reset_calculate_timer=*/false);
+-  SetTopicsDataAccessibleFromNow();
  }
  
  void PrivacySandboxSettings::OnPrivacySandboxPrefChanged() {
-@@ -351,8 +326,8 @@ void PrivacySandboxSettings::RemoveObserver(Observer* observer) {
+@@ -428,8 +439,8 @@ PrivacySandboxSettings::PrivacySandboxSettings() = default;
  bool PrivacySandboxSettings::IsPrivacySandboxEnabledForContext(
      const GURL& url,
      const absl::optional<url::Origin>& top_frame_origin,
@@ -267,17 +285,25 @@ diff --git a/components/privacy_sandbox/privacy_sandbox_settings.cc b/components
 +  if ((true))
      return false;
  
-   // TODO (crbug.com/1155504): Bypassing the CookieSettings class to access
+   // Third party cookies must also be available for this context. An empty site
+@@ -439,6 +450,7 @@ bool PrivacySandboxSettings::IsPrivacySandboxEnabledForContext(
+ }
+ 
+ void PrivacySandboxSettings::SetTopicsDataAccessibleFromNow() const {
++  if ((true)) return;
+   pref_service_->SetTime(prefs::kPrivacySandboxTopicsDataAccessibleSince,
+                          base::Time::Now());
+ 
 diff --git a/components/privacy_sandbox/privacy_sandbox_settings.h b/components/privacy_sandbox/privacy_sandbox_settings.h
 --- a/components/privacy_sandbox/privacy_sandbox_settings.h
 +++ b/components/privacy_sandbox/privacy_sandbox_settings.h
-@@ -163,7 +163,6 @@ class PrivacySandboxSettings : public KeyedService {
+@@ -217,7 +217,6 @@ class PrivacySandboxSettings : public KeyedService {
    scoped_refptr<content_settings::CookieSettings> cookie_settings_;
    raw_ptr<PrefService> pref_service_;
    PrefChangeRegistrar pref_change_registrar_;
 -  bool incognito_profile_;
  };
  
- #endif  // COMPONENTS_PRIVACY_SANDBOX_PRIVACY_SANDBOX_SETTINGS_H_
+ }  // namespace privacy_sandbox
 --
 2.25.1
