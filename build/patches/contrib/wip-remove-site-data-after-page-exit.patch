@@ -1,0 +1,206 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Wed, 6 Jul 2022 10:38:09 +0000
+Subject: [wip] remove site data after page exit
+
+---
+ .../permissions/last_tab_standing_tracker.cc  | 48 ++++++++++++++++++-
+ .../permissions/last_tab_standing_tracker.h   |  3 +-
+ .../last_tab_standing_tracker_tab_helper.cc   |  4 +-
+ net/http/http_cache.cc                        | 21 +++++++-
+ net/http/http_cache.h                         |  2 +-
+ .../conditional_cache_deletion_helper.cc      |  6 ++-
+ 6 files changed, 77 insertions(+), 7 deletions(-)
+
+diff --git a/chrome/browser/permissions/last_tab_standing_tracker.cc b/chrome/browser/permissions/last_tab_standing_tracker.cc
+--- a/chrome/browser/permissions/last_tab_standing_tracker.cc
++++ b/chrome/browser/permissions/last_tab_standing_tracker.cc
+@@ -10,6 +10,11 @@
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+ #include "components/content_settings/core/common/content_settings_utils.h"
+ #include "components/permissions/permissions_client.h"
++#include "content/public/browser/storage_partition.h"
++#include "services/network/network_context.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
++#include "content/public/browser/clear_site_data_utils.h"
++#include "content/public/browser/browsing_data_filter_builder.h"
+ 
+ namespace {
+   // Remove all sessions content setting by origin and type
+@@ -32,6 +37,16 @@ namespace {
+       }
+     }
+   }
++
++  bool DoesOriginMatchPredicate(
++    base::OnceCallback<bool(const url::Origin&)> predicate,
++    const url::Origin& origin,
++    storage::SpecialStoragePolicy* policy) {
++    if (!std::move(predicate).Run(origin))
++      return false;
++
++    return true;
++  }
+ }
+ 
+ LastTabStandingTracker::LastTabStandingTracker(content::BrowserContext* context)
+@@ -69,7 +84,7 @@ void LastTabStandingTracker::WebContentsLoadedOrigin(
+ }
+ 
+ void LastTabStandingTracker::WebContentsUnloadedOrigin(
+-    const url::Origin& origin) {
++    const url::Origin& origin, content::WebContents* web_contents) {
+   if (origin.opaque())
+     return;
+   if (origin == url::Origin::Create(GURL("chrome://newtab/")) ||
+@@ -86,5 +101,36 @@ void LastTabStandingTracker::WebContentsUnloadedOrigin(
+     RemoveSessionSettings(content_settings, origin, ContentSettingsType::GEOLOCATION);
+     RemoveSessionSettings(content_settings, origin, ContentSettingsType::MEDIASTREAM_MIC);
+     RemoveSessionSettings(content_settings, origin, ContentSettingsType::MEDIASTREAM_CAMERA);
++
++    content::SiteInstance* site_instance = web_contents->GetSiteInstance();
++    content::StoragePartition* storage_partition =
++      context_->GetStoragePartition(site_instance, /*can_create*/false);
++    DCHECK(storage_partition);
++
++    network::mojom::ClearDataFilterPtr filter = network::mojom::ClearDataFilter::New();
++    filter->type = network::mojom::ClearDataFilter_Type::DELETE_MATCHES;
++    filter->domains.push_back(net::registry_controlled_domains::GetDomainAndRegistry(
++          origin,
++          net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES));
++    storage_partition->GetNetworkContext()->ClearHttpCache(
++      base::Time(), base::Time::Now(),
++      std::move(filter),
++      base::BindOnce([](){}));
++
++    auto filter_builder = content::BrowsingDataFilterBuilder::Create(
++        content::BrowsingDataFilterBuilder::Mode::kDelete);
++    filter_builder->AddOrigin(origin);
++    auto cookie_delete_filter = network::mojom::CookieDeletionFilter::New();
++    cookie_delete_filter->session_control =
++        network::mojom::CookieDeletionSessionControl::IGNORE_CONTROL;
++    content::StoragePartition::OriginMatcherFunction matcher_function =
++      base::BindRepeating(&DoesOriginMatchPredicate,
++                          filter_builder->BuildOriginFilter());
++    storage_partition->ClearData(
++      content::StoragePartition::REMOVE_DATA_MASK_ALL, 0,
++      matcher_function,
++      std::move(cookie_delete_filter), /*perform_cleanup*/true,
++      /*remove_since*/base::Time(), base::Time::Max(),
++      base::DoNothing());
+   }
+ }
+diff --git a/chrome/browser/permissions/last_tab_standing_tracker.h b/chrome/browser/permissions/last_tab_standing_tracker.h
+--- a/chrome/browser/permissions/last_tab_standing_tracker.h
++++ b/chrome/browser/permissions/last_tab_standing_tracker.h
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "components/keyed_service/core/keyed_service.h"
+ #include "url/origin.h"
++#include "content/public/browser/web_contents.h"
+ 
+ // This class keep tracks of all open tabs. And notifies its observers when
+ // all tabs of a particular origin have been closed or navigated away from.
+@@ -24,7 +25,7 @@ class LastTabStandingTracker : public KeyedService {
+   LastTabStandingTracker& operator=(const LastTabStandingTracker&) = delete;
+ 
+   void WebContentsLoadedOrigin(const url::Origin& origin);
+-  void WebContentsUnloadedOrigin(const url::Origin& origin);
++  void WebContentsUnloadedOrigin(const url::Origin& origin, content::WebContents* web_contents);
+   void AddObserver(LastTabStandingTrackerObserver* observer);
+   void RemoveObserver(LastTabStandingTrackerObserver* observer);
+ 
+diff --git a/chrome/browser/permissions/last_tab_standing_tracker_tab_helper.cc b/chrome/browser/permissions/last_tab_standing_tracker_tab_helper.cc
+--- a/chrome/browser/permissions/last_tab_standing_tracker_tab_helper.cc
++++ b/chrome/browser/permissions/last_tab_standing_tracker_tab_helper.cc
+@@ -14,7 +14,7 @@ void LastTabStandingTrackerTabHelper::WebContentsDestroyed() {
+   if (last_committed_origin_) {
+     LastTabStandingTrackerFactory::GetForBrowserContext(
+         web_contents()->GetBrowserContext())
+-        ->WebContentsUnloadedOrigin(*last_committed_origin_);
++        ->WebContentsUnloadedOrigin(*last_committed_origin_, web_contents());
+   }
+ }
+ 
+@@ -27,7 +27,7 @@ void LastTabStandingTrackerTabHelper::PrimaryPageChanged(content::Page& page) {
+           web_contents()->GetBrowserContext());
+   if (last_committed_origin_) {
+     last_tab_standing_tracker->WebContentsUnloadedOrigin(
+-        *last_committed_origin_);
++        *last_committed_origin_, web_contents());
+   }
+   last_tab_standing_tracker->WebContentsLoadedOrigin(new_origin);
+   last_committed_origin_ = std::move(new_origin);
+diff --git a/net/http/http_cache.cc b/net/http/http_cache.cc
+--- a/net/http/http_cache.cc
++++ b/net/http/http_cache.cc
+@@ -413,7 +413,7 @@ HttpCache::SetHttpNetworkTransactionFactoryForTesting(
+ }
+ 
+ // static
+-std::string HttpCache::GetResourceURLFromHttpCacheKey(const std::string& key) {
++std::string HttpCache::GetResourceURLFromHttpCacheKey(const std::string& key, bool top_frame) {
+   // The key format is:
+   // credential_key/post_key/[isolation_key]url
+ 
+@@ -437,11 +437,30 @@ std::string HttpCache::GetResourceURLFromHttpCacheKey(const std::string& key) {
+     // HttpUtil::SpecForRequest method, which has a DCHECK to ensure that
+     // the original resource url is valid, and hence will not contain the
+     // unescaped whitespace of |kDoubleKeySeparator|.
++
++    if (top_frame) {
++      // Get TopFrame url from (double) isolation key
++      // example:
++      // 1/0/_dk_https://google.com https://google.com https://www.google.com/async/...
++      // 1/0/_dk_s_https://google.com https://google.com https://www.google.com/async/...
++      std::string::size_type top_frame_pos = pos + strlen(kDoubleKeyPrefix);
++      auto subframeDocumentResourcePrefixLength = strlen(kSubframeDocumentResourcePrefix);
++      if (key.substr(top_frame_pos, subframeDocumentResourcePrefixLength) == kSubframeDocumentResourcePrefix) {
++        // skip kSubframeDocumentResourcePrefix if present
++        top_frame_pos += subframeDocumentResourcePrefixLength;
++      }
++      // find kDoubleKeySeparator ('space') from top_frame_pos
++      pos = key.find(kDoubleKeySeparator, top_frame_pos);
++      DCHECK_NE(pos, std::string::npos);
++      return key.substr(top_frame_pos, pos - top_frame_pos);
++    }
++
+     pos = key.rfind(kDoubleKeySeparator);
+     DCHECK_NE(pos, std::string::npos);
+     pos += strlen(kDoubleKeySeparator);
+     DCHECK_LE(pos, key.size() - 1);
+   } else if (pos == key.find(kSingleKeyPrefix, pos)) {
++    if (top_frame) NOTREACHED();
+     pos = key.rfind(kSingleKeySeparator);
+     DCHECK_NE(pos, std::string::npos);
+     pos += strlen(kSingleKeySeparator);
+diff --git a/net/http/http_cache.h b/net/http/http_cache.h
+--- a/net/http/http_cache.h
++++ b/net/http/http_cache.h
+@@ -257,7 +257,7 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory {
+       std::unique_ptr<HttpTransactionFactory> new_network_layer);
+ 
+   // Get the URL from the entry's cache key.
+-  static std::string GetResourceURLFromHttpCacheKey(const std::string& key);
++  static std::string GetResourceURLFromHttpCacheKey(const std::string& key, bool top_frame = false);
+ 
+   // Function to generate cache key for testing.
+   static std::string GenerateCacheKeyForTest(const HttpRequestInfo* request);
+diff --git a/services/network/conditional_cache_deletion_helper.cc b/services/network/conditional_cache_deletion_helper.cc
+--- a/services/network/conditional_cache_deletion_helper.cc
++++ b/services/network/conditional_cache_deletion_helper.cc
+@@ -22,8 +22,12 @@ bool EntryPredicateFromURLsAndTime(
+   std::string entry_key(entry->GetKey());
+   std::string url_string(
+       net::HttpCache::GetResourceURLFromHttpCacheKey(entry_key));
++  std::string top_frame_url(
++      net::HttpCache::GetResourceURLFromHttpCacheKey(entry_key, true));
+   return (entry->GetLastUsed() >= begin_time &&
+-          entry->GetLastUsed() < end_time && url_matcher.Run(GURL(url_string)));
++          entry->GetLastUsed() < end_time) && (
++            url_matcher.Run(GURL(url_string)) ||
++            url_matcher.Run(GURL(top_frame_url)));
+ }
+ 
+ }  // namespace
+--
+2.25.1

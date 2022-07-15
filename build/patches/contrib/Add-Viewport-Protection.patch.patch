@@ -1,0 +1,683 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Thu, 30 Jun 2022 12:47:17 +0000
+Subject: Viewport Protection
+
+---
+ .../browser_ui/site_settings/android/BUILD.gn |  3 +
+ .../BromiteCustomContentSettingImpl.java      |  1 +
+ .../BromiteViewportContentSetting.java        | 86 +++++++++++++++++++
+ .../site_settings/SiteSettingsCategory.java   |  5 +-
+ .../strings/android/browser_ui_strings.grd    |  1 +
+ .../browser_ui/strings/android/viewport.grdp  | 18 ++++
+ components/components_strings.grd             |  1 +
+ .../core/browser/content_settings_registry.cc | 14 +++
+ .../core/browser/content_settings_utils.cc    |  2 +
+ .../core/common/content_settings.cc           |  4 +-
+ .../core/common/content_settings.h            |  1 +
+ .../core/common/content_settings.mojom        |  1 +
+ .../common/content_settings_mojom_traits.cc   |  3 +-
+ .../common/content_settings_mojom_traits.h    |  5 ++
+ .../core/common/content_settings_types.h      |  2 +
+ .../renderer/content_settings_agent_impl.cc   |  9 ++
+ .../renderer/content_settings_agent_impl.h    |  1 +
+ .../platform/web_content_settings_client.h    |  2 +
+ .../blink/renderer/core/css/media_values.cc   | 10 +++
+ .../core/frame/dom_visual_viewport.cc         |  4 +-
+ .../renderer/core/frame/local_frame_view.cc   |  3 +
+ .../blink/renderer/core/frame/screen.cc       | 17 +++-
+ .../renderer/core/frame/visual_viewport.cc    |  4 +
+ .../renderer/core/frame/visual_viewport.h     |  5 ++
+ .../renderer/core/html/html_meta_element.cc   | 28 +++++-
+ .../renderer/core/loader/frame_loader.cc      |  7 +-
+ third_party/blink/renderer/core/page/page.cc  |  8 ++
+ third_party/blink/renderer/core/page/page.h   |  3 +
+ .../screen_enumeration/screen_detailed.cc     | 15 ++++
+ 29 files changed, 250 insertions(+), 13 deletions(-)
+ create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteViewportContentSetting.java
+ create mode 100644 components/browser_ui/strings/android/viewport.grdp
+
+diff --git a/components/browser_ui/site_settings/android/BUILD.gn b/components/browser_ui/site_settings/android/BUILD.gn
+--- a/components/browser_ui/site_settings/android/BUILD.gn
++++ b/components/browser_ui/site_settings/android/BUILD.gn
+@@ -78,6 +78,9 @@ android_library("java") {
+   sources += [
+     "java/src/org/chromium/components/browser_ui/site_settings/BromiteWebRTCContentSetting.java",
+   ]
++  sources += [
++    "java/src/org/chromium/components/browser_ui/site_settings/BromiteViewportContentSetting.java",
++  ]
+   annotation_processor_deps = [ "//base/android/jni_generator:jni_processor" ]
+   resources_package = "org.chromium.components.browser_ui.site_settings"
+   deps = [
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
+--- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
+@@ -45,6 +45,7 @@ public abstract class BromiteCustomContentSettingImpl {
+         mItemList = new ArrayList<BromiteCustomContentSetting>();
+         mItemList.add(new BromiteWebGLContentSetting());
+         mItemList.add(new BromiteWebRTCContentSetting());
++        mItemList.add(new BromiteViewportContentSetting());
+     }
+ 
+     public static SiteSettingsCategory createFromType(
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteViewportContentSetting.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteViewportContentSetting.java
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteViewportContentSetting.java
+@@ -0,0 +1,86 @@
++/*
++    This file is part of Bromite.
++
++    Bromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Bromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Bromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.components.browser_ui.site_settings;
++
++import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
++import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
++import org.chromium.components.content_settings.ContentSettingValues;
++import org.chromium.components.content_settings.ContentSettingsType;
++import org.chromium.content_public.browser.BrowserContextHandle;
++
++import androidx.annotation.Nullable;
++import androidx.preference.Preference;
++import androidx.preference.PreferenceScreen;
++
++import java.util.ArrayList;
++
++public class BromiteViewportContentSetting extends BromiteCustomContentSetting {
++    public BromiteViewportContentSetting() {
++        super(/*contentSettingsType*/ ContentSettingsType.VIEWPORT,
++              /*siteSettingsCategory*/ SiteSettingsCategory.Type.VIEWPORT,
++              /*defaultEnabledValue*/ ContentSettingValues.ALLOW,
++              /*defaultDisabledValue*/ ContentSettingValues.BLOCK,
++              /*allowException*/ true,
++              /*preferenceKey*/ "viewport",
++              /*profilePrefKey*/ "viewport");
++    }
++
++    @Override
++    public ContentSettingsResources.ResourceItem getResourceItem() {
++        return new ContentSettingsResources.ResourceItem(
++            /*icon*/ R.drawable.web_asset,
++            /*title*/ R.string.viewport_permission_title,
++            /*defaultEnabledValue*/ getDefaultEnabledValue(),
++            /*defaultDisabledValue*/ getDefaultDisabledValue(),
++            /*enabledSummary*/ R.string.website_settings_category_viewport_enabled,
++            /*disabledSummary*/ R.string.website_settings_category_viewport_disabled);
++    }
++
++    @Override
++    public int getCategorySummary(@Nullable @ContentSettingValues int value) {
++        switch (value) {
++            case ContentSettingValues.ALLOW:
++                return R.string.website_settings_category_viewport_enabled;
++            case ContentSettingValues.BLOCK:
++                return R.string.website_settings_category_viewport_disabled;
++            default:
++                // this will cause a runtime exception
++                return 0;
++        }
++    }
++
++    @Override
++    public boolean requiresTriStateContentSetting() {
++        return false;
++    }
++
++    @Override
++    public boolean showOnlyDescriptions() {
++        return true;
++    }
++
++    @Override
++    public int getAddExceptionDialogMessage() {
++        return R.string.website_settings_category_viewport_enabled;
++    }
++
++    @Override
++    public @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSettingValues int value) {
++        return value != ContentSettingValues.BLOCK;
++    }
++}
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
+--- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettingsCategory.java
+@@ -44,7 +44,7 @@ public class SiteSettingsCategory {
+             Type.PROTECTED_MEDIA, Type.SENSORS, Type.SOUND, Type.USB, Type.VIRTUAL_REALITY,
+             Type.USE_STORAGE, Type.AUTO_DARK_WEB_CONTENT, Type.REQUEST_DESKTOP_SITE,
+             Type.FEDERATED_IDENTITY_API, Type.TIMEZONE_OVERRIDE, Type.AUTOPLAY, Type.JAVASCRIPT_JIT,
+-            Type.IMAGES, Type.WEBGL, Type.WEBRTC})
++            Type.IMAGES, Type.WEBGL, Type.WEBRTC, Type.VIEWPORT})
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface Type {
+         // All updates here must also be reflected in {@link #preferenceKey(int)
+@@ -81,10 +81,11 @@ public class SiteSettingsCategory {
+         int IMAGES = 29;
+         int WEBGL = 30;
+         int WEBRTC = 31;
++        int VIEWPORT = 32;
+         /**
+          * Number of handled categories used for calculating array sizes.
+          */
+-        int NUM_ENTRIES = 32;
++        int NUM_ENTRIES = 33;
+     }
+ 
+     private final BrowserContextHandle mBrowserContextHandle;
+diff --git a/components/browser_ui/strings/android/browser_ui_strings.grd b/components/browser_ui/strings/android/browser_ui_strings.grd
+--- a/components/browser_ui/strings/android/browser_ui_strings.grd
++++ b/components/browser_ui/strings/android/browser_ui_strings.grd
+@@ -176,6 +176,7 @@
+       <part file="site_settings.grdp" />
+       <part file="webgl.grdp" />
+       <part file="webrtc.grdp" />
++      <part file="viewport.grdp" />
+ 
+       <message name="IDS_GOT_IT" desc="Button for the user to accept a disclosure/message">
+         Got it
+diff --git a/components/browser_ui/strings/android/viewport.grdp b/components/browser_ui/strings/android/viewport.grdp
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/strings/android/viewport.grdp
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++  <message name="IDS_SITE_SETTINGS_TYPE_VIEWPORT" desc="The label used for viewport size change site settings controls.">
++    Viewport Size Protection
++  </message>
++  <message name="IDS_SITE_SETTINGS_TYPE_VIEWPORT_MID_SENTENCE" desc="The label used for viewport size change site settings controls when used mid-sentence.">
++    Viewport Size Protection
++  </message>
++  <message name="IDS_VIEWPORT_PERMISSION_TITLE" desc="Title of the permission to use viewport size change [CHAR-LIMIT=32]">
++    Viewport Size Protection
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_VIEWPORT_ENABLED" desc="Summary text explaining that viewport size change is full enabled.">
++    Enabled
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_VIEWPORT_DISABLED" desc="Summary text explaining that viewport size change is full disabled.">
++    Disabled
++  </message>
++</grit-part>
+diff --git a/components/components_strings.grd b/components/components_strings.grd
+--- a/components/components_strings.grd
++++ b/components/components_strings.grd
+@@ -339,6 +339,7 @@
+       <part file="user_scripts/strings/userscripts_strings.grdp" />
+       <part file="browser_ui/strings/android/webgl.grdp" />
+       <part file="browser_ui/strings/android/webrtc.grdp" />
++      <part file="browser_ui/strings/android/viewport.grdp" />
+ 
+       <if expr="not is_ios">
+         <part file="management_strings.grdp" />
+diff --git a/components/content_settings/core/browser/content_settings_registry.cc b/components/content_settings/core/browser/content_settings_registry.cc
+--- a/components/content_settings/core/browser/content_settings_registry.cc
++++ b/components/content_settings/core/browser/content_settings_registry.cc
+@@ -707,6 +707,20 @@ void ContentSettingsRegistry::Init() {
+            /*show_into_info_page*/ true,
+            /*permission_type_ui*/ IDS_SITE_SETTINGS_TYPE_WEBRTC,
+            /*permission_type_ui_mid_sentence*/ IDS_SITE_SETTINGS_TYPE_WEBRTC_MID_SENTENCE);
++
++  Register(ContentSettingsType::VIEWPORT, "viewport", CONTENT_SETTING_BLOCK,
++           WebsiteSettingsInfo::SYNCABLE,
++           AllowlistedSchemes(),
++           ValidSettings(CONTENT_SETTING_ALLOW,
++                         CONTENT_SETTING_BLOCK),
++           WebsiteSettingsInfo::SINGLE_ORIGIN_WITH_EMBEDDED_EXCEPTIONS_SCOPE,
++           WebsiteSettingsRegistry::PLATFORM_ANDROID,
++           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
++           ContentSettingsInfo::PERSISTENT,
++           ContentSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS,
++           /*show_into_info_page*/ true,
++           /*permission_type_ui*/ IDS_SITE_SETTINGS_TYPE_VIEWPORT,
++           /*permission_type_ui_mid_sentence*/ IDS_SITE_SETTINGS_TYPE_VIEWPORT_MID_SENTENCE);
+ }
+ 
+ void ContentSettingsRegistry::Register(
+diff --git a/components/content_settings/core/browser/content_settings_utils.cc b/components/content_settings/core/browser/content_settings_utils.cc
+--- a/components/content_settings/core/browser/content_settings_utils.cc
++++ b/components/content_settings/core/browser/content_settings_utils.cc
+@@ -159,6 +159,8 @@ void GetRendererContentSettingRules(const HostContentSettingsMap* map,
+                              &(rules->webgl_rules));
+   map->GetSettingsForOneType(ContentSettingsType::WEBRTC,
+                              &(rules->webrtc_rules));
++  map->GetSettingsForOneType(ContentSettingsType::VIEWPORT,
++                             &(rules->viewport_rules));
+ }
+ 
+ bool IsMorePermissive(ContentSetting a, ContentSetting b) {
+diff --git a/components/content_settings/core/common/content_settings.cc b/components/content_settings/core/common/content_settings.cc
+--- a/components/content_settings/core/common/content_settings.cc
++++ b/components/content_settings/core/common/content_settings.cc
+@@ -206,7 +206,8 @@ bool RendererContentSettingRules::IsRendererContentSetting(
+          content_type == ContentSettingsType::AUTO_DARK_WEB_CONTENT ||
+          content_type == ContentSettingsType::TIMEZONE_OVERRIDE ||
+          content_type == ContentSettingsType::WEBGL ||
+-         content_type == ContentSettingsType::WEBRTC;
++         content_type == ContentSettingsType::WEBRTC ||
++         content_type == ContentSettingsType::VIEWPORT;
+ }
+ 
+ void RendererContentSettingRules::FilterRulesByOutermostMainFrameURL(
+@@ -220,6 +221,7 @@ void RendererContentSettingRules::FilterRulesByOutermostMainFrameURL(
+   FilterRulesForType(autoplay_rules, outermost_main_frame_url);
+   FilterRulesForType(webgl_rules, outermost_main_frame_url);
+   FilterRulesForType(webrtc_rules, outermost_main_frame_url);
++  FilterRulesForType(viewport_rules, outermost_main_frame_url);
+ }
+ 
+ RendererContentSettingRules::RendererContentSettingRules() = default;
+diff --git a/components/content_settings/core/common/content_settings.h b/components/content_settings/core/common/content_settings.h
+--- a/components/content_settings/core/common/content_settings.h
++++ b/components/content_settings/core/common/content_settings.h
+@@ -99,6 +99,7 @@ struct RendererContentSettingRules {
+   std::string timezone_override_value;
+   ContentSettingsForOneType webgl_rules;
+   ContentSettingsForOneType webrtc_rules;
++  ContentSettingsForOneType viewport_rules;
+ };
+ 
+ namespace content_settings {
+diff --git a/components/content_settings/core/common/content_settings.mojom b/components/content_settings/core/common/content_settings.mojom
+--- a/components/content_settings/core/common/content_settings.mojom
++++ b/components/content_settings/core/common/content_settings.mojom
+@@ -83,4 +83,5 @@ struct RendererContentSettingRules {
+   string timezone_override_value;
+   array<ContentSettingPatternSource> webgl_rules;
+   array<ContentSettingPatternSource> webrtc_rules;
++  array<ContentSettingPatternSource> viewport_rules;
+ };
+diff --git a/components/content_settings/core/common/content_settings_mojom_traits.cc b/components/content_settings/core/common/content_settings_mojom_traits.cc
+--- a/components/content_settings/core/common/content_settings_mojom_traits.cc
++++ b/components/content_settings/core/common/content_settings_mojom_traits.cc
+@@ -106,7 +106,8 @@ bool StructTraits<content_settings::mojom::RendererContentSettingRulesDataView,
+          data.ReadTimezoneOverrideRules(&out->timezone_override_rules) &&
+          data.ReadTimezoneOverrideValue(&out->timezone_override_value) &&
+          data.ReadWebglRules(&out->webgl_rules) &&
+-         data.ReadWebrtcRules(&out->webrtc_rules);
++         data.ReadWebrtcRules(&out->webrtc_rules) &&
++         data.ReadViewportRules(&out->viewport_rules);
+ }
+ 
+ }  // namespace mojo
+diff --git a/components/content_settings/core/common/content_settings_mojom_traits.h b/components/content_settings/core/common/content_settings_mojom_traits.h
+--- a/components/content_settings/core/common/content_settings_mojom_traits.h
++++ b/components/content_settings/core/common/content_settings_mojom_traits.h
+@@ -175,6 +175,11 @@ struct StructTraits<
+     return r.webrtc_rules;
+   }
+ 
++ static const std::vector<ContentSettingPatternSource>& viewport_rules(
++      const RendererContentSettingRules& r) {
++    return r.viewport_rules;
++  }
++
+   static bool Read(
+       content_settings::mojom::RendererContentSettingRulesDataView data,
+       RendererContentSettingRules* out);
+diff --git a/components/content_settings/core/common/content_settings_types.h b/components/content_settings/core/common/content_settings_types.h
+--- a/components/content_settings/core/common/content_settings_types.h
++++ b/components/content_settings/core/common/content_settings_types.h
+@@ -284,6 +284,8 @@ enum class ContentSettingsType : int32_t {
+ 
+   WEBRTC,
+ 
++  VIEWPORT,
++
+   // Setting to indicate whether browser should allow signing into a website via
+   // the browser FedCM API.
+   FEDERATED_IDENTITY_API,
+diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc b/components/content_settings/renderer/content_settings_agent_impl.cc
+--- a/components/content_settings/renderer/content_settings_agent_impl.cc
++++ b/components/content_settings/renderer/content_settings_agent_impl.cc
+@@ -473,6 +473,15 @@ bool ContentSettingsAgentImpl::AllowWebRTC(bool enabled_per_settings) {
+              url::Origin(frame->GetDocument().GetSecurityOrigin()).GetURL());
+ }
+ 
++bool ContentSettingsAgentImpl::AllowViewportChange(bool enabled_per_settings) {
++  if (!content_setting_rules_)
++    return false;
++  blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
++  return CONTENT_SETTING_ALLOW == GetContentSettingFromRules(
++             content_setting_rules_->viewport_rules,
++             url::Origin(frame->GetDocument().GetSecurityOrigin()).GetURL());
++}
++
+ bool ContentSettingsAgentImpl::IsAllowlistedForContentSettings() const {
+   if (should_allowlist_)
+     return true;
+diff --git a/components/content_settings/renderer/content_settings_agent_impl.h b/components/content_settings/renderer/content_settings_agent_impl.h
+--- a/components/content_settings/renderer/content_settings_agent_impl.h
++++ b/components/content_settings/renderer/content_settings_agent_impl.h
+@@ -96,6 +96,7 @@ class ContentSettingsAgentImpl
+   bool ShouldAutoupgradeMixedContent() override;
+   bool AllowWebgl(bool enabled_per_settings) override;
+   bool AllowWebRTC(bool enabled_per_settings) override;
++  bool AllowViewportChange(bool enabled_per_settings) override;
+ 
+   bool allow_running_insecure_content() const {
+     return allow_running_insecure_content_;
+diff --git a/third_party/blink/public/platform/web_content_settings_client.h b/third_party/blink/public/platform/web_content_settings_client.h
+--- a/third_party/blink/public/platform/web_content_settings_client.h
++++ b/third_party/blink/public/platform/web_content_settings_client.h
+@@ -103,6 +103,8 @@ class WebContentSettingsClient {
+ 
+   virtual bool AllowWebRTC(bool default_value) { return default_value; }
+ 
++  virtual bool AllowViewportChange(bool default_value) { return default_value; }
++
+   // Reports that passive mixed content was found at the provided URL.
+   virtual void PassiveInsecureContentFound(const WebURL&) {}
+ 
+diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/blink/renderer/core/css/media_values.cc
+--- a/third_party/blink/renderer/core/css/media_values.cc
++++ b/third_party/blink/renderer/core/css/media_values.cc
+@@ -193,6 +193,11 @@ int MediaValues::CalculateDeviceWidth(LocalFrame* frame) {
+     device_width = static_cast<int>(
+         lroundf(device_width * screen_info.device_scale_factor));
+   }
++  float width_override = frame->GetPage()->PageWidthOverride();
++  if (width_override) {
++    device_width = static_cast<int>(
++        lroundf(device_width * (1.0 - (width_override / 100.0))));
++  }
+   return device_width;
+ }
+ 
+@@ -205,6 +210,11 @@ int MediaValues::CalculateDeviceHeight(LocalFrame* frame) {
+     device_height = static_cast<int>(
+         lroundf(device_height * screen_info.device_scale_factor));
+   }
++  float width_override = frame->GetPage()->PageWidthOverride();
++  if (width_override) {
++    device_height = static_cast<int>(
++        lroundf(device_height * (1.0 - (width_override / 100.0))));
++  }
+   return device_height;
+ }
+ 
+diff --git a/third_party/blink/renderer/core/frame/dom_visual_viewport.cc b/third_party/blink/renderer/core/frame/dom_visual_viewport.cc
+--- a/third_party/blink/renderer/core/frame/dom_visual_viewport.cc
++++ b/third_party/blink/renderer/core/frame/dom_visual_viewport.cc
+@@ -177,8 +177,10 @@ double DOMVisualViewport::scale() const {
+   if (!frame->IsOutermostMainFrame())
+     return 1;
+ 
+-  if (Page* page = window_->GetFrame()->GetPage())
++  if (Page* page = window_->GetFrame()->GetPage()) {
++    if (page->PageWidthOverride() != 0) return 1;
+     return page->GetVisualViewport().ScaleForVisualViewport();
++  }
+ 
+   return 0;
+ }
+diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
+--- a/third_party/blink/renderer/core/frame/local_frame_view.cc
++++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
+@@ -1034,6 +1034,9 @@ gfx::SizeF LocalFrameView::ViewportSizeForMediaQueries() const {
+   gfx::SizeF viewport_size(layout_size_);
+   if (!frame_->GetDocument() || !frame_->GetDocument()->Printing())
+     viewport_size.Scale(1 / GetFrame().PageZoomFactor());
++  float width_override = frame_->GetPage()->PageWidthOverride();
++  if (width_override)
++    viewport_size.Scale(1.0 + (width_override / 100.0));
+   return viewport_size;
+ }
+ 
+diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
+--- a/third_party/blink/renderer/core/frame/screen.cc
++++ b/third_party/blink/renderer/core/frame/screen.cc
+@@ -35,6 +35,7 @@
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/page/chrome_client.h"
++#include "third_party/blink/renderer/core/page/page.h"
+ #include "ui/display/screen_info.h"
+ #include "ui/display/screen_infos.h"
+ 
+@@ -42,6 +43,10 @@ namespace blink {
+ 
+ namespace {
+ 
++float GetScaleOverride(blink::Page* page) {
++  return 1.0 - (page->PageWidthOverride() / 100.0);
++}
++
+ }  // namespace
+ 
+ Screen::Screen(LocalDOMWindow* window, int64_t display_id)
+@@ -83,9 +88,10 @@ int Screen::height() const {
+   const display::ScreenInfo& screen_info = GetScreenInfo();
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
+     return base::ClampRound(screen_info.rect.height() *
++                            GetScaleOverride(frame->GetPage()) *
+                             screen_info.device_scale_factor);
+   }
+-  return screen_info.rect.height();
++  return screen_info.rect.height() * GetScaleOverride(frame->GetPage());
+ }
+ 
+ int Screen::width() const {
+@@ -95,9 +101,10 @@ int Screen::width() const {
+   const display::ScreenInfo& screen_info = GetScreenInfo();
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
+     return base::ClampRound(screen_info.rect.width() *
++                            GetScaleOverride(frame->GetPage()) *
+                             screen_info.device_scale_factor);
+   }
+-  return screen_info.rect.width();
++  return screen_info.rect.width() * GetScaleOverride(frame->GetPage());
+ }
+ 
+ unsigned Screen::colorDepth() const {
+@@ -141,9 +148,10 @@ int Screen::availHeight() const {
+   const display::ScreenInfo& screen_info = GetScreenInfo();
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
+     return base::ClampRound(screen_info.available_rect.height() *
++                            GetScaleOverride(frame->GetPage()) *
+                             screen_info.device_scale_factor);
+   }
+-  return screen_info.available_rect.height();
++  return screen_info.available_rect.height() * GetScaleOverride(frame->GetPage());
+ }
+ 
+ int Screen::availWidth() const {
+@@ -153,9 +161,10 @@ int Screen::availWidth() const {
+   const display::ScreenInfo& screen_info = GetScreenInfo();
+   if (frame->GetSettings()->GetReportScreenSizeInPhysicalPixelsQuirk()) {
+     return base::ClampRound(screen_info.available_rect.width() *
++                            GetScaleOverride(frame->GetPage()) *
+                             screen_info.device_scale_factor);
+   }
+-  return screen_info.available_rect.width();
++  return screen_info.available_rect.width() * GetScaleOverride(frame->GetPage());
+ }
+ 
+ void Screen::Trace(Visitor* visitor) const {
+diff --git a/third_party/blink/renderer/core/frame/visual_viewport.cc b/third_party/blink/renderer/core/frame/visual_viewport.cc
+--- a/third_party/blink/renderer/core/frame/visual_viewport.cc
++++ b/third_party/blink/renderer/core/frame/visual_viewport.cc
+@@ -467,6 +467,10 @@ void VisualViewport::SetScale(float scale) {
+                       gfx::PointAtOffsetFromOrigin(offset_));
+ }
+ 
++void VisualViewport::SetPageWidthOverride(int value) {
++  page_width_override_ = value;
++}
++
+ double VisualViewport::OffsetLeft() const {
+   // Offset{Left|Top} and Width|Height are used by the DOMVisualViewport to
+   // expose values to JS. We'll only ever ask the visual viewport for these
+diff --git a/third_party/blink/renderer/core/frame/visual_viewport.h b/third_party/blink/renderer/core/frame/visual_viewport.h
+--- a/third_party/blink/renderer/core/frame/visual_viewport.h
++++ b/third_party/blink/renderer/core/frame/visual_viewport.h
+@@ -145,6 +145,9 @@ class CORE_EXPORT VisualViewport : public GarbageCollected<VisualViewport>,
+   float Scale() const { return scale_; }
+   bool IsPinchGestureActive() const { return is_pinch_gesture_active_; }
+ 
++  void SetPageWidthOverride(int);
++  int PageWidthOverride() const { return page_width_override_; }
++
+   // Convert the given rect in the main LocalFrameView's coordinates into a rect
+   // in the viewport. The given and returned rects are in CSS pixels, meaning
+   // scale isn't applied.
+@@ -382,6 +385,8 @@ class CORE_EXPORT VisualViewport : public GarbageCollected<VisualViewport>,
+   CompositorElementId elasticity_effect_node_id_;
+ 
+   bool needs_paint_property_update_;
++
++  int page_width_override_;
+ };
+ 
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/core/html/html_meta_element.cc b/third_party/blink/renderer/core/html/html_meta_element.cc
+--- a/third_party/blink/renderer/core/html/html_meta_element.cc
++++ b/third_party/blink/renderer/core/html/html_meta_element.cc
+@@ -22,6 +22,7 @@
+ 
+ #include "third_party/blink/renderer/core/html/html_meta_element.h"
+ 
++#include "base/rand_util.h"
+ #include "third_party/blink/public/mojom/frame/color_scheme.mojom-blink.h"
+ #include "third_party/blink/renderer/core/css/style_engine.h"
+ #include "third_party/blink/renderer/core/dom/document.h"
+@@ -565,6 +566,27 @@ void HTMLMetaElement::ProcessContent() {
+   if (!IsInDocumentTree())
+     return;
+ 
++  bool process_default = true;
++
++  if (GetDocument().GetFrame()) {
++    blink::LocalFrame* frame = GetDocument().GetFrame();
++    blink::WebContentSettingsClient* settings = frame->GetContentSettingsClient();
++    blink::Page* page = frame->GetPage();
++
++    if (settings->AllowViewportChange(false)) {
++      if (page->PageWidthOverride() == 0) {
++        page->SetPageWidthOverride(base::RandInt(-5, 15));
++      }
++
++      float device_width = 1.0 + (page->PageWidthOverride() / 100.0);
++      String newvalue("initial-scale=" + base::NumberToString(device_width));
++      ProcessViewportContentAttribute(newvalue, ViewportDescription::kViewportMeta);
++      process_default = false;
++    } else {
++      page->SetPageWidthOverride(0);
++    }
++  }
++
+   const AtomicString& name_value = FastGetAttribute(html_names::kNameAttr);
+   if (name_value.IsEmpty())
+     return;
+@@ -594,8 +616,10 @@ void HTMLMetaElement::ProcessContent() {
+     return;
+ 
+   if (EqualIgnoringASCIICase(name_value, "viewport")) {
+-    ProcessViewportContentAttribute(content_value,
+-                                    ViewportDescription::kViewportMeta);
++    if (process_default) {
++      ProcessViewportContentAttribute(content_value,
++                                      ViewportDescription::kViewportMeta);
++    }
+   } else if (EqualIgnoringASCIICase(name_value, "referrer") &&
+              GetExecutionContext()) {
+     UseCounter::Count(&GetDocument(),
+diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
+--- a/third_party/blink/renderer/core/loader/frame_loader.cc
++++ b/third_party/blink/renderer/core/loader/frame_loader.cc
+@@ -371,8 +371,11 @@ void FrameLoader::SaveScrollState() {
+   history_item->SetVisualViewportScrollOffset(
+       frame_->GetPage()->GetVisualViewport().VisibleRect().OffsetFromOrigin());
+ 
+-  if (frame_->IsMainFrame())
+-    history_item->SetPageScaleFactor(frame_->GetPage()->PageScaleFactor());
++  if (frame_->IsMainFrame()) {
++    int page_width_override = frame_->GetPage()->PageWidthOverride();
++    if (page_width_override == 0)
++      history_item->SetPageScaleFactor(frame_->GetPage()->PageScaleFactor());
++  }
+ 
+   Client()->DidUpdateCurrentHistoryItem();
+ }
+diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/renderer/core/page/page.cc
+--- a/third_party/blink/renderer/core/page/page.cc
++++ b/third_party/blink/renderer/core/page/page.cc
+@@ -507,6 +507,14 @@ float Page::PageScaleFactor() const {
+   return GetVisualViewport().Scale();
+ }
+ 
++void Page::SetPageWidthOverride(float value) {
++  GetVisualViewport().SetPageWidthOverride(value);
++}
++
++int Page::PageWidthOverride() const {
++  return GetVisualViewport().PageWidthOverride();
++}
++
+ void Page::AllVisitedStateChanged(bool invalidate_visited_link_hashes) {
+   for (const Page* page : OrdinaryPages()) {
+     for (Frame* frame = page->main_frame_; frame;
+diff --git a/third_party/blink/renderer/core/page/page.h b/third_party/blink/renderer/core/page/page.h
+--- a/third_party/blink/renderer/core/page/page.h
++++ b/third_party/blink/renderer/core/page/page.h
+@@ -273,6 +273,9 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
+   void SetPageScaleFactor(float);
+   float PageScaleFactor() const;
+ 
++  void SetPageWidthOverride(float);
++  int PageWidthOverride() const;
++
+   float InspectorDeviceScaleFactorOverride() const {
+     return inspector_device_scale_factor_override_;
+   }
+diff --git a/third_party/blink/renderer/modules/screen_enumeration/screen_detailed.cc b/third_party/blink/renderer/modules/screen_enumeration/screen_detailed.cc
+--- a/third_party/blink/renderer/modules/screen_enumeration/screen_detailed.cc
++++ b/third_party/blink/renderer/modules/screen_enumeration/screen_detailed.cc
+@@ -9,12 +9,22 @@
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/settings.h"
+ #include "third_party/blink/renderer/core/page/chrome_client.h"
++#include "third_party/blink/renderer/core/page/page.h"
++#include "third_party/blink/public/platform/web_content_settings_client.h"
+ #include "third_party/blink/renderer/platform/wtf/text/string_statics.h"
+ #include "ui/display/screen_info.h"
+ #include "ui/display/screen_infos.h"
+ 
+ namespace blink {
+ 
++namespace {
++
++float GetScaleOverride(blink::Page* page) {
++  return 1.0 - (page->PageWidthOverride() / 100.0);
++}
++
++}
++
+ ScreenDetailed::ScreenDetailed(LocalDOMWindow* window,
+                                int64_t display_id,
+                                bool label_is_internal,
+@@ -87,6 +97,11 @@ bool ScreenDetailed::isInternal() const {
+ float ScreenDetailed::devicePixelRatio() const {
+   if (!DomWindow())
+     return 0.f;
++  LocalFrame* frame = DomWindow()->GetFrame();
++  blink::WebContentSettingsClient* settings = frame->GetContentSettingsClient();
++  blink::Page* page = frame->GetPage();
++  if (settings->AllowViewportChange(false))
++    return GetScreenInfo().device_scale_factor * GetScaleOverride(page);
+   return GetScreenInfo().device_scale_factor;
+ }
+ 
+--
+2.25.1
