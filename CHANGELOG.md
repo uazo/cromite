@@ -1,3 +1,11 @@
+# 103.0.5060.126
+* fix malfunctioning sticky desktop mode (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/2179)
+* fix non-working passwords manager (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/2188)
+* fix crash when opening recent tabs (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/2190)
+* fix autoplay not working correctly (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/2096)
+* fix timezone override not working correctly (thanks to @uazo, fixes https://github.com/bromite/bromite/issues/2133)
+* add GN flag for clangd builds (thanks to @uazo)
+
 # 103.0.5060.121
 * do not enable always use HTTPS by default
 * match system dark mode (thanks to @krlvm)
