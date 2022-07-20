@@ -21,18 +21,19 @@ Subject: Viewport Protection
  .../renderer/content_settings_agent_impl.cc   |  9 ++
  .../renderer/content_settings_agent_impl.h    |  1 +
  .../platform/web_content_settings_client.h    |  2 +
- .../blink/renderer/core/css/media_values.cc   | 10 +++
+ .../blink/renderer/core/css/media_values.cc   | 22 ++++-
  .../core/frame/dom_visual_viewport.cc         |  4 +-
+ .../renderer/core/frame/local_dom_window.cc   |  6 ++
  .../renderer/core/frame/local_frame_view.cc   |  3 +
  .../blink/renderer/core/frame/screen.cc       | 17 +++-
  .../renderer/core/frame/visual_viewport.cc    |  4 +
  .../renderer/core/frame/visual_viewport.h     |  5 ++
  .../renderer/core/html/html_meta_element.cc   | 28 +++++-
- .../renderer/core/loader/frame_loader.cc      |  7 +-
+ .../renderer/core/loader/frame_loader.cc      | 15 +++-
  third_party/blink/renderer/core/page/page.cc  |  8 ++
  third_party/blink/renderer/core/page/page.h   |  3 +
  .../screen_enumeration/screen_detailed.cc     | 15 ++++
- 29 files changed, 250 insertions(+), 13 deletions(-)
+ 30 files changed, 275 insertions(+), 14 deletions(-)
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteViewportContentSetting.java
  create mode 100644 components/browser_ui/strings/android/viewport.grdp
 
@@ -341,7 +342,7 @@ diff --git a/components/content_settings/core/common/content_settings_types.h b/
 diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc b/components/content_settings/renderer/content_settings_agent_impl.cc
 --- a/components/content_settings/renderer/content_settings_agent_impl.cc
 +++ b/components/content_settings/renderer/content_settings_agent_impl.cc
-@@ -473,6 +473,15 @@ bool ContentSettingsAgentImpl::AllowWebRTC(bool enabled_per_settings) {
+@@ -467,6 +467,15 @@ bool ContentSettingsAgentImpl::AllowWebRTC(bool enabled_per_settings) {
               url::Origin(frame->GetDocument().GetSecurityOrigin()).GetURL());
  }
  
@@ -360,7 +361,7 @@ diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc
 diff --git a/components/content_settings/renderer/content_settings_agent_impl.h b/components/content_settings/renderer/content_settings_agent_impl.h
 --- a/components/content_settings/renderer/content_settings_agent_impl.h
 +++ b/components/content_settings/renderer/content_settings_agent_impl.h
-@@ -96,6 +96,7 @@ class ContentSettingsAgentImpl
+@@ -101,6 +101,7 @@ class ContentSettingsAgentImpl
    bool ShouldAutoupgradeMixedContent() override;
    bool AllowWebgl(bool enabled_per_settings) override;
    bool AllowWebRTC(bool enabled_per_settings) override;
@@ -383,7 +384,32 @@ diff --git a/third_party/blink/public/platform/web_content_settings_client.h b/t
 diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/blink/renderer/core/css/media_values.cc
 --- a/third_party/blink/renderer/core/css/media_values.cc
 +++ b/third_party/blink/renderer/core/css/media_values.cc
-@@ -193,6 +193,11 @@ int MediaValues::CalculateDeviceWidth(LocalFrame* frame) {
+@@ -132,13 +132,23 @@ double MediaValues::CalculateViewportWidth(LocalFrame* frame) {
+   DCHECK(frame);
+   DCHECK(frame->View());
+   DCHECK(frame->GetDocument());
+-  return frame->View()->ViewportSizeForMediaQueries().width();
++  float width_override = frame->GetPage()->PageWidthOverride();
++  double width = frame->View()->ViewportSizeForMediaQueries().width();
++  if (width_override) {
++    width = width * (1.0 - (width_override / 100.0));
++  }
++  return width;
+ }
+ 
+ double MediaValues::CalculateViewportHeight(LocalFrame* frame) {
+   DCHECK(frame);
+   DCHECK(frame->View());
+   DCHECK(frame->GetDocument());
++  float width_override = frame->GetPage()->PageWidthOverride();
++  double height = frame->View()->ViewportSizeForMediaQueries().height();
++  if (width_override) {
++    height = height * (1.0 - (width_override / 100.0));
++  }
+   return frame->View()->ViewportSizeForMediaQueries().height();
+ }
+ 
+@@ -193,6 +203,11 @@ int MediaValues::CalculateDeviceWidth(LocalFrame* frame) {
      device_width = static_cast<int>(
          lroundf(device_width * screen_info.device_scale_factor));
    }
@@ -395,7 +421,7 @@ diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/b
    return device_width;
  }
  
-@@ -205,6 +210,11 @@ int MediaValues::CalculateDeviceHeight(LocalFrame* frame) {
+@@ -205,6 +220,11 @@ int MediaValues::CalculateDeviceHeight(LocalFrame* frame) {
      device_height = static_cast<int>(
          lroundf(device_height * screen_info.device_scale_factor));
    }
@@ -422,6 +448,29 @@ diff --git a/third_party/blink/renderer/core/frame/dom_visual_viewport.cc b/thir
  
    return 0;
  }
+diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_party/blink/renderer/core/frame/local_dom_window.cc
+--- a/third_party/blink/renderer/core/frame/local_dom_window.cc
++++ b/third_party/blink/renderer/core/frame/local_dom_window.cc
+@@ -1400,6 +1400,9 @@ int LocalDOMWindow::outerHeight() const {
+   if (!page)
+     return 0;
+ 
++  float width_override = page->PageWidthOverride();
++  if (width_override) return innerHeight();
++
+   ChromeClient& chrome_client = page->GetChromeClient();
+   if (page->GetSettings().GetReportScreenSizeInPhysicalPixelsQuirk()) {
+     return static_cast<int>(
+@@ -1425,6 +1428,9 @@ int LocalDOMWindow::outerWidth() const {
+   if (!page)
+     return 0;
+ 
++  float width_override = page->PageWidthOverride();
++  if (width_override) return innerWidth();
++
+   ChromeClient& chrome_client = page->GetChromeClient();
+   if (page->GetSettings().GetReportScreenSizeInPhysicalPixelsQuirk()) {
+     return static_cast<int>(
 diff --git a/third_party/blink/renderer/core/frame/local_frame_view.cc b/third_party/blink/renderer/core/frame/local_frame_view.cc
 --- a/third_party/blink/renderer/core/frame/local_frame_view.cc
 +++ b/third_party/blink/renderer/core/frame/local_frame_view.cc
@@ -565,7 +614,7 @@ diff --git a/third_party/blink/renderer/core/html/html_meta_element.cc b/third_p
 +
 +    if (settings->AllowViewportChange(false)) {
 +      if (page->PageWidthOverride() == 0) {
-+        page->SetPageWidthOverride(base::RandInt(-5, 15));
++        page->SetPageWidthOverride(base::RandInt(-30, 150) / 10.0);
 +      }
 +
 +      float device_width = 1.0 + (page->PageWidthOverride() / 100.0);
@@ -596,7 +645,7 @@ diff --git a/third_party/blink/renderer/core/html/html_meta_element.cc b/third_p
 diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
 --- a/third_party/blink/renderer/core/loader/frame_loader.cc
 +++ b/third_party/blink/renderer/core/loader/frame_loader.cc
-@@ -371,8 +371,11 @@ void FrameLoader::SaveScrollState() {
+@@ -371,8 +371,13 @@ void FrameLoader::SaveScrollState() {
    history_item->SetVisualViewportScrollOffset(
        frame_->GetPage()->GetVisualViewport().VisibleRect().OffsetFromOrigin());
  
@@ -604,12 +653,27 @@ diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_part
 -    history_item->SetPageScaleFactor(frame_->GetPage()->PageScaleFactor());
 +  if (frame_->IsMainFrame()) {
 +    int page_width_override = frame_->GetPage()->PageWidthOverride();
-+    if (page_width_override == 0)
++    if (page_width_override == 0) {
++      // set the scale factor only if the feature is not active
 +      history_item->SetPageScaleFactor(frame_->GetPage()->PageScaleFactor());
++    }
 +  }
  
    Client()->DidUpdateCurrentHistoryItem();
  }
+@@ -1326,6 +1331,12 @@ void FrameLoader::RestoreScrollPositionAndViewState() {
+       !GetDocumentLoader()->NavigationScrollAllowed()) {
+     return;
+   }
++  int page_width_override = frame_->GetPage()->PageWidthOverride();
++  if (page_width_override != 0) {
++    // we need to reset the page scale because, if the user activates
++    // the feature, it could be non-zero from the previous navigation
++    GetDocumentLoader()->GetHistoryItem()->SetPageScaleFactor(0);
++  }
+   RestoreScrollPositionAndViewState(
+       GetDocumentLoader()->LoadType(),
+       *GetDocumentLoader()->GetHistoryItem()->GetViewState(),
 diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/renderer/core/page/page.cc
 --- a/third_party/blink/renderer/core/page/page.cc
 +++ b/third_party/blink/renderer/core/page/page.cc
