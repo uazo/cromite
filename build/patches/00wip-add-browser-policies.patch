@@ -3,12 +3,11 @@ Date: Tue, 8 Nov 2022 12:26:58 +0000
 Subject: wip add browser policies
 
 ---
- chrome/android/java/AndroidManifest.xml       |   2 -
  .../privacy_preferences_manager_impl.cc       |   5 +
  .../metrics/chrome_feature_list_creator.cc    |  12 ++
  .../policy/chrome_browser_policy_connector.cc |   2 -
  ...nfiguration_policy_handler_list_factory.cc |   6 +-
- .../account_consistency_mode_manager.cc       |  19 ++-
+ .../account_consistency_mode_manager.cc       |  22 +++-
  chrome/browser/signin/chrome_signin_client.cc |   6 +-
  .../ui/webui/policy/policy_ui_handler.cc      |  91 +++++++++++++
  .../ui/webui/policy/policy_ui_handler.h       |   1 +
@@ -30,21 +29,8 @@ Subject: wip add browser policies
  components/signin/features.gni                |   6 +-
  .../gaia_cookie_manager_service.cc            |   4 +
  google_apis/gaia/gaia_auth_fetcher.cc         |   1 +
- 27 files changed, 287 insertions(+), 41 deletions(-)
+ 26 files changed, 289 insertions(+), 40 deletions(-)
 
-diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
---- a/chrome/android/java/AndroidManifest.xml
-+++ b/chrome/android/java/AndroidManifest.xml
-@@ -67,9 +67,7 @@ by a child template that "extends" this file.
-     <uses-permission android:name="android.permission.CAMERA" />
-     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
-     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
--    <uses-permission android:name="android.permission.GET_ACCOUNTS"/>
-     <uses-permission android:name="android.permission.INTERNET"/>
--    <uses-permission android:name="android.permission.MANAGE_ACCOUNTS"/>
-     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
-     <uses-permission android:name="android.permission.NFC"/>
-     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 diff --git a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
 --- a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
 +++ b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
@@ -104,7 +90,7 @@ diff --git a/chrome/browser/policy/chrome_browser_policy_connector.cc b/chrome/b
 diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
 --- a/chrome/browser/policy/configuration_policy_handler_list_factory.cc
 +++ b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
-@@ -1774,9 +1774,9 @@ bool AreFuturePoliciesSupported() {
+@@ -1773,9 +1773,9 @@ bool AreFuturePoliciesSupported() {
    // Enable future policies for branded browser tests.
    if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kTestType))
      return true;
@@ -120,11 +106,13 @@ diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc 
 diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/browser/signin/account_consistency_mode_manager.cc
 --- a/chrome/browser/signin/account_consistency_mode_manager.cc
 +++ b/chrome/browser/signin/account_consistency_mode_manager.cc
-@@ -31,7 +31,13 @@
+@@ -31,9 +31,15 @@
  #error "Dice and Mirror cannot be both enabled."
  #endif
  
--#if !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(ENABLE_MIRROR)
+-// #if !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(ENABLE_MIRROR)
+-// #error "Either Dice or Mirror should be enabled."
+-// #endif
 +// In Android Dice AND Mirror are disabled in gn
 +#if BUILDFLAG(IS_ANDROID) && (BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(ENABLE_MIRROR))
 +#error "Either Dice and Mirror should be disabled."
@@ -132,8 +120,10 @@ diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/
 +
 +// but in Windows, DICE need to be enabled in build
 +#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(ENABLE_MIRROR)
- #error "Either Dice or Mirror should be enabled."
- #endif
++#error "Either Dice or Mirror should be enabled."
++#endif
+ 
+ using signin::AccountConsistencyMethod;
  
 @@ -189,7 +195,8 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
  #endif
@@ -145,14 +135,13 @@ diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/
  #endif
  
  #if BUILDFLAG(ENABLE_DICE_SUPPORT)
-@@ -199,9 +206,9 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
+@@ -199,8 +206,9 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
      return AccountConsistencyMethod::kDisabled;
    }
  
 -  return AccountConsistencyMethod::kDice;
 -#endif
 -
--  NOTREACHED();
    return AccountConsistencyMethod::kDisabled;
 +#endif // the shift of this line is intentional
 +#if BUILDFLAG(IS_ANDROID)
@@ -350,7 +339,7 @@ diff --git a/components/commerce/core/commerce_feature_list.cc b/components/comm
 +                                  base::FEATURE_DISABLED_BY_DEFAULT};   // guard this
  
  const base::Feature kShoppingListEnableDesyncResolution{
-     "ShoppingListEnableDesyncResolution", base::FEATURE_DISABLED_BY_DEFAULT};
+     "ShoppingListEnableDesyncResolution", base::FEATURE_ENABLED_BY_DEFAULT};
 diff --git a/components/policy/core/browser/browser_policy_connector.cc b/components/policy/core/browser/browser_policy_connector.cc
 --- a/components/policy/core/browser/browser_policy_connector.cc
 +++ b/components/policy/core/browser/browser_policy_connector.cc
@@ -693,15 +682,15 @@ diff --git a/components/signin/features.gni b/components/signin/features.gni
  import("//build/config/chromeos/ui_mode.gni")
  
  # Dice is supported on the platform (but not necessarily enabled).
+-enable_dice_support = false
 +# we need to enable dice support in sources because
 +# too many build problems appear in windows.
 +# Dice is disabled in android
- enable_dice_support = is_linux || is_mac || is_win || is_fuchsia
++enable_dice_support = is_linux || is_mac || is_win || is_fuchsia
  
  # Mirror is enabled and other account consistency mechanisms are not available.
--enable_mirror = is_android || is_chromeos || is_ios
 +# Disable mirror mode in android
-+enable_mirror = false
+ enable_mirror = false
 diff --git a/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc b/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
 --- a/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
 +++ b/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
@@ -726,7 +715,7 @@ diff --git a/components/signin/internal/identity_manager/gaia_cookie_manager_ser
 diff --git a/google_apis/gaia/gaia_auth_fetcher.cc b/google_apis/gaia/gaia_auth_fetcher.cc
 --- a/google_apis/gaia/gaia_auth_fetcher.cc
 +++ b/google_apis/gaia/gaia_auth_fetcher.cc
-@@ -719,6 +719,7 @@ void GaiaAuthFetcher::StartListAccounts() {
+@@ -721,6 +721,7 @@ void GaiaAuthFetcher::StartListAccounts() {
              }
            }
          })");
