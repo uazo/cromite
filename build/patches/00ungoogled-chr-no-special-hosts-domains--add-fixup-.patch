@@ -1,0 +1,988 @@
+From: Your Name <you@example.com>
+Date: Wed, 19 Oct 2022 13:01:32 +0000
+Subject: ungoogled-chr no special hosts/domains (add fixup)
+
+---
+ chrome/browser/BUILD.gn                       |   8 -
+ .../android/metrics/uma_session_stats.cc      |  10 --
+ chrome/browser/browser_process_impl.cc        |   1 -
+ .../browser/chrome_content_browser_client.cc  |  13 +-
+ chrome/browser/extensions/BUILD.gn            |   1 -
+ .../log_sources/chrome_internal_log_source.cc |   5 -
+ chrome/browser/first_run/first_run.cc         |   9 --
+ chrome/browser/google/BUILD.gn                |   2 +-
+ .../long_screenshots_tab_service.cc           |  22 ---
+ .../metrics/chrome_metrics_service_client.cc  |   2 +-
+ .../chrome_metrics_services_manager_client.cc |   5 +-
+ .../metrics/metrics_reporting_state.cc        |  76 ---------
+ .../net/system_network_context_manager.cc     |   1 -
+ .../modules/recipes/recipes_service.cc        |   3 +-
+ .../one_google_bar_loader_impl.cc             |   3 +-
+ .../new_tab_page/promos/promo_service.cc      |   6 +-
+ .../page_load_metrics_initialize.cc           |   2 -
+ ...hrome_browser_main_extra_parts_profiles.cc |   1 -
+ chrome/browser/safe_browsing/BUILD.gn         |   1 -
+ .../ui_thread_search_terms_data.cc            |   4 -
+ chrome/browser/ui/BUILD.gn                    |   1 -
+ .../ui/webui/new_tab_page/new_tab_page_ui.cc  |   5 -
+ .../webui/settings/reset_settings_handler.cc  |   1 -
+ .../upgrade_detector/upgrade_detector_impl.cc |   2 +-
+ chrome/common/BUILD.gn                        |   2 -
+ .../url_loader_throttle_provider_impl.cc      |   7 -
+ chrome/test/BUILD.gn                          |   1 -
+ components/google/core/common/google_util.cc  | 150 +-----------------
+ components/google/core/common/google_util.h   |  14 +-
+ .../search_engines/search_terms_data.cc       |   4 +-
+ components/search_provider_logos/BUILD.gn     |   2 -
+ .../logo_service_impl.cc                      |  16 +-
+ components/url_matcher/url_util.cc            |  83 ----------
+ 33 files changed, 20 insertions(+), 443 deletions(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1018,10 +1018,6 @@ static_library("browser") {
+     "page_load_metrics/observers/foreground_duration_ukm_observer.h",
+     "page_load_metrics/observers/formfill_page_load_metrics_observer.cc",
+     "page_load_metrics/observers/formfill_page_load_metrics_observer.h",
+-    "page_load_metrics/observers/from_gws_page_load_metrics_observer.cc",
+-    "page_load_metrics/observers/from_gws_page_load_metrics_observer.h",
+-    "page_load_metrics/observers/gws_page_load_metrics_observer.cc",
+-    "page_load_metrics/observers/gws_page_load_metrics_observer.h",
+     "page_load_metrics/observers/histogram_suffixes.cc",
+     "page_load_metrics/observers/histogram_suffixes.h",
+     "page_load_metrics/observers/https_engagement_metrics/https_engagement_page_load_metrics_observer.cc",
+@@ -1938,7 +1934,6 @@ static_library("browser") {
+   allow_circular_includes_from = [
+     "//chrome/browser/devtools",
+     "//chrome/browser/favicon",
+-    "//chrome/browser/google",
+     "//chrome/browser/profiling_host",
+ 
+     # TODO(crbug.com/1335199): break this dep when favicon is in its own target
+@@ -1961,7 +1956,6 @@ static_library("browser") {
+ 
+   public_deps = [
+     "//base",
+-    "//chrome/browser/google",
+     "//chrome/common",
+     "//chrome/common:buildflags",
+     "//chrome/common:constants",
+@@ -7704,8 +7698,6 @@ static_library("browser") {
+       "supervised_user/supervised_user_constants.h",
+       "supervised_user/supervised_user_denylist.cc",
+       "supervised_user/supervised_user_denylist.h",
+-      "supervised_user/supervised_user_google_auth_navigation_throttle.cc",
+-      "supervised_user/supervised_user_google_auth_navigation_throttle.h",
+       "supervised_user/supervised_user_interstitial.cc",
+       "supervised_user/supervised_user_interstitial.h",
+       "supervised_user/supervised_user_metrics_service.cc",
+diff --git a/chrome/browser/android/metrics/uma_session_stats.cc b/chrome/browser/android/metrics/uma_session_stats.cc
+--- a/chrome/browser/android/metrics/uma_session_stats.cc
++++ b/chrome/browser/android/metrics/uma_session_stats.cc
+@@ -208,16 +208,6 @@ static void JNI_UmaSessionStats_ChangeMetricsReportingConsent(
+     JNIEnv*,
+     jboolean consent) {
+   UpdateMetricsPrefsOnPermissionChange(consent);
+-
+-  // This function ensures a consent file in the data directory is either
+-  // created, or deleted, depending on consent. Starting up metrics services
+-  // will ensure that the consent file contains the ClientID. The ID is passed
+-  // to the renderer for crash reporting when things go wrong.
+-  GoogleUpdateSettings::CollectStatsConsentTaskRunner()->PostTask(
+-      FROM_HERE,
+-      base::BindOnce(
+-          base::IgnoreResult(GoogleUpdateSettings::SetCollectStatsConsent),
+-          consent));
+ }
+ 
+ // Initialize the local consent bool variable to false. Used only for testing.
+diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -1073,7 +1073,6 @@ BrowserProcessImpl::component_updater() {
+       std::make_unique<component_updater::TimerUpdateScheduler>();
+ 
+   std::string brand;
+-  google_brand::GetBrand(&brand);
+   component_updater_ = component_updater::ComponentUpdateServiceFactory(
+       component_updater::MakeChromeComponentUpdaterConfigurator(
+           base::CommandLine::ForCurrentProcess(),
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -2656,7 +2656,6 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+       switches::kForcePNaClSubzero,
+ #endif
+       switches::kForceUIDirection,
+-      switches::kIgnoreGooglePortNumbers,
+       switches::kJavaScriptHarmony,
+       switches::kEnableExperimentalWebAssemblyFeatures,
+       embedder_support::kOriginTrialDisabledFeatures,
+@@ -4560,12 +4559,6 @@ ChromeContentBrowserClient::CreateThrottlesForNavigation(
+                    &throttles);
+ #endif
+ 
+-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
+-  MaybeAddThrottle(
+-      SupervisedUserGoogleAuthNavigationThrottle::MaybeCreate(handle),
+-      &throttles);
+-#endif
+-
+   if (auto* throttle_manager =
+           subresource_filter::ContentSubresourceFilterThrottleManager::
+               FromNavigationHandle(*handle)) {
+@@ -5057,11 +5050,11 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
+       profile->GetPrefs()->GetInteger(prefs::kForceYouTubeRestrict),
+       profile->GetPrefs()->GetString(prefs::kAllowedDomainsForApps),
+       false /*-> allow_userscript, don't care */};
+-  result.push_back(std::make_unique<GoogleURLLoaderThrottle>(
+ #if BUILDFLAG(IS_ANDROID)
+-      client_data_header, is_tab_large_enough,
++  if (is_tab_large_enough) {
++    // do nothing, prevents "error: variable 'is_tab_large_enough' set but not used"
++  }
+ #endif
+-      std::move(dynamic_params)));
+ 
+   {
+     auto* factory =
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -789,7 +789,6 @@ static_library("extensions") {
+     "//chrome/browser/devtools",
+     "//chrome/browser/favicon",
+     "//chrome/browser/first_party_sets",
+-    "//chrome/browser/google",
+     "//chrome/browser/image_decoder",
+     "//chrome/browser/media/router",
+     "//chrome/browser/media/router:media_router_feature",
+diff --git a/chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.cc b/chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.cc
+--- a/chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.cc
++++ b/chrome/browser/feedback/system_logs/log_sources/chrome_internal_log_source.cc
+@@ -104,7 +104,6 @@ constexpr char kOsVersionTag[] = "OS VERSION";
+ #if BUILDFLAG(IS_WIN)
+ constexpr char kUsbKeyboardDetected[] = "usb_keyboard_detected";
+ constexpr char kIsEnrolledToDomain[] = "enrolled_to_domain";
+-constexpr char kInstallerBrandCode[] = "installer_brand_code";
+ #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+ constexpr char kUpdateErrorCode[] = "update_error_code";
+ constexpr char kUpdateHresult[] = "update_hresult";
+@@ -528,10 +527,6 @@ void ChromeInternalLogSource::PopulateEnrolledToDomain(
+ 
+ void ChromeInternalLogSource::PopulateInstallerBrandCode(
+     SystemLogsResponse* response) {
+-  std::string brand;
+-  google_brand::GetBrand(&brand);
+-  response->emplace(kInstallerBrandCode,
+-                    brand.empty() ? "Unknown brand code" : brand);
+ }
+ 
+ void ChromeInternalLogSource::PopulateLastUpdateState(
+diff --git a/chrome/browser/first_run/first_run.cc b/chrome/browser/first_run/first_run.cc
+--- a/chrome/browser/first_run/first_run.cc
++++ b/chrome/browser/first_run/first_run.cc
+@@ -284,15 +284,6 @@ void SetupInitialPrefsFromInstallPrefs(
+ 
+ // -- Platform-specific functions --
+ 
+-#if !BUILDFLAG(IS_LINUX) && !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_BSD) && \
+-    !BUILDFLAG(IS_FUCHSIA)
+-bool IsOrganicFirstRun() {
+-  std::string brand;
+-  google_brand::GetBrand(&brand);
+-  return google_brand::IsOrganicFirstRun(brand);
+-}
+-#endif
+-
+ FirstRunState DetermineFirstRunState(bool has_sentinel,
+                                      bool force_first_run,
+                                      bool no_first_run) {
+diff --git a/chrome/browser/google/BUILD.gn b/chrome/browser/google/BUILD.gn
+--- a/chrome/browser/google/BUILD.gn
++++ b/chrome/browser/google/BUILD.gn
+@@ -5,7 +5,7 @@
+ import("//build/config/chrome_build.gni")
+ import("//build/config/chromeos/ui_mode.gni")
+ 
+-source_set("google") {
++source_set("google_UNUSED") {
+   sources = [
+     "google_brand.cc",
+     "google_brand.h",
+diff --git a/chrome/browser/long_screenshots/long_screenshots_tab_service.cc b/chrome/browser/long_screenshots/long_screenshots_tab_service.cc
+--- a/chrome/browser/long_screenshots/long_screenshots_tab_service.cc
++++ b/chrome/browser/long_screenshots/long_screenshots_tab_service.cc
+@@ -35,13 +35,11 @@ constexpr size_t kMaxPerCaptureSizeBytes = 50 * 1000L * 1000L;  // 50 MB.
+ // Host/regex pattern for Google AMP Cache URLs.
+ // See https://developers.google.com/amp/cache/overview#amp-cache-url-format
+ // for a definition of the format of AMP Cache URLs.
+-const char kGoogleAmpCacheHost[] = "cdn.ampproject.org";
+ const char kGoogleAmpCachePathPattern[] = "/[a-z]/(s/)?(.*)";
+ 
+ // Regex pattern for the path of Google AMP Viewer URLs.
+ const char kGoogleAmpViewerPathPattern[] = "/amp/(s/)?(.*)";
+ 
+-const char kGoogleNewsHost[] = "news.google.com";
+ const char kGoogleNewsPathPattern[] = "/articles/(.*)";
+ 
+ }  // namespace
+@@ -229,26 +227,6 @@ bool LongScreenshotsTabService::IsAmpUrl(const GURL& url) {
+     return false;
+   }
+ 
+-  // Check for "*.cdn.ampproject.org" URLs.
+-  if (url.DomainIs(kGoogleAmpCacheHost) &&
+-      re2::RE2::FullMatch(url.path(), google_amp_cache_path_regex_)) {
+-    return true;
+-  }
+-
+-  // Check for "www.google.TLD/amp/" URLs.
+-  if (google_util::IsGoogleDomainUrl(
+-          url, google_util::DISALLOW_SUBDOMAIN,
+-          google_util::DISALLOW_NON_STANDARD_PORTS) &&
+-      re2::RE2::FullMatch(url.path(), google_amp_viewer_path_regex_)) {
+-    return true;
+-  }
+-
+-  // Check for "news.google.com/articles/*".
+-  if (url.DomainIs(kGoogleNewsHost) &&
+-      re2::RE2::FullMatch(url.path(), google_news_path_regex_)) {
+-    return true;
+-  }
+-
+   return false;
+ }
+ 
+diff --git a/chrome/browser/metrics/chrome_metrics_service_client.cc b/chrome/browser/metrics/chrome_metrics_service_client.cc
+--- a/chrome/browser/metrics/chrome_metrics_service_client.cc
++++ b/chrome/browser/metrics/chrome_metrics_service_client.cc
+@@ -571,7 +571,7 @@ ChromeMetricsServiceClient::GetNetworkTimeTracker() {
+ }
+ 
+ bool ChromeMetricsServiceClient::GetBrand(std::string* brand_code) {
+-  return google_brand::GetBrand(brand_code);
++  return false;
+ }
+ 
+ metrics::SystemProfileProto::Channel ChromeMetricsServiceClient::GetChannel() {
+diff --git a/chrome/browser/metrics/chrome_metrics_services_manager_client.cc b/chrome/browser/metrics/chrome_metrics_services_manager_client.cc
+--- a/chrome/browser/metrics/chrome_metrics_services_manager_client.cc
++++ b/chrome/browser/metrics/chrome_metrics_services_manager_client.cc
+@@ -99,9 +99,6 @@ void PostStoreMetricsClientInfo(const metrics::ClientInfo& client_info) {
+   // This must happen on the same sequence as the tasks to enable/disable
+   // metrics reporting. Otherwise, this may run while disabling metrics
+   // reporting if the user quickly enables and disables metrics reporting.
+-  GoogleUpdateSettings::CollectStatsConsentTaskRunner()->PostTask(
+-      FROM_HERE, base::BindOnce(&GoogleUpdateSettings::StoreMetricsClientInfo,
+-                                client_info));
+ }
+ 
+ #if BUILDFLAG(IS_ANDROID)
+@@ -311,7 +308,7 @@ ChromeMetricsServicesManagerClient::GetMetricsStateManager() {
+         local_state_, enabled_state_provider_.get(), GetRegistryBackupKey(),
+         user_data_dir, startup_visibility,
+         base::BindRepeating(&PostStoreMetricsClientInfo),
+-        base::BindRepeating(&GoogleUpdateSettings::LoadMetricsClientInfo),
++        metrics::MetricsStateManager::LoadClientInfoCallback(),
+         client_id);
+   }
+   return metrics_state_manager_.get();
+diff --git a/chrome/browser/metrics/metrics_reporting_state.cc b/chrome/browser/metrics/metrics_reporting_state.cc
+--- a/chrome/browser/metrics/metrics_reporting_state.cc
++++ b/chrome/browser/metrics/metrics_reporting_state.cc
+@@ -35,71 +35,6 @@
+ #include "components/policy/core/common/features.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+-namespace {
+-
+-enum MetricsReportingChangeHistogramValue {
+-  METRICS_REPORTING_ERROR,
+-  METRICS_REPORTING_DISABLED,
+-  METRICS_REPORTING_ENABLED,
+-  METRICS_REPORTING_MAX
+-};
+-
+-void RecordMetricsReportingHistogramValue(
+-    MetricsReportingChangeHistogramValue value) {
+-  UMA_HISTOGRAM_ENUMERATION(
+-      "UMA.MetricsReporting.Toggle", value, METRICS_REPORTING_MAX);
+-}
+-
+-// Tries to set metrics reporting status to |enabled| and returns whatever is
+-// the result of the update.
+-bool SetGoogleUpdateSettings(bool enabled) {
+-  GoogleUpdateSettings::SetCollectStatsConsent(enabled);
+-  bool updated_pref = GoogleUpdateSettings::GetCollectStatsConsent();
+-  if (enabled != updated_pref)
+-    DVLOG(1) << "Unable to set metrics reporting status to " << enabled;
+-
+-  return updated_pref;
+-}
+-
+-// Does the necessary changes for MetricsReportingEnabled changes which needs
+-// to be done in the main thread.
+-// As arguments this function gets:
+-//  |to_update_pref| which indicates what the desired update should be,
+-//  |callback_fn| is the callback function to be called in the end,
+-//  |called_from| is from where the call was made,
+-//  |updated_pref| is the result of attempted update.
+-// Update considers to be successful if |to_update_pref| and |updated_pref| are
+-// the same.
+-void SetMetricsReporting(bool to_update_pref,
+-                         OnMetricsReportingCallbackType callback_fn,
+-                         ChangeMetricsReportingStateCalledFrom called_from,
+-                         bool updated_pref) {
+-  g_browser_process->local_state()->SetBoolean(
+-      metrics::prefs::kMetricsReportingEnabled, updated_pref);
+-
+-#if BUILDFLAG(IS_CHROMEOS_ASH)
+-  metrics::structured::NeutrinoDevicesLogWithClientId(
+-      g_browser_process->local_state()->GetString(
+-          metrics::prefs::kMetricsClientID),
+-      metrics::structured::NeutrinoDevicesLocation::kSetMetricsReporting);
+-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+-  UpdateMetricsPrefsOnPermissionChange(updated_pref, called_from);
+-
+-  // Uses the current state of whether reporting is enabled to enable services.
+-  g_browser_process->GetMetricsServicesManager()->UpdateUploadPermissions(true);
+-
+-  if (to_update_pref == updated_pref) {
+-    RecordMetricsReportingHistogramValue(updated_pref ?
+-        METRICS_REPORTING_ENABLED : METRICS_REPORTING_DISABLED);
+-  } else {
+-    RecordMetricsReportingHistogramValue(METRICS_REPORTING_ERROR);
+-  }
+-  if (!callback_fn.is_null())
+-    std::move(callback_fn).Run(updated_pref);
+-}
+-
+-}  // namespace
+-
+ void ChangeMetricsReportingState(
+     bool enabled,
+     ChangeMetricsReportingStateCalledFrom called_from) {
+@@ -140,11 +75,6 @@ void ChangeMetricsReportingStateWithReply(
+       metrics::structured::NeutrinoDevicesLocation::
+           kChangeMetricsReportingStateWithReply);
+ #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+-  base::PostTaskAndReplyWithResult(
+-      GoogleUpdateSettings::CollectStatsConsentTaskRunner(), FROM_HERE,
+-      base::BindOnce(&SetGoogleUpdateSettings, enabled),
+-      base::BindOnce(&SetMetricsReporting, enabled, std::move(callback_fn),
+-                     called_from));
+ }
+ 
+ void UpdateMetricsPrefsOnPermissionChange(
+@@ -215,12 +145,6 @@ void ApplyMetricsReportingPolicy() {
+     return;
+   }
+ #endif  // BUILDFLAG(IS_ANDROID)
+-
+-  GoogleUpdateSettings::CollectStatsConsentTaskRunner()->PostTask(
+-      FROM_HERE,
+-      base::BindOnce(
+-          base::IgnoreResult(&GoogleUpdateSettings::SetCollectStatsConsent),
+-          ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled()));
+ }
+ 
+ bool IsMetricsReportingPolicyManaged() {
+diff --git a/chrome/browser/net/system_network_context_manager.cc b/chrome/browser/net/system_network_context_manager.cc
+--- a/chrome/browser/net/system_network_context_manager.cc
++++ b/chrome/browser/net/system_network_context_manager.cc
+@@ -704,7 +704,6 @@ void SystemNetworkContextManager::AddSSLConfigToNetworkContextParams(
+ void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
+     network::mojom::NetworkContextParams* network_context_params) {
+   variations::UpdateCorsExemptHeaderForVariations(network_context_params);
+-  GoogleURLLoaderThrottle::UpdateCorsExemptHeader(network_context_params);
+ 
+   network_context_params->enable_brotli = true;
+ 
+diff --git a/chrome/browser/new_tab_page/modules/recipes/recipes_service.cc b/chrome/browser/new_tab_page/modules/recipes/recipes_service.cc
+--- a/chrome/browser/new_tab_page/modules/recipes/recipes_service.cc
++++ b/chrome/browser/new_tab_page/modules/recipes/recipes_service.cc
+@@ -52,9 +52,10 @@ const char* GetExperimentGroupParam() {
+ }
+ 
+ GURL GetApiUrl(const std::string& application_locale) {
++  if ((true)) return GURL();
+   GURL google_base_url = google_util::CommandLineGoogleBaseURL();
+   if (!google_base_url.is_valid()) {
+-    google_base_url = GURL(google_util::kGoogleHomepageURL);
++    google_base_url = GURL();
+   }
+   auto url = net::AppendQueryParameter(google_base_url.Resolve(kPath), "hl",
+                                        application_locale);
+diff --git a/chrome/browser/new_tab_page/one_google_bar/one_google_bar_loader_impl.cc b/chrome/browser/new_tab_page/one_google_bar/one_google_bar_loader_impl.cc
+--- a/chrome/browser/new_tab_page/one_google_bar/one_google_bar_loader_impl.cc
++++ b/chrome/browser/new_tab_page/one_google_bar/one_google_bar_loader_impl.cc
+@@ -313,10 +313,11 @@ bool OneGoogleBarLoaderImpl::SetAdditionalQueryParams(
+ }
+ 
+ GURL OneGoogleBarLoaderImpl::GetApiUrl() const {
++  if ((true)) return GURL();
+   GURL api_url;
+   GURL google_base_url = google_util::CommandLineGoogleBaseURL();
+   if (!google_base_url.is_valid()) {
+-    google_base_url = GURL(google_util::kGoogleHomepageURL);
++    google_base_url = GURL();
+   }
+ 
+   api_url = google_base_url.Resolve(kNewTabOgbApiPath);
+diff --git a/chrome/browser/new_tab_page/promos/promo_service.cc b/chrome/browser/new_tab_page/promos/promo_service.cc
+--- a/chrome/browser/new_tab_page/promos/promo_service.cc
++++ b/chrome/browser/new_tab_page/promos/promo_service.cc
+@@ -80,11 +80,7 @@ bool CanBlockPromos() {
+ }
+ 
+ GURL GetGoogleBaseUrl() {
+-  GURL google_base_url = google_util::CommandLineGoogleBaseURL();
+-  if (!google_base_url.is_valid()) {
+-    google_base_url = GURL(google_util::kGoogleHomepageURL);
+-  }
+-  return google_base_url;
++  return GURL();
+ }
+ 
+ GURL GetApiUrl() {
+diff --git a/chrome/browser/page_load_metrics/page_load_metrics_initialize.cc b/chrome/browser/page_load_metrics/page_load_metrics_initialize.cc
+--- a/chrome/browser/page_load_metrics/page_load_metrics_initialize.cc
++++ b/chrome/browser/page_load_metrics/page_load_metrics_initialize.cc
+@@ -130,8 +130,6 @@ void PageLoadMetricsEmbedder::RegisterEmbedderObservers(
+     tracker->AddObserver(std::make_unique<AMPPageLoadMetricsObserver>());
+     tracker->AddObserver(std::make_unique<JavascriptFrameworksUkmObserver>());
+     tracker->AddObserver(std::make_unique<SchemePageLoadMetricsObserver>());
+-    tracker->AddObserver(std::make_unique<FromGWSPageLoadMetricsObserver>());
+-    tracker->AddObserver(std::make_unique<GWSPageLoadMetricsObserver>());
+     tracker->AddObserver(std::make_unique<ForegroundDurationUKMObserver>());
+     tracker->AddObserver(
+         std::make_unique<DocumentWritePageLoadMetricsObserver>());
+diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+--- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
++++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
+@@ -420,7 +420,6 @@ void ChromeBrowserMainExtraPartsProfiles::
+ #if !BUILDFLAG(IS_ANDROID)
+   GlobalErrorServiceFactory::GetInstance();
+ #endif
+-  GoogleSearchDomainMixingMetricsEmitterFactory::GetInstance();
+   HistoryServiceFactory::GetInstance();
+   HistoryUiFaviconRequestHandlerFactory::GetInstance();
+   HostContentSettingsMapFactory::GetInstance();
+diff --git a/chrome/browser/safe_browsing/BUILD.gn b/chrome/browser/safe_browsing/BUILD.gn
+--- a/chrome/browser/safe_browsing/BUILD.gn
++++ b/chrome/browser/safe_browsing/BUILD.gn
+@@ -22,7 +22,6 @@ static_library("safe_browsing") {
+     "//build:branding_buildflags",
+     "//chrome/app:generated_resources",
+     "//chrome/browser:browser_process",
+-    "//chrome/browser/google",
+     "//chrome/browser/profiles",
+     "//chrome/browser/profiles:profile",
+     "//chrome/common",
+diff --git a/chrome/browser/search_engines/ui_thread_search_terms_data.cc b/chrome/browser/search_engines/ui_thread_search_terms_data.cc
+--- a/chrome/browser/search_engines/ui_thread_search_terms_data.cc
++++ b/chrome/browser/search_engines/ui_thread_search_terms_data.cc
+@@ -33,10 +33,6 @@ UIThreadSearchTermsData::UIThreadSearchTermsData() {
+ std::string UIThreadSearchTermsData::GoogleBaseURLValue() const {
+   DCHECK(!BrowserThread::IsThreadInitialized(BrowserThread::UI) ||
+       BrowserThread::CurrentlyOn(BrowserThread::UI));
+-  GURL base_url(google_util::CommandLineGoogleBaseURL());
+-  if (base_url.is_valid())
+-    return base_url.spec();
+-
+   return SearchTermsData::GoogleBaseURLValue();
+ }
+ 
+diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
+--- a/chrome/browser/ui/BUILD.gn
++++ b/chrome/browser/ui/BUILD.gn
+@@ -404,7 +404,6 @@ static_library("ui") {
+     "//chrome/browser/breadcrumbs",
+     "//chrome/browser/devtools",
+     "//chrome/browser/favicon",
+-    "//chrome/browser/google",
+     "//chrome/browser/image_decoder",
+     "//chrome/browser/media:mojo_bindings",
+     "//chrome/browser/media/router:media_router_feature",
+diff --git a/chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.cc b/chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.cc
+--- a/chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.cc
++++ b/chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.cc
+@@ -489,11 +489,6 @@ content::WebUIDataSource* CreateNewTabPageUiHtmlSource(Profile* profile) {
+   // chrome-untrusted://new-tab-page for other external content and resources.
+   // NOTE: Use caution when overriding content security policies as that cean
+   // lead to subtle security bugs such as https://crbug.com/1251541.
+-  source->OverrideContentSecurityPolicy(
+-      network::mojom::CSPDirectiveName::ChildSrc,
+-      base::StringPrintf("child-src https: %s %s;",
+-                         google_util::CommandLineGoogleBaseURL().spec().c_str(),
+-                         chrome::kChromeUIUntrustedNewTabPageUrl));
+ 
+   return source;
+ }
+diff --git a/chrome/browser/ui/webui/settings/reset_settings_handler.cc b/chrome/browser/ui/webui/settings/reset_settings_handler.cc
+--- a/chrome/browser/ui/webui/settings/reset_settings_handler.cc
++++ b/chrome/browser/ui/webui/settings/reset_settings_handler.cc
+@@ -87,7 +87,6 @@ bool ResetSettingsHandler::ShouldShowResetProfileBanner(Profile* profile) {
+ 
+ ResetSettingsHandler::ResetSettingsHandler(Profile* profile)
+     : profile_(profile) {
+-  google_brand::GetBrand(&brandcode_);
+ }
+ 
+ ResetSettingsHandler::~ResetSettingsHandler() {}
+diff --git a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
+--- a/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
++++ b/chrome/browser/upgrade_detector/upgrade_detector_impl.cc
+@@ -215,7 +215,7 @@ void UpgradeDetectorImpl::StartOutdatedBuildDetector() {
+   // an outdated build is being simulated by command line switches.
+   if (!simulating_outdated_) {
+     std::string brand;
+-    if (google_brand::GetBrand(&brand) && !google_brand::IsOrganic(brand))
++    if ((true))
+       return;
+ 
+ #if BUILDFLAG(IS_WIN)
+diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -133,8 +133,6 @@ static_library("common_lib") {
+     "content_restriction.h",
+     "crash_keys.cc",
+     "crash_keys.h",
+-    "google_url_loader_throttle.cc",
+-    "google_url_loader_throttle.h",
+     "logging_chrome.cc",
+     "logging_chrome.h",
+     "media/cdm_registration.cc",
+diff --git a/chrome/renderer/url_loader_throttle_provider_impl.cc b/chrome/renderer/url_loader_throttle_provider_impl.cc
+--- a/chrome/renderer/url_loader_throttle_provider_impl.cc
++++ b/chrome/renderer/url_loader_throttle_provider_impl.cc
+@@ -178,13 +178,6 @@ URLLoaderThrottleProviderImpl::CreateThrottles(
+   }
+ #endif
+ 
+-  throttles.emplace_back(std::make_unique<GoogleURLLoaderThrottle>(
+-#if BUILDFLAG(IS_ANDROID)
+-      client_data_header,
+-      /* is_tab_large_enough= */ false,
+-#endif
+-      ChromeRenderThreadObserver::GetDynamicParams()));
+-
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+   throttles.emplace_back(std::make_unique<MergeSessionLoaderThrottle>(
+       chrome_content_renderer_client_->GetChromeObserver()
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -5728,7 +5728,6 @@ test("unit_tests") {
+     "//chrome/browser/favicon",
+     "//chrome/browser/feature_guide/notifications:unit_tests",
+     "//chrome/browser/first_party_sets",
+-    "//chrome/browser/google:unit_tests",
+     "//chrome/browser/media/router",
+     "//chrome/browser/media/router:media_router_feature",
+     "//chrome/browser/media/router:unittests",
+diff --git a/components/google/core/common/google_util.cc b/components/google/core/common/google_util.cc
+--- a/components/google/core/common/google_util.cc
++++ b/components/google/core/common/google_util.cc
+@@ -29,7 +29,7 @@ namespace google_util {
+ 
+ // Global functions -----------------------------------------------------------
+ 
+-const char kGoogleHomepageURL[] = "https://www.google.com/";
++const char kGoogleHomepageURL_Checked[] = "https://www.google.com/";
+ 
+ std::string GetGoogleLocale(const std::string& application_locale) {
+   // Google does not recognize "nb" for Norwegian Bokmal; it uses "no".
+@@ -38,8 +38,7 @@ std::string GetGoogleLocale(const std::string& application_locale) {
+ 
+ GURL AppendGoogleLocaleParam(const GURL& url,
+                              const std::string& application_locale) {
+-  return net::AppendQueryParameter(url, "hl",
+-                                   GetGoogleLocale(application_locale));
++  return url;
+ }
+ 
+ std::string GetGoogleCountryCode(const GURL& google_homepage_url) {
+@@ -83,155 +82,12 @@ bool IsYoutubeDomainUrl(const GURL& url, SubdomainPermission subdomain_permissio
+ }
+ 
+ bool IsGoogleAssociatedDomainUrl(const GURL& url) { // disabled on Bromite
+-  if ((true))
+-    return false;
+-
+-  // Some domains don't have international TLD extensions, so testing for them
+-  // is very straightforward.
+-  static const char* kSuffixesToSetHeadersFor[] = {
+-      ".android.com",
+-      ".doubleclick.com",
+-      ".doubleclick.net",
+-      ".ggpht.com",
+-      ".googleadservices.com",
+-      ".googleapis.com",
+-      ".googlesyndication.com",
+-      ".googleusercontent.com",
+-      ".googlevideo.com",
+-      ".gstatic.com",
+-      ".litepages.googlezip.net",
+-      ".ytimg.com",
+-  };
+-  const std::string host = url.host();
+-  for (size_t i = 0; i < std::size(kSuffixesToSetHeadersFor); ++i) {
+-    if (base::EndsWith(host, kSuffixesToSetHeadersFor[i],
+-                       base::CompareCase::INSENSITIVE_ASCII)) {
+-      return true;
+-    }
+-  }
+-
+-  // Exact hostnames in lowercase to set headers for.
+-  static const char* kHostsToSetHeadersFor[] = {
+-      "googleweblight.com",
+-  };
+-  for (size_t i = 0; i < std::size(kHostsToSetHeadersFor); ++i) {
+-    if (base::EqualsCaseInsensitiveASCII(host, kHostsToSetHeadersFor[i]))
+-      return true;
+-  }
+-
+   return false;
+ }
+ 
+-const std::vector<std::string>& GetGoogleRegistrableDomains() {
+-  static base::NoDestructor<std::vector<std::string>>
+-      kGoogleRegisterableDomains([]() {
+-        std::vector<std::string> domains;
+-
+-        std::vector<std::string> tlds{GOOGLE_TLD_LIST};
+-        for (const std::string& tld : tlds) {
+-          std::string domain = "google." + tld;
+-
+-          // The Google TLD list might contain domains that are not considered
+-          // to be registrable domains by net::registry_controlled_domains.
+-          if (GetDomainAndRegistry(domain,
+-                                   net::registry_controlled_domains::
+-                                       INCLUDE_PRIVATE_REGISTRIES) != domain) {
+-            continue;
+-          }
+-
+-          domains.push_back(domain);
+-        }
+-
+-        return domains;
+-      }());
+-
+-  return *kGoogleRegisterableDomains;
+-}
+-
+ GURL AppendToAsyncQueryParam(const GURL& url,
+                              const std::string& key,
+                              const std::string& value) {
+-  const std::string param_name = "async";
+-  const std::string key_value = key + ":" + value;
+-  bool replaced = false;
+-  const std::string input = url.query();
+-  url::Component cursor(0, input.size());
+-  std::string output;
+-  url::Component key_range, value_range;
+-  while (url::ExtractQueryKeyValue(input.data(), &cursor, &key_range,
+-                                   &value_range)) {
+-    const base::StringPiece input_key(input.data() + key_range.begin,
+-                                      key_range.len);
+-    std::string key_value_pair(input, key_range.begin,
+-                               value_range.end() - key_range.begin);
+-    if (!replaced && input_key == param_name) {
+-      // Check |replaced| as only the first match should be replaced.
+-      replaced = true;
+-      key_value_pair += "," + key_value;
+-    }
+-    if (!output.empty()) {
+-      output += "&";
+-    }
+-
+-    output += key_value_pair;
+-  }
+-  if (!replaced) {
+-    if (!output.empty()) {
+-      output += "&";
+-    }
+-
+-    output += (param_name + "=" + key_value);
+-  }
+-  GURL::Replacements replacements;
+-  replacements.SetQueryStr(output);
+-  return url.ReplaceComponents(replacements);
++  return url;
+ }
+-
+-GoogleSearchMode GoogleSearchModeFromUrl(const GURL& url) {
+-  static_assert(GoogleSearchMode::kMaxValue == GoogleSearchMode::kFlights,
+-                "This function should be updated if new values are added to "
+-                "GoogleSearchMode");
+-
+-  base::StringPiece query_str = url.query_piece();
+-  url::Component query(0, static_cast<int>(url.query_piece().length()));
+-  url::Component key, value;
+-  GoogleSearchMode mode = GoogleSearchMode::kUnspecified;
+-  while (url::ExtractQueryKeyValue(query_str.data(), &query, &key, &value)) {
+-    base::StringPiece key_str = query_str.substr(key.begin, key.len);
+-    if (key_str != "tbm") {
+-      continue;
+-    }
+-    if (mode != GoogleSearchMode::kUnspecified) {
+-      // There is more than one tbm parameter, which is not expected. Return
+-      // kUnknown to signify the result can't be trusted.
+-      return GoogleSearchMode::kUnknown;
+-    }
+-    base::StringPiece value_str = query_str.substr(value.begin, value.len);
+-    if (value_str == "isch") {
+-      mode = GoogleSearchMode::kImages;
+-    } else if (value_str == "web") {
+-      mode = GoogleSearchMode::kWeb;
+-    } else if (value_str == "nws") {
+-      mode = GoogleSearchMode::kNews;
+-    } else if (value_str == "shop") {
+-      mode = GoogleSearchMode::kShopping;
+-    } else if (value_str == "vid") {
+-      mode = GoogleSearchMode::kVideos;
+-    } else if (value_str == "bks") {
+-      mode = GoogleSearchMode::kBooks;
+-    } else if (value_str == "flm") {
+-      mode = GoogleSearchMode::kFlights;
+-    } else if (value_str == "lcl") {
+-      mode = GoogleSearchMode::kLocal;
+-    } else {
+-      mode = GoogleSearchMode::kUnknown;
+-    }
+-  }
+-  if (mode == GoogleSearchMode::kUnspecified) {
+-    // No tbm query parameter means this is the Web mode.
+-    mode = GoogleSearchMode::kWeb;
+-  }
+-  return mode;
+-}
+-
+ }  // namespace google_util
+diff --git a/components/google/core/common/google_util.h b/components/google/core/common/google_util.h
+--- a/components/google/core/common/google_util.h
++++ b/components/google/core/common/google_util.h
+@@ -40,7 +40,7 @@ enum class GoogleSearchMode {
+   kMaxValue = kFlights,
+ };
+ 
+-extern const char kGoogleHomepageURL[];
++extern const char kGoogleHomepageURL_Checked[];
+ 
+ // True iff |str| contains a "q=" or "as_q=" query parameter with a non-empty
+ // value. |str| should be a query or a hash fragment, without the ? or # (as
+@@ -133,14 +133,6 @@ bool IsYoutubeDomainUrl(const GURL& url,
+ // True if |url| is hosted by Google.
+ bool IsGoogleAssociatedDomainUrl(const GURL& url);
+ 
+-// Returns the list of all Google's registerable domains, i.e. domains named
+-// google.<eTLD> owned by Google.
+-// TODO(msramek): This is currently only used to ensure the deletion of Google
+-// service workers on signout. Remove this once we have other options to do it,
+-// such as service workers discovering that signin cookies are missing and
+-// unregistering themselves.
+-const std::vector<std::string>& GetGoogleRegistrableDomains();
+-
+ // Appends the provided |key| and |value| pair to the "async" query param list,
+ // according to the format used by the Google servers:
+ //
+@@ -154,10 +146,6 @@ GURL AppendToAsyncQueryParam(const GURL& url,
+                              const std::string& key,
+                              const std::string& value);
+ 
+-// Returns Google Search mode used by the user. This corresponds to the tab
+-// (e.g. web result, image results, video results, etc.) the user is on. This
+-// information is extracted from the "tbm" query parameter on the Search URL.
+-GoogleSearchMode GoogleSearchModeFromUrl(const GURL& url);
+ 
+ }  // namespace google_util
+ 
+diff --git a/components/search_engines/search_terms_data.cc b/components/search_engines/search_terms_data.cc
+--- a/components/search_engines/search_terms_data.cc
++++ b/components/search_engines/search_terms_data.cc
+@@ -107,7 +107,7 @@ SearchTermsData::SearchTermsData() = default;
+ SearchTermsData::~SearchTermsData() = default;
+ 
+ std::string SearchTermsData::GoogleBaseURLValue() const {
+-  return google_util::kGoogleHomepageURL;
++  return google_util::kGoogleHomepageURL_Checked;
+ }
+ 
+ std::string SearchTermsData::GoogleBaseSearchByImageURLValue() const {
+@@ -119,7 +119,7 @@ std::string SearchTermsData::GoogleBaseSearchByImageURLValue() const {
+   }
+ #endif  // !BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_ANDROID)
+ 
+-  return google_util::kGoogleHomepageURL + kGoogleHomepageURLPath;
++  return google_util::kGoogleHomepageURL_Checked + kGoogleHomepageURLPath;
+ }
+ 
+ std::string SearchTermsData::GoogleBaseSuggestURLValue() const {
+diff --git a/components/search_provider_logos/BUILD.gn b/components/search_provider_logos/BUILD.gn
+--- a/components/search_provider_logos/BUILD.gn
++++ b/components/search_provider_logos/BUILD.gn
+@@ -6,8 +6,6 @@ static_library("search_provider_logos") {
+   sources = [
+     "fixed_logo_api.cc",
+     "fixed_logo_api.h",
+-    "google_logo_api.cc",
+-    "google_logo_api.h",
+     "logo_cache.cc",
+     "logo_cache.h",
+     "logo_common.cc",
+diff --git a/components/search_provider_logos/logo_service_impl.cc b/components/search_provider_logos/logo_service_impl.cc
+--- a/components/search_provider_logos/logo_service_impl.cc
++++ b/components/search_provider_logos/logo_service_impl.cc
+@@ -250,8 +250,7 @@ void LogoServiceImpl::GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) {
+ 
+   GURL base_url;
+   GURL doodle_url;
+-  const bool is_google = template_url->url_ref().HasGoogleBaseURLs(
+-      template_url_service_->search_terms_data());
++  const bool is_google = false;
+   if (is_google) {
+     // TODO(treib): Put the Google doodle URL into prepopulated_engines.json.
+     base_url =
+@@ -276,23 +275,12 @@ void LogoServiceImpl::GetLogo(LogoCallbacks callbacks, bool for_webui_ntp) {
+     clock_ = base::DefaultClock::GetInstance();
+   }
+ 
+-  const bool use_fixed_logo = !doodle_url.is_valid();
++  const bool use_fixed_logo = true;
+   if (use_fixed_logo) {
+     SetServerAPI(
+         logo_url,
+         base::BindRepeating(&search_provider_logos::ParseFixedLogoResponse),
+         base::BindRepeating(&search_provider_logos::UseFixedLogoUrl));
+-  } else {
+-    // We encode the type of doodle (regular or gray) in the URL so that the
+-    // logo cache gets cleared when that value changes.
+-    GURL prefilled_url = AppendPreliminaryParamsToDoodleURL(
+-        want_gray_logo_getter_.Run(), for_webui_ntp, doodle_url);
+-    SetServerAPI(
+-        prefilled_url,
+-        base::BindRepeating(&search_provider_logos::ParseDoodleLogoResponse,
+-                            base_url),
+-        base::BindRepeating(
+-            &search_provider_logos::AppendFingerprintParamToDoodleURL));
+   }
+ 
+   DCHECK(!logo_url_.is_empty());
+diff --git a/components/url_matcher/url_util.cc b/components/url_matcher/url_util.cc
+--- a/components/url_matcher/url_util.cc
++++ b/components/url_matcher/url_util.cc
+@@ -37,30 +37,18 @@ namespace {
+ // Host/regex pattern for Google AMP Cache URLs.
+ // See https://developers.google.com/amp/cache/overview#amp-cache-url-format
+ // for a definition of the format of AMP Cache URLs.
+-const char kGoogleAmpCacheHost[] = "cdn.ampproject.org";
+ const char kGoogleAmpCachePathPattern[] = "/[a-z]/(s/)?(.*)";
+ 
+ // Regex pattern for the path of Google AMP Viewer URLs.
+ const char kGoogleAmpViewerPathPattern[] = "/amp/(s/)?(.*)";
+ 
+ // Host, path prefix, and query regex pattern for Google web cache URLs.
+-const char kGoogleWebCacheHost[] = "webcache.googleusercontent.com";
+-const char kGoogleWebCachePathPrefix[] = "/search";
+ const char kGoogleWebCacheQueryPattern[] =
+     "cache:(.{12}:)?(https?://)?([^ :]*)( [^:]*)?";
+ 
+-const char kGoogleTranslateSubdomain[] = "translate.";
+-const char kAlternateGoogleTranslateHost[] = "translate.googleusercontent.com";
+-
+ // Maximum filters allowed. Filters over this index are ignored.
+ const size_t kMaxFiltersAllowed = 1000;
+ 
+-// Returns a full URL using either "http" or "https" as the scheme.
+-GURL BuildURL(bool is_https, const std::string& host_and_path) {
+-  std::string scheme = is_https ? url::kHttpsScheme : url::kHttpScheme;
+-  return GURL(scheme + "://" + host_and_path);
+-}
+-
+ void ProcessQueryToConditions(
+     url_matcher::URLMatcherConditionFactory* condition_factory,
+     const std::string& query,
+@@ -118,77 +106,6 @@ class EmbeddedURLExtractor {
+ 
+   // Implements url_filter::GetEmbeddedURL().
+   GURL GetEmbeddedURL(const GURL& url) {
+-    // Check for "*.cdn.ampproject.org" URLs.
+-    if (url.DomainIs(kGoogleAmpCacheHost)) {
+-      std::string s;
+-      std::string embedded;
+-      if (re2::RE2::FullMatch(url.path(), google_amp_cache_path_regex_, &s,
+-                              &embedded)) {
+-        if (url.has_query())
+-          embedded += "?" + url.query();
+-        return BuildURL(!s.empty(), embedded);
+-      }
+-    }
+-
+-    // Check for "www.google.TLD/amp/" URLs.
+-    if (google_util::IsGoogleDomainUrl(
+-            url, google_util::DISALLOW_SUBDOMAIN,
+-            google_util::DISALLOW_NON_STANDARD_PORTS)) {
+-      std::string s;
+-      std::string embedded;
+-      if (re2::RE2::FullMatch(url.path(), google_amp_viewer_path_regex_, &s,
+-                              &embedded)) {
+-        // The embedded URL may be percent-encoded. Undo that.
+-        embedded = base::UnescapeBinaryURLComponent(embedded);
+-        return BuildURL(!s.empty(), embedded);
+-      }
+-    }
+-
+-    // Check for Google web cache URLs
+-    // ("webcache.googleusercontent.com/search?q=cache:...").
+-    std::string query;
+-    if (url.host_piece() == kGoogleWebCacheHost &&
+-        base::StartsWith(url.path_piece(), kGoogleWebCachePathPrefix) &&
+-        net::GetValueForKeyInQuery(url, "q", &query)) {
+-      std::string fingerprint;
+-      std::string scheme;
+-      std::string embedded;
+-      if (re2::RE2::FullMatch(query, google_web_cache_query_regex_,
+-                              &fingerprint, &scheme, &embedded)) {
+-        return BuildURL(scheme == "https://", embedded);
+-      }
+-    }
+-
+-    // Check for Google translate URLs ("translate.google.TLD/...?...&u=URL" or
+-    // "translate.googleusercontent.com/...?...&u=URL").
+-    bool is_translate = false;
+-    if (base::StartsWith(url.host_piece(), kGoogleTranslateSubdomain)) {
+-      // Remove the "translate." prefix.
+-      GURL::Replacements replace;
+-      replace.SetHostStr(
+-          url.host_piece().substr(strlen(kGoogleTranslateSubdomain)));
+-      GURL trimmed = url.ReplaceComponents(replace);
+-      // Check that the remainder is a Google URL. Note: IsGoogleDomainUrl
+-      // checks for [www.]google.TLD, but we don't want the "www.", so
+-      // explicitly exclude that.
+-      // TODO(treib,pam): Instead of excluding "www." manually, teach
+-      // IsGoogleDomainUrl a mode that doesn't allow it.
+-      is_translate = google_util::IsGoogleDomainUrl(
+-                         trimmed, google_util::DISALLOW_SUBDOMAIN,
+-                         google_util::DISALLOW_NON_STANDARD_PORTS) &&
+-                     !base::StartsWith(trimmed.host_piece(), "www.");
+-    }
+-    bool is_alternate_translate =
+-        url.host_piece() == kAlternateGoogleTranslateHost;
+-    if (is_translate || is_alternate_translate) {
+-      std::string embedded;
+-      if (net::GetValueForKeyInQuery(url, "u", &embedded)) {
+-        // The embedded URL may or may not include a scheme. Fix it if
+-        // necessary.
+-        return url_formatter::FixupURL(embedded, /*desired_tld=*/std::string());
+-      }
+-    }
+-
+     return GURL();
+   }
+ 
+--
+2.25.1

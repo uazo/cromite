@@ -1,0 +1,81 @@
+From: Your Name <you@example.com>
+Date: Mon, 7 Nov 2022 12:39:07 +0000
+Subject: Add an always-incognito mode (add fixup)
+
+---
+ .../offline_pages/android/offline_page_bridge.cc | 16 ++++++++--------
+ .../android/offline_page_model_factory.cc        |  1 -
+ .../android/request_coordinator_factory.cc       |  5 +++++
+ 3 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/chrome/browser/offline_pages/android/offline_page_bridge.cc b/chrome/browser/offline_pages/android/offline_page_bridge.cc
+--- a/chrome/browser/offline_pages/android/offline_page_bridge.cc
++++ b/chrome/browser/offline_pages/android/offline_page_bridge.cc
+@@ -159,13 +159,7 @@ void ValidateFileCallback(
+     int64_t offline_id,
+     const GURL& url,
+     const base::FilePath& file_path,
+-    SimpleFactoryKey* key,
+     bool is_trusted) {
+-  // in always incognito, never trust input file (show file name in url)
+-  ProfileKey* profile_key = ProfileKey::FromSimpleFactoryKey(key);
+-  if(profile_key->GetPrefs()->GetBoolean(prefs::kIncognitoTabHistoryEnabled))
+-    is_trusted = false;
+-
+   // If trusted, the launch url will be the http/https url of the offline
+   // page. If the file path is content URI, directly open it. Otherwise, the
+   // launch url will be the file URL pointing to the archive file of the offline
+@@ -794,9 +788,15 @@ void OfflinePageBridge::GetPageByOfflineIdDone(
+   }
+ 
+   if (offline_page_model_->IsArchiveInInternalDir(offline_page->file_path)) {
++    bool is_trusted = true;
++    // in always incognito, never trust input file (show file name in url)
++    ProfileKey* profile_key = ProfileKey::FromSimpleFactoryKey(key_);
++    if(profile_key->GetPrefs()->GetBoolean(prefs::kIncognitoTabHistoryEnabled))
++      is_trusted = false;
++
+     ValidateFileCallback(launch_location, j_callback_obj,
+                          offline_page->offline_id, offline_page->url,
+-                         offline_page->file_path, key_, true /* is_trusted*/);
++                         offline_page->file_path, is_trusted);
+     return;
+   }
+ 
+@@ -806,7 +806,7 @@ void OfflinePageBridge::GetPageByOfflineIdDone(
+                      offline_page->file_size, offline_page->digest),
+       base::BindOnce(&ValidateFileCallback, launch_location, j_callback_obj,
+                      offline_page->offline_id, offline_page->url,
+-                     offline_page->file_path, key_));
++                     offline_page->file_path));
+ }
+ 
+ void OfflinePageBridge::GetSizeAndComputeDigestDone(
+diff --git a/chrome/browser/offline_pages/android/offline_page_model_factory.cc b/chrome/browser/offline_pages/android/offline_page_model_factory.cc
+--- a/chrome/browser/offline_pages/android/offline_page_model_factory.cc
++++ b/chrome/browser/offline_pages/android/offline_page_model_factory.cc
+@@ -49,7 +49,6 @@ OfflinePageModel* OfflinePageModelFactory::GetForKey(SimpleFactoryKey* key) {
+ OfflinePageModel* OfflinePageModelFactory::GetForBrowserContext(
+     content::BrowserContext* browser_context) {
+   Profile* profile = Profile::FromBrowserContext(browser_context);
+-  profile = profile->GetOriginalProfile();
+   return GetForKey(profile->GetProfileKey());
+ }
+ 
+diff --git a/chrome/browser/offline_pages/android/request_coordinator_factory.cc b/chrome/browser/offline_pages/android/request_coordinator_factory.cc
+--- a/chrome/browser/offline_pages/android/request_coordinator_factory.cc
++++ b/chrome/browser/offline_pages/android/request_coordinator_factory.cc
+@@ -86,6 +86,11 @@ RequestCoordinator* RequestCoordinatorFactory::GetForBrowserContext(
+ 
+ KeyedService* RequestCoordinatorFactory::BuildServiceInstanceFor(
+     content::BrowserContext* context) const {
++  if(context->IsOffTheRecord() &&
++      Profile::FromBrowserContext(context)->GetOriginalProfile()
++        ->GetPrefs()->GetBoolean(prefs::kIncognitoTabHistoryEnabled) == false) {
++    return nullptr;
++  }
+   std::unique_ptr<OfflinerPolicy> policy(new OfflinerPolicy());
+   std::unique_ptr<Offliner> offliner;
+   OfflinePageModel* model =
+--
+2.25.1

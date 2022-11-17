@@ -1,0 +1,148 @@
+From: Your Name <you@example.com>
+Date: Wed, 12 Oct 2022 11:34:42 +0000
+Subject: Add flag to disable IPv6 probes (win fixup)
+
+---
+ chrome/browser/about_flags.cc                              | 2 +-
+ components/subresource_filter/tools/BUILD.gn               | 6 ------
+ components/url_formatter/spoof_checks/top_domains/BUILD.gn | 3 +--
+ net/BUILD.gn                                               | 1 +
+ net/base/features.cc                                       | 3 +++
+ net/base/features.h                                        | 3 +++
+ net/dns/host_resolver_manager.cc                           | 2 +-
+ services/network/public/cpp/features.cc                    | 4 ----
+ services/network/public/cpp/features.h                     | 2 --
+ 9 files changed, 10 insertions(+), 16 deletions(-)
+
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -5915,7 +5915,7 @@ const FeatureEntry kFeatureEntries[] = {
+     {"ipv6-probing",
+      flag_descriptions::kIPv6ProbingName,
+      flag_descriptions::kIPv6ProbingDescription, kOsAll,
+-     FEATURE_VALUE_TYPE(network::features::kIPv6Probing)},
++     FEATURE_VALUE_TYPE(net::features::kIPv6Probing)},
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+     {"shopping-list", commerce::flag_descriptions::kShoppingListName,
+diff --git a/components/subresource_filter/tools/BUILD.gn b/components/subresource_filter/tools/BUILD.gn
+--- a/components/subresource_filter/tools/BUILD.gn
++++ b/components/subresource_filter/tools/BUILD.gn
+@@ -50,8 +50,6 @@ if (!is_ios) {
+     deps = [
+       ":tools_lib",
+       "//base",
+-      "//components/network_session_configurator/common",
+-      "//services/network/public/cpp"
+     ]
+   }
+ 
+@@ -63,8 +61,6 @@ if (!is_ios) {
+       ":tools_lib",
+       "../core/common",
+       "//base",
+-      "//components/network_session_configurator/common",
+-      "//services/network/public/cpp",
+     ]
+   }
+ 
+@@ -74,8 +70,6 @@ if (!is_ios) {
+       "ruleset_converter:support",
+       "//base",
+       "//third_party/protobuf:protobuf_lite",
+-      "//components/network_session_configurator/common",
+-      "//services/network/public/cpp"
+     ]
+   }
+ 
+diff --git a/components/url_formatter/spoof_checks/top_domains/BUILD.gn b/components/url_formatter/spoof_checks/top_domains/BUILD.gn
+--- a/components/url_formatter/spoof_checks/top_domains/BUILD.gn
++++ b/components/url_formatter/spoof_checks/top_domains/BUILD.gn
+@@ -89,8 +89,7 @@ executable("make_top_domain_list_variables") {
+     "//base:i18n",
+     "//components/url_formatter/spoof_checks/common_words:common",
+     "//third_party/icu",
+-    "//components/network_session_configurator/common",
+-    "//services/network/public/cpp",
++    "//components/network_session_configurator/common"
+   ]
+   if (is_ios) {
+     frameworks = [ "UIKit.framework" ]
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1062,6 +1062,7 @@ component("net") {
+     "//build:chromeos_buildflags",
+     "//net/data/ssl/ev_roots:gen_ev_root_store_inc",
+     "//net/http:transport_security_state_generated_files",
++    "//components/network_session_configurator/common"
+   ]
+ 
+   public_deps = [
+diff --git a/net/base/features.cc b/net/base/features.cc
+--- a/net/base/features.cc
++++ b/net/base/features.cc
+@@ -57,6 +57,9 @@ const base::FeatureParam<std::string> kDnsHttpssvcControlDomains{
+ const base::FeatureParam<bool> kDnsHttpssvcControlDomainWildcard{
+     &kDnsHttpssvc, "DnsHttpssvcControlDomainWildcard", false};
+ 
++const base::Feature kIPv6Probing{"IPv6Probing",
++                                 base::FEATURE_ENABLED_BY_DEFAULT};
++
+ namespace dns_httpssvc_experiment {
+ base::TimeDelta GetExtraTimeAbsolute() {
+   DCHECK(base::FeatureList::IsEnabled(features::kDnsHttpssvc));
+diff --git a/net/base/features.h b/net/base/features.h
+--- a/net/base/features.h
++++ b/net/base/features.h
+@@ -118,6 +118,9 @@ NET_EXPORT extern const base::FeatureParam<bool> kUseDnsHttpsSvcbHttpUpgrade;
+ NET_EXPORT extern const base::FeatureParam<bool>
+     kUseDnsHttpsSvcbEnforceSecureResponse;
+ 
++// Enable IPv6 ping probes to RIPE DNS.
++NET_EXPORT extern const base::Feature kIPv6Probing;
++
+ // Param to control whether HTTPS queries will be allowed via Insecure DNS
+ // (instead of just via Secure DNS).
+ NET_EXPORT extern const base::FeatureParam<bool> kUseDnsHttpsSvcbEnableInsecure;
+diff --git a/net/dns/host_resolver_manager.cc b/net/dns/host_resolver_manager.cc
+--- a/net/dns/host_resolver_manager.cc
++++ b/net/dns/host_resolver_manager.cc
+@@ -4087,7 +4087,7 @@ bool HostResolverManager::IsIPv6Reachable(const NetLogWithSource& net_log) {
+       (tick_clock_->NowTicks() - last_ipv6_probe_time_).InMilliseconds() >
+           kIPv6ProbePeriodMs) {
+ 
+-    if (!base::FeatureList::IsEnabled(network::features::kIPv6Probing)) {
++    if (!base::FeatureList::IsEnabled(net::features::kIPv6Probing)) {
+       // pretend IPv6 connectivy probe is successful when probing is disabled
+       SetLastIPv6ProbeResult(true);
+     } else {
+diff --git a/services/network/public/cpp/features.cc b/services/network/public/cpp/features.cc
+--- a/services/network/public/cpp/features.cc
++++ b/services/network/public/cpp/features.cc
+@@ -41,10 +41,6 @@ const base::Feature kReporting{"Reporting", base::FEATURE_ENABLED_BY_DEFAULT};
+ const base::Feature kThrottleDelayable{"ThrottleDelayable",
+                                        base::FEATURE_ENABLED_BY_DEFAULT};
+ 
+-// Enable IPv6 ping probes to RIPE DNS.
+-const base::Feature kIPv6Probing{"IPv6Probing",
+-                                       base::FEATURE_ENABLED_BY_DEFAULT};
+-
+ // When kPriorityRequestsDelayableOnSlowConnections is enabled, HTTP
+ // requests fetched from a SPDY/QUIC/H2 proxies can be delayed by the
+ // ResourceScheduler just as HTTP/1.1 resources are. However, requests from such
+diff --git a/services/network/public/cpp/features.h b/services/network/public/cpp/features.h
+--- a/services/network/public/cpp/features.h
++++ b/services/network/public/cpp/features.h
+@@ -18,8 +18,6 @@ extern const base::Feature kExpectCTReporting;
+ COMPONENT_EXPORT(NETWORK_CPP)
+ extern const base::Feature kNetworkErrorLogging;
+ COMPONENT_EXPORT(NETWORK_CPP)
+-extern const base::Feature kIPv6Probing;
+-COMPONENT_EXPORT(NETWORK_CPP)
+ extern const base::Feature kReporting;
+ COMPONENT_EXPORT(NETWORK_CPP)
+ extern const base::Feature kThrottleDelayable;
+--
+2.25.1

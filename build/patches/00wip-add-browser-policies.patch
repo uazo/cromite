@@ -1,0 +1,738 @@
+From: Your Name <you@example.com>
+Date: Tue, 8 Nov 2022 12:26:58 +0000
+Subject: wip add browser policies
+
+---
+ chrome/android/java/AndroidManifest.xml       |   2 -
+ .../privacy_preferences_manager_impl.cc       |   5 +
+ .../metrics/chrome_feature_list_creator.cc    |  12 ++
+ .../policy/chrome_browser_policy_connector.cc |   2 -
+ ...nfiguration_policy_handler_list_factory.cc |   6 +-
+ .../account_consistency_mode_manager.cc       |  19 ++-
+ chrome/browser/signin/chrome_signin_client.cc |   6 +-
+ .../ui/webui/policy/policy_ui_handler.cc      |  91 +++++++++++++
+ .../ui/webui/policy/policy_ui_handler.h       |   1 +
+ .../autofill_assistant/browser/features.cc    |   4 +-
+ .../commerce/core/commerce_feature_list.cc    |   4 +-
+ .../core/browser/browser_policy_connector.cc  |   3 +
+ .../common/command_line_policy_provider.cc    |   3 +
+ components/policy/core/common/features.cc     |   5 +-
+ .../core/common/policy_loader_command_line.cc | 120 +++++++++++++++---
+ .../policy/core/common/policy_pref_names.cc   |   3 +
+ .../policy/core/common/policy_pref_names.h    |   1 +
+ .../policy/core/common/policy_service_impl.cc |   3 +
+ .../policy/core/common/policy_switches.cc     |   2 +
+ .../policy/core/common/policy_switches.h      |   1 +
+ .../policy/resources/policy_templates.json    |   7 +-
+ .../policy/resources/webui/policy_row.html    |   1 +
+ .../policy/resources/webui/policy_row.js      |  12 ++
+ components/policy_strings.grdp                |   4 +-
+ components/signin/features.gni                |   6 +-
+ .../gaia_cookie_manager_service.cc            |   4 +
+ google_apis/gaia/gaia_auth_fetcher.cc         |   1 +
+ 27 files changed, 287 insertions(+), 41 deletions(-)
+
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -67,9 +67,7 @@ by a child template that "extends" this file.
+     <uses-permission android:name="android.permission.CAMERA" />
+     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+-    <uses-permission android:name="android.permission.GET_ACCOUNTS"/>
+     <uses-permission android:name="android.permission.INTERNET"/>
+-    <uses-permission android:name="android.permission.MANAGE_ACCOUNTS"/>
+     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
+     <uses-permission android:name="android.permission.NFC"/>
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+diff --git a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
+--- a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
++++ b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
+@@ -61,6 +61,11 @@ JNI_PrivacyPreferencesManagerImpl_IsMetricsReportingDisabledByPolicy(
+   }
+ 
+   const PrefService* local_state = g_browser_process->local_state();
++  // this point (policy with 'future') gave me false, false
++  LOG(INFO) << "---IsMetricsReportingDisabledByPolicy "
++            << local_state->IsManagedPreference(metrics::prefs::kMetricsReportingEnabled)
++            << " "
++            << local_state->GetBoolean(metrics::prefs::kMetricsReportingEnabled);
+   return local_state->IsManagedPreference(
+              metrics::prefs::kMetricsReportingEnabled) &&
+          !local_state->GetBoolean(metrics::prefs::kMetricsReportingEnabled);
+diff --git a/chrome/browser/metrics/chrome_feature_list_creator.cc b/chrome/browser/metrics/chrome_feature_list_creator.cc
+--- a/chrome/browser/metrics/chrome_feature_list_creator.cc
++++ b/chrome/browser/metrics/chrome_feature_list_creator.cc
+@@ -51,6 +51,8 @@
+ #include "components/variations/variations_switches.h"
+ #include "content/public/common/content_switch_dependent_feature_overrides.h"
+ #include "ui/base/resource/resource_bundle.h"
++#include "components/policy/core/common/policy_pref_names.h"
++#include "components/policy/core/common/policy_switches.h"
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+ #include "chrome/browser/ash/policy/core/browser_policy_connector_ash.h"
+@@ -151,6 +153,16 @@ void ChromeFeatureListCreator::CreatePrefService() {
+   // ManagementService's cache.
+   if (local_state_pref_store->ReadPrefs() ==
+       JsonPrefStore::PREF_READ_ERROR_NONE) {
++    // add list of user disabled policies to command line
++    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++    const base::Value* stored_value = nullptr;
++    if (local_state_pref_store->GetValue(policy::policy_prefs::kDisabledDefaultPoliciesList, &stored_value) &&
++          stored_value->is_string()) {
++        std::string disabled_policies = stored_value->GetString();
++        if (!disabled_policies.empty()) {
++          command_line->AppendSwitchASCII(policy::switches::kForceDisabledPolicies, disabled_policies);
++        }
++    }
+     auto* platform_management_service =
+         policy::ManagementServiceFactory::GetForPlatform();
+     platform_management_service->UsePrefStoreAsCache(local_state_pref_store);
+diff --git a/chrome/browser/policy/chrome_browser_policy_connector.cc b/chrome/browser/policy/chrome_browser_policy_connector.cc
+--- a/chrome/browser/policy/chrome_browser_policy_connector.cc
++++ b/chrome/browser/policy/chrome_browser_policy_connector.cc
+@@ -151,8 +151,6 @@ bool ChromeBrowserPolicyConnector::HasMachineLevelPolicies() {
+   if (ProviderHasPolicies(machine_level_user_cloud_policy_manager()))
+     return true;
+ #endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+-  if (ProviderHasPolicies(command_line_provider_))
+-    return true;
+   return false;
+ }
+ 
+diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
+--- a/chrome/browser/policy/configuration_policy_handler_list_factory.cc
++++ b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
+@@ -1774,9 +1774,9 @@ bool AreFuturePoliciesSupported() {
+   // Enable future policies for branded browser tests.
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kTestType))
+     return true;
+-  version_info::Channel channel = chrome::GetChannel();
+-  return channel != version_info::Channel::STABLE &&
+-         channel != version_info::Channel::BETA;
++  // Future policies are allowed but not active without
++  // kEnableExperimentalPolicies policy
++  return true;
+ }
+ 
+ }  // namespace
+diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/browser/signin/account_consistency_mode_manager.cc
+--- a/chrome/browser/signin/account_consistency_mode_manager.cc
++++ b/chrome/browser/signin/account_consistency_mode_manager.cc
+@@ -31,7 +31,13 @@
+ #error "Dice and Mirror cannot be both enabled."
+ #endif
+ 
+-#if !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(ENABLE_MIRROR)
++// In Android Dice AND Mirror are disabled in gn
++#if BUILDFLAG(IS_ANDROID) && (BUILDFLAG(ENABLE_DICE_SUPPORT) || BUILDFLAG(ENABLE_MIRROR))
++#error "Either Dice and Mirror should be disabled."
++#endif
++
++// but in Windows, DICE need to be enabled in build
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(ENABLE_DICE_SUPPORT) && !BUILDFLAG(ENABLE_MIRROR)
+ #error "Either Dice or Mirror should be enabled."
+ #endif
+ 
+@@ -189,7 +195,8 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_MIRROR)
+-  return AccountConsistencyMethod::kMirror;
++  // always disabled
++  return AccountConsistencyMethod::kDisabled;
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_DICE_SUPPORT)
+@@ -199,9 +206,9 @@ AccountConsistencyModeManager::ComputeAccountConsistencyMethod(
+     return AccountConsistencyMethod::kDisabled;
+   }
+ 
+-  return AccountConsistencyMethod::kDice;
+-#endif
+-
+-  NOTREACHED();
+   return AccountConsistencyMethod::kDisabled;
++#endif // the shift of this line is intentional
++#if BUILDFLAG(IS_ANDROID)
++  return AccountConsistencyMethod::kDisabled;
++#endif
+ }
+diff --git a/chrome/browser/signin/chrome_signin_client.cc b/chrome/browser/signin/chrome_signin_client.cc
+--- a/chrome/browser/signin/chrome_signin_client.cc
++++ b/chrome/browser/signin/chrome_signin_client.cc
+@@ -147,7 +147,9 @@ void ChromeSigninClient::DoFinalInit() {
+ bool ChromeSigninClient::ProfileAllowsSigninCookies(Profile* profile) {
+   content_settings::CookieSettings* cookie_settings =
+       CookieSettingsFactory::GetForProfile(profile).get();
+-  return signin::SettingsAllowSigninCookies(cookie_settings);
++  // Make ChromeSigninClient compliant to SigninAllowed policy
++  bool cookiesAllowed = signin::SettingsAllowSigninCookies(cookie_settings);
++  return cookiesAllowed && profile->GetPrefs()->GetBoolean(prefs::kSigninAllowed);
+ }
+ 
+ PrefService* ChromeSigninClient::GetPrefs() { return profile_->GetPrefs(); }
+@@ -255,6 +257,8 @@ void ChromeSigninClient::OnConnectionChanged(
+ #endif
+ 
+ void ChromeSigninClient::DelayNetworkCall(base::OnceClosure callback) {
++  // Make ChromeSigninClient compliant to SigninAllowed policy
++  if (!AreSigninCookiesAllowed()) return;
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+   // Do not make network requests in unit tests. ash::NetworkHandler should
+   // not be used and is not expected to have been initialized in unit tests.
+diff --git a/chrome/browser/ui/webui/policy/policy_ui_handler.cc b/chrome/browser/ui/webui/policy/policy_ui_handler.cc
+--- a/chrome/browser/ui/webui/policy/policy_ui_handler.cc
++++ b/chrome/browser/ui/webui/policy/policy_ui_handler.cc
+@@ -21,6 +21,7 @@
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/notreached.h"
++#include "base/strings/string_split.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/task_traits.h"
+ #include "base/task/thread_pool.h"
+@@ -67,6 +68,7 @@
+ #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_manager.h"
+ #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
+ #include "components/policy/core/common/policy_details.h"
++#include "components/policy/core/common/policy_pref_names.h"
+ #include "components/policy/core/common/policy_scheduler.h"
+ #include "components/policy/core/common/policy_types.h"
+ #include "components/policy/core/common/remote_commands/remote_commands_service.h"
+@@ -334,6 +336,10 @@ void PolicyUIHandler::RegisterMessages() {
+       "exportPoliciesJSON",
+       base::BindRepeating(&PolicyUIHandler::HandleExportPoliciesJson,
+                           base::Unretained(this)));
++  web_ui()->RegisterMessageCallback(
++      "setEnabledPolicy",
++      base::BindRepeating(&PolicyUIHandler::HandleSetEnabledPolicy,
++                          base::Unretained(this)));
+   web_ui()->RegisterMessageCallback(
+       "listenPoliciesUpdates",
+       base::BindRepeating(&PolicyUIHandler::HandleListenPoliciesUpdates,
+@@ -372,6 +378,56 @@ base::Value::Dict PolicyUIHandler::GetPolicyNames() {
+   return names;
+ }
+ 
++void PolicyUIHandler::HandleSetEnabledPolicy(
++    const base::Value::List& args) {
++  CHECK_EQ(2u, args.size());
++  const std::string policy_name = args[0].GetString();
++  bool enabled = args[1].GetBool();
++
++  // Check if policy exists
++  base::Value::Dict policy_values;
++  base::Value::List policy_ids;
++
++  MergePolicyValuesAndIds(chrome_policies_value_provider_->GetValues(),
++                          policy_values, policy_ids);
++
++  bool exists = false;
++  auto* root = policy_values.FindDict("chrome");
++  if (root && g_browser_process) {
++    auto* list = root->FindDict("policies");
++    if (list) {
++      for (const auto name : *list) {
++        if (name.first == policy_name) {
++          exists = true;
++          break;
++        }
++      }
++    }
++  }
++
++  PrefService* local_state = g_browser_process->local_state();
++  DCHECK(local_state);
++
++  // get user disabled list from local state
++  std::string disabled_policies_pref =
++      local_state->GetString(policy::policy_prefs::kDisabledDefaultPoliciesList);
++  std::vector<std::string> disabled_policies =
++      base::SplitString(disabled_policies_pref, ",",
++                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++
++  // remove policy
++  base::EraseIf(disabled_policies,
++        [policy_name](const std::string& name) { return name == policy_name; });
++
++  // readd if exixts and enabled
++  if (exists && !enabled)
++    disabled_policies.push_back(policy_name);
++
++  // save current user disabled policy in local state
++  local_state->SetString(policy::policy_prefs::kDisabledDefaultPoliciesList,
++                          base::JoinString(disabled_policies, ","));
++}
++
+ base::Value::Dict PolicyUIHandler::GetPolicyValues() {
+   base::Value::Dict policy_values;
+   base::Value::List policy_ids;
+@@ -398,6 +454,41 @@ base::Value::Dict PolicyUIHandler::GetPolicyValues() {
+                           policy_values, policy_ids);
+ #endif  // BUILDFLAG(IS_WIN) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
+ 
++  PrefService* local_state = g_browser_process->local_state();
++  DCHECK(local_state);
++
++  // get user disabled list from local state
++  std::string disabled_policies_pref =
++      local_state->GetString(policy::policy_prefs::kDisabledDefaultPoliciesList);
++  std::vector<std::string> disabled_policies =
++      base::SplitString(disabled_policies_pref, ",",
++                        base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++
++  auto* root = policy_values.FindDict(policy::kChromePoliciesId);
++  if (root) {
++    auto* list = root->FindDict(policy::kPoliciesKey);
++    if (list) {
++      // for each policy check if is disabled by the user
++      for (const auto name : *list) {
++        bool disabled = base::Contains(disabled_policies, name.first);
++        name.second.GetDict().Set("disabled", base::Value(disabled));
++      }
++
++      // add disabled policies so user can enable them
++      for (const std::string& name : disabled_policies) {
++        base::Value::Dict value;
++        value.Set("disabled", base::Value(true));
++
++        // set with some value (only for the ui)
++        // see components/policy/core/browser/policy_conversions_client.cc
++        value.Set("value", base::Value(false));
++        value.Set("scope", base::Value("machine"));
++        value.Set("level", base::Value("mandatory"));
++        value.Set("source", base::Value("sourceDefault"));
++        list->Set(name, std::move(value));
++      }
++    }
++  }
+   // Send the policy values and list of policy IDs so the UI can display values
+   // in this order.
+   base::Value::Dict dict;
+diff --git a/chrome/browser/ui/webui/policy/policy_ui_handler.h b/chrome/browser/ui/webui/policy/policy_ui_handler.h
+--- a/chrome/browser/ui/webui/policy/policy_ui_handler.h
++++ b/chrome/browser/ui/webui/policy/policy_ui_handler.h
+@@ -83,6 +83,7 @@ class PolicyUIHandler : public content::WebUIMessageHandler,
+   base::Value::Dict GetPolicyValues();
+ 
+   void HandleExportPoliciesJson(const base::Value::List& args);
++  void HandleSetEnabledPolicy(const base::Value::List& args);
+   void HandleListenPoliciesUpdates(const base::Value::List& args);
+   void HandleReloadPolicies(const base::Value::List& args);
+   void HandleCopyPoliciesJson(const base::Value::List& args);
+diff --git a/components/autofill_assistant/browser/features.cc b/components/autofill_assistant/browser/features.cc
+--- a/components/autofill_assistant/browser/features.cc
++++ b/components/autofill_assistant/browser/features.cc
+@@ -122,8 +122,10 @@ const base::Feature kAutofillAssistantLoadDFMForTriggerScripts{
+     "AutofillAssistantLoadDFMForTriggerScripts",
+     base::FEATURE_DISABLED_BY_DEFAULT};
+ 
++// I saw this from the interface, which gave me active.
++// I went back to the flag and deactivated the feature.
+ const base::Feature kAutofillAssistantProactiveHelp{
+-    "AutofillAssistantProactiveHelp", base::FEATURE_ENABLED_BY_DEFAULT};
++    "AutofillAssistantProactiveHelp", base::FEATURE_DISABLED_BY_DEFAULT};
+ 
+ // Enables assistant UI (once the feature is enabled, scripts need to use the
+ // USE_ASSISTANT_UI=true flag to use the assistant UI).
+diff --git a/components/commerce/core/commerce_feature_list.cc b/components/commerce/core/commerce_feature_list.cc
+--- a/components/commerce/core/commerce_feature_list.cc
++++ b/components/commerce/core/commerce_feature_list.cc
+@@ -98,8 +98,8 @@ const base::Feature kCommercePriceTracking{"CommercePriceTracking",
+ const base::FeatureParam<bool> kDeleteAllMerchantsOnClearBrowsingHistory{
+     &kCommerceMerchantViewer, "delete_all_merchants_on_clear_history", false};
+ 
+-const base::Feature kShoppingList{"ShoppingList",
+-                                  base::FEATURE_DISABLED_BY_DEFAULT};
++const base::Feature kShoppingList{"ShoppingList",                       // guard this
++                                  base::FEATURE_DISABLED_BY_DEFAULT};   // guard this
+ 
+ const base::Feature kShoppingListEnableDesyncResolution{
+     "ShoppingListEnableDesyncResolution", base::FEATURE_DISABLED_BY_DEFAULT};
+diff --git a/components/policy/core/browser/browser_policy_connector.cc b/components/policy/core/browser/browser_policy_connector.cc
+--- a/components/policy/core/browser/browser_policy_connector.cc
++++ b/components/policy/core/browser/browser_policy_connector.cc
+@@ -208,6 +208,9 @@ void BrowserPolicyConnector::RegisterPrefs(PrefRegistrySimple* registry) {
+       CloudPolicyRefreshScheduler::kDefaultRefreshDelayMs);
+   registry->RegisterBooleanPref(
+       policy_prefs::kCloudManagementEnrollmentMandatory, false);
++  // register the pref for user disabled policies
++  registry->RegisterStringPref(
++      policy_prefs::kDisabledDefaultPoliciesList, std::string());
+ }
+ 
+ }  // namespace policy
+diff --git a/components/policy/core/common/command_line_policy_provider.cc b/components/policy/core/common/command_line_policy_provider.cc
+--- a/components/policy/core/common/command_line_policy_provider.cc
++++ b/components/policy/core/common/command_line_policy_provider.cc
+@@ -22,6 +22,9 @@ std::unique_ptr<CommandLinePolicyProvider>
+ CommandLinePolicyProvider::CreateIfAllowed(
+     const base::CommandLine& command_line,
+     version_info::Channel channel) {
++  if ((true))
++    return base::WrapUnique(new CommandLinePolicyProvider(command_line));
++
+ #if BUILDFLAG(IS_ANDROID)
+   if (channel == version_info::Channel::STABLE ||
+       channel == version_info::Channel::BETA) {
+diff --git a/components/policy/core/common/features.cc b/components/policy/core/common/features.cc
+--- a/components/policy/core/common/features.cc
++++ b/components/policy/core/common/features.cc
+@@ -23,9 +23,10 @@ const base::Feature kEnableUserCloudSigninRestrictionPolicyFetcher{
+     "UserCloudSigninRestrictionPolicyFetcher",
+     base::FEATURE_ENABLED_BY_DEFAULT};
+ 
++// it must remain active, otherwise the policy is ignored
+ const base::Feature kActivateMetricsReportingEnabledPolicyAndroid{
+-    "ActivateMetricsReportingEnabledPolicyAndroid",
+-    base::FEATURE_ENABLED_BY_DEFAULT};
++    "ActivateMetricsReportingEnabledPolicyAndroid",  // guard this
++    base::FEATURE_ENABLED_BY_DEFAULT};               // guard this
+ 
+ const base::Feature kDmTokenDeletion{"DmTokenDeletion",
+                                      base::FEATURE_DISABLED_BY_DEFAULT};
+diff --git a/components/policy/core/common/policy_loader_command_line.cc b/components/policy/core/common/policy_loader_command_line.cc
+--- a/components/policy/core/common/policy_loader_command_line.cc
++++ b/components/policy/core/common/policy_loader_command_line.cc
+@@ -11,6 +11,31 @@
+ #include "components/policy/core/common/policy_bundle.h"
+ #include "components/policy/core/common/policy_switches.h"
+ #include "components/policy/core/common/policy_types.h"
++#include "base/strings/string_split.h"
++#include "components/policy/core/common/policy_map.h"
++#include "components/policy/core/common/policy_namespace.h"
++#include "components/policy/policy_constants.h"
++
++#include "chrome/browser/prefetch/prefetch_prefs.h"
++#include "chrome/browser/policy/browser_signin_policy_handler.h"
++
++namespace {
++  // adds the policy if the user has allowed it
++  void AddPolicy(
++    const std::vector<std::string>& disabled_policies,
++    policy::PolicyMap& policy_map,
++    const std::string& policy_name,
++    base::Value value) {
++
++    if (std::find(disabled_policies.begin(), disabled_policies.end(), policy_name)
++          == disabled_policies.end()) {
++      policy_map.Set(policy_name,
++                     policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_MACHINE,
++                     policy::POLICY_SOURCE_COMMAND_LINE,
++                     std::move(value), nullptr);
++    }
++  }
++}
+ 
+ namespace policy {
+ 
+@@ -21,25 +46,88 @@ PolicyLoaderCommandLine::~PolicyLoaderCommandLine() = default;
+ 
+ std::unique_ptr<PolicyBundle> PolicyLoaderCommandLine::Load() {
+   std::unique_ptr<PolicyBundle> bundle = std::make_unique<PolicyBundle>();
+-  if (!command_line_.HasSwitch(switches::kChromePolicy))
+-    return bundle;
+ 
+-  auto policies = base::JSONReader::ReadAndReturnValueWithError(
+-      command_line_.GetSwitchValueASCII(switches::kChromePolicy),
+-      base::JSONParserOptions::JSON_ALLOW_TRAILING_COMMAS);
++  PolicyMap& policy_map =
++      bundle->Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()));
+ 
+-  if (!policies.has_value()) {
+-    VLOG(1) << "Command line policy error: " << policies.error().message;
+-    return bundle;
+-  }
+-  if (!policies->is_dict()) {
+-    VLOG(1) << "Command line policy is not a dictionary";
+-    return bundle;
+-  }
++  // get disabled policies
++  std::string disabled_policies =
++      command_line_.GetSwitchValueASCII(switches::kForceDisabledPolicies);
++  std::vector<std::string> disabled_policies_list =
++      base::SplitString(disabled_policies, ",",
++          base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
++
++  // whitelist a future policy.
++  base::Value::List enabled_future_policies;
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kSafeBrowsingEnabled, base::Value(false));
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kSafeBrowsingExtendedReportingEnabled, base::Value(false));
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kScrollToTextFragmentEnabled, base::Value(false));
++
++#if BUILDFLAG(IS_ANDROID)
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kContextualSearchEnabled, base::Value(false));
++#endif
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kEnableMediaRouter, base::Value(false));
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kUrlKeyedAnonymizedDataCollectionEnabled, base::Value(false));
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kTranslateEnabled, base::Value(false));
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kNetworkPredictionOptions,
++            base::Value(static_cast<int>(
++                     prefetch::NetworkPredictionOptions::kDisabled)));
++
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kBrowserSignin,
++            base::Value(static_cast<int>(
++                     policy::BrowserSigninMode::kDisabled)));
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kSigninAllowed, base::Value(false));
++
++  // SyncDisabled need a change in policy_templates.json
++  // because is unofficially supported
++  // 1) remove future_on
++  // 2) add android supported_on
++  // and need some changes in code
++  // see https://bugs.chromium.org/p/chromium/issues/detail?id=1141797
++  enabled_future_policies.Append(policy::key::kSyncDisabled);
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kSyncDisabled, base::Value(true));
++
++  // MetricsReportingEnabled need a change in policy_templates.json
++  // because is unofficially supported
++  // 1) remove future_on
++  // 2) add android supported_on
++  // and need some changes in code
++  // set metrics::prefs::kMetricsReportingEnabled to false
++  // same of "Disable various metrics" patch
++  // and deactivate the ui under IsManagedPreference()
++  enabled_future_policies.Append(policy::key::kMetricsReportingEnabled);
++  AddPolicy(disabled_policies_list, policy_map, policy::key::kMetricsReportingEnabled, base::Value(false));
++
++  // AddPolicy(disabled_policies_list, policy_map, policy::key::ShoppingListEnabled, base::Value(false));
++
++  // kFirstPartySetsEnabled
++  // kLensCameraAssistedSearchEnabled
++  // kPasswordLeakDetectionEnabled
++  // kPasswordManagerEnabled
++  // kPromptForDownloadLocation
++
++  // kAssistantWebEnabled
++  // BrowsingDataLifetime ??
++  // ClickToCallEnabled
++  // UrlParamFilterEnabled
++  // kShoppingListEnabled
++  // kSSLErrorOverrideAllowed
++  // kAdvancedProtectionAllowed
++  // kUserFeedbackAllowed
++  // DesktopSharingHubEnabled
++  // kSigninInterceptionEnabled
++
++  policy_map.Set(policy::key::kEnableExperimentalPolicies,
++                 policy::POLICY_LEVEL_MANDATORY, policy::POLICY_SCOPE_MACHINE,
++                 policy::POLICY_SOURCE_COMMAND_LINE,
++                 base::Value(enabled_future_policies.Clone()), nullptr);
+ 
+-  bundle->Get(PolicyNamespace(POLICY_DOMAIN_CHROME, std::string()))
+-      .LoadFrom(policies->GetDict(), POLICY_LEVEL_MANDATORY,
+-                POLICY_SCOPE_MACHINE, POLICY_SOURCE_COMMAND_LINE);
+   return bundle;
+ }
+ 
+diff --git a/components/policy/core/common/policy_pref_names.cc b/components/policy/core/common/policy_pref_names.cc
+--- a/components/policy/core/common/policy_pref_names.cc
++++ b/components/policy/core/common/policy_pref_names.cc
+@@ -99,6 +99,9 @@ const char kBackForwardCacheEnabled[] = "policy.back_forward_cache_enabled";
+ const char kUserAgentClientHintsGREASEUpdateEnabled[] =
+     "policy.user_agent_client_hints_grease_update_enabled";
+ 
++const char kDisabledDefaultPoliciesList[] =
++    "policy.disabled_default_policies_list";
++
+ // Boolean policy preference to disable the URL parameter
+ // filter.
+ const char kUrlParamFilterEnabled[] = "policy.url_param_filter_enabled";
+diff --git a/components/policy/core/common/policy_pref_names.h b/components/policy/core/common/policy_pref_names.h
+--- a/components/policy/core/common/policy_pref_names.h
++++ b/components/policy/core/common/policy_pref_names.h
+@@ -33,6 +33,7 @@ POLICY_EXPORT extern const char kUrlAllowlist[];
+ POLICY_EXPORT extern const char kUserPolicyRefreshRate[];
+ POLICY_EXPORT extern const char kIntensiveWakeUpThrottlingEnabled[];
+ POLICY_EXPORT extern const char kUserAgentClientHintsGREASEUpdateEnabled[];
++POLICY_EXPORT extern const char kDisabledDefaultPoliciesList[];
+ POLICY_EXPORT extern const char kUrlParamFilterEnabled[];
+ POLICY_EXPORT extern const char kSetTimeoutWithout1MsClampEnabled[];
+ POLICY_EXPORT extern const char kUnthrottledNestedTimeoutEnabled[];
+diff --git a/components/policy/core/common/policy_service_impl.cc b/components/policy/core/common/policy_service_impl.cc
+--- a/components/policy/core/common/policy_service_impl.cc
++++ b/components/policy/core/common/policy_service_impl.cc
+@@ -64,6 +64,9 @@ void IgnoreUserCloudPrecedencePolicies(PolicyMap* policies) {
+ // Metrics should not be enforced so if this policy is set as mandatory
+ // downgrade it to a recommended level policy.
+ void DowngradeMetricsReportingToRecommendedPolicy(PolicyMap* policies) {
++  // skip the change to 'Recommended' if the MetricsReportingEnabled
++  // policy is 'Mandatory'.
++  if ((true)) return;
+   // Capture both the Chrome-only and device-level policies on Chrome OS.
+   const std::vector<const char*> metrics_keys = {
+ #if BUILDFLAG(IS_CHROMEOS)
+diff --git a/components/policy/core/common/policy_switches.cc b/components/policy/core/common/policy_switches.cc
+--- a/components/policy/core/common/policy_switches.cc
++++ b/components/policy/core/common/policy_switches.cc
+@@ -20,6 +20,8 @@ const char kEncryptedReportingUrl[] = "encrypted-reporting-url";
+ // Set policy value by command line.
+ const char kChromePolicy[] = "policy";
+ 
++const char kForceDisabledPolicies[] = "force-disable-policies";
++
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+ // Disables the verification of policy signing keys. It just works on Chrome OS
+ // test images and crashes otherwise.
+diff --git a/components/policy/core/common/policy_switches.h b/components/policy/core/common/policy_switches.h
+--- a/components/policy/core/common/policy_switches.h
++++ b/components/policy/core/common/policy_switches.h
+@@ -18,6 +18,7 @@ POLICY_EXPORT extern const char kRealtimeReportingUrl[];
+ POLICY_EXPORT extern const char kEncryptedReportingUrl[];
+ POLICY_EXPORT extern const char kChromePolicy[];
+ POLICY_EXPORT extern const char kSecureConnectApiUrl[];
++POLICY_EXPORT extern const char kForceDisabledPolicies[];
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+ POLICY_EXPORT extern const char kDisablePolicyKeyVerification[];
+ #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+diff --git a/components/policy/resources/policy_templates.json b/components/policy/resources/policy_templates.json
+--- a/components/policy/resources/policy_templates.json
++++ b/components/policy/resources/policy_templates.json
+@@ -3932,8 +3932,9 @@
+       'supported_on': [
+         'chrome.*:8-',
+         'ios:88-',
++        'android:8-',
+       ],
+-      'future_on': ['android', 'fuchsia'],
++      'future_on': ['fuchsia'],
+       'features': {
+         'can_be_recommended': True,
+         'dynamic_refresh': False,
+@@ -4365,8 +4366,8 @@
+       'owners': ['file://components/policy/resources/OWNERS', 'pastarmovj@chromium.org'],
+       'type': 'main',
+       'schema': { 'type': 'boolean' },
+-      'supported_on': ['chrome.*:8-', 'chrome_os:11-', 'ios:96-'],
+-      'future_on': ['android', 'fuchsia'],
++      'supported_on': ['chrome.*:8-', 'chrome_os:11-', 'ios:96-', 'android:8-',],
++      'future_on': ['fuchsia'],
+       'features': {
+         'dynamic_refresh': True,
+         'per_profile': True,
+diff --git a/components/policy/resources/webui/policy_row.html b/components/policy/resources/webui/policy_row.html
+--- a/components/policy/resources/webui/policy_row.html
++++ b/components/policy/resources/webui/policy_row.html
+@@ -139,6 +139,7 @@ a {
+ <div class="policy row" role="row">
+   <div class="name" role="rowheader" aria-labelledby="name">
+     <a class="link" target="_blank">
++      <input type="checkbox" class="enabled_box">
+       <span id="name"></span>
+       <img src="chrome://resources/images/open_in_new.svg">
+     </a>
+diff --git a/components/policy/resources/webui/policy_row.js b/components/policy/resources/webui/policy_row.js
+--- a/components/policy/resources/webui/policy_row.js
++++ b/components/policy/resources/webui/policy_row.js
+@@ -15,6 +15,7 @@ import {getTemplate} from './policy_row.html.js';
+  * @typedef {{
+  *    ignored?: boolean,
+  *    name: string,
++ *    disabled: boolean,
+  *    level: string,
+  *    link: ?string,
+  *    scope: string,
+@@ -46,6 +47,9 @@ export class PolicyRowElement extends CustomElement {
+ 
+     this.setAttribute('role', 'rowgroup');
+     this.classList.add('policy-data');
++
++    const enabledBox = this.shadowRoot.querySelector('.enabled_box');
++    enabledBox.addEventListener('change', () => this.enabledChanged_());
+   }
+ 
+   /** @param {Policy} policy */
+@@ -92,6 +96,9 @@ export class PolicyRowElement extends CustomElement {
+       this.toggleAttribute('no-help-link', true);
+     }
+ 
++    const enabledBox = this.shadowRoot.querySelector('.enabled_box');
++    enabledBox.checked = !policy.disabled;
++
+     // Populate the remaining columns with policy scope, level and value if a
+     // value has been set. Otherwise, leave them blank.
+     if (!this.unset_) {
+@@ -187,6 +194,11 @@ export class PolicyRowElement extends CustomElement {
+     }
+   }
+ 
++  enabledChanged_() {
++    const enabledBox = this.shadowRoot.querySelector('.enabled_box');
++    chrome.send('setEnabledPolicy', [this.policy.name, enabledBox.checked]);
++  }
++
+   /**
+    * Copies the policy's value to the clipboard.
+    * @private
+diff --git a/components/policy_strings.grdp b/components/policy_strings.grdp
+--- a/components/policy_strings.grdp
++++ b/components/policy_strings.grdp
+@@ -544,8 +544,8 @@ Additional details:
+   <message name="IDS_POLICY_SOURCE_DEFAULT" desc="Indicates that a policy is set by default and can be overridden.">
+     Default
+   </message>
+-  <message name="IDS_POLICY_SOURCE_COMMAND_LINE" desc="Indicates that a policy is set by command line switch for testing purpose.">
+-    Command line
++  <message name="IDS_POLICY_SOURCE_COMMAND_LINE" desc="Indicates that a policy is set by bromite.">
++    Bromite default
+   </message>
+   <message name="IDS_POLICY_SOURCE_CLOUD" desc="Indicates that the policy originates from the cloud.">
+     Cloud
+diff --git a/components/signin/features.gni b/components/signin/features.gni
+--- a/components/signin/features.gni
++++ b/components/signin/features.gni
+@@ -5,7 +5,11 @@
+ import("//build/config/chromeos/ui_mode.gni")
+ 
+ # Dice is supported on the platform (but not necessarily enabled).
++# we need to enable dice support in sources because
++# too many build problems appear in windows.
++# Dice is disabled in android
+ enable_dice_support = is_linux || is_mac || is_win || is_fuchsia
+ 
+ # Mirror is enabled and other account consistency mechanisms are not available.
+-enable_mirror = is_android || is_chromeos || is_ios
++# Disable mirror mode in android
++enable_mirror = false
+diff --git a/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc b/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
+--- a/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
++++ b/components/signin/internal/identity_manager/gaia_cookie_manager_service.cc
+@@ -484,6 +484,8 @@ void GaiaCookieManagerService::RegisterPrefs(PrefRegistrySimple* registry) {
+ }
+ 
+ void GaiaCookieManagerService::InitCookieListener() {
++  // Make GaiaCookieManagerService compliant to SigninAllowed policy
++  if (!signin_client_->AreSigninCookiesAllowed()) return;
+   DCHECK(!cookie_listener_receiver_.is_bound());
+   network::mojom::CookieManager* cookie_manager =
+       signin_client_->GetCookieManager();
+@@ -1085,6 +1087,8 @@ void GaiaCookieManagerService::OnSetAccountsFinished(
+ }
+ 
+ void GaiaCookieManagerService::HandleNextRequest() {
++  // Make GaiaCookieManagerService compliant to SigninAllowed policy
++  if (!signin_client_->AreSigninCookiesAllowed()) requests_.clear();
+   VLOG(1) << "GaiaCookieManagerService::HandleNextRequest";
+   if (requests_.front().request_type() ==
+       GaiaCookieRequestType::LIST_ACCOUNTS) {
+diff --git a/google_apis/gaia/gaia_auth_fetcher.cc b/google_apis/gaia/gaia_auth_fetcher.cc
+--- a/google_apis/gaia/gaia_auth_fetcher.cc
++++ b/google_apis/gaia/gaia_auth_fetcher.cc
+@@ -719,6 +719,7 @@ void GaiaAuthFetcher::StartListAccounts() {
+             }
+           }
+         })");
++  LOG(INFO) << "---CreateAndStartGaiaFetcher";
+   CreateAndStartGaiaFetcher(
+       " ",  // To force an HTTP POST.
+       kFormEncodedContentType, "Origin: https://www.google.com",
+--
+2.25.1

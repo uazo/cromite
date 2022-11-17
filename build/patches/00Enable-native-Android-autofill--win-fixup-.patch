@@ -1,0 +1,60 @@
+From: Your Name <you@example.com>
+Date: Wed, 12 Oct 2022 11:46:45 +0000
+Subject: Enable native Android autofill (win fixup)
+
+---
+ chrome/browser/extensions/extension_view_host.cc            | 3 ++-
+ .../views/media_router/presentation_receiver_window_view.cc | 3 ++-
+ .../content/browser/content_autofill_driver_factory.cc      | 6 ++++++
+ 3 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/extensions/extension_view_host.cc b/chrome/browser/extensions/extension_view_host.cc
+--- a/chrome/browser/extensions/extension_view_host.cc
++++ b/chrome/browser/extensions/extension_view_host.cc
+@@ -58,7 +58,8 @@ ExtensionViewHost::ExtensionViewHost(const Extension* extension,
+       base::BindRepeating(
+           &autofill::BrowserDriverInitHook,
+           autofill::ChromeAutofillClient::FromWebContents(host_contents()),
+-          g_browser_process->GetApplicationLocale()));
++          g_browser_process->GetApplicationLocale(),
++          /*enable_secondary_autofill_manager*/ false));
+ 
+   // The popup itself cannot be zoomed, but we must specify a zoom level to use.
+   // Otherwise, if a user zooms a page of the same extension, the popup would
+diff --git a/chrome/browser/ui/views/media_router/presentation_receiver_window_view.cc b/chrome/browser/ui/views/media_router/presentation_receiver_window_view.cc
+--- a/chrome/browser/ui/views/media_router/presentation_receiver_window_view.cc
++++ b/chrome/browser/ui/views/media_router/presentation_receiver_window_view.cc
+@@ -174,7 +174,8 @@ void PresentationReceiverWindowView::Init() {
+       base::BindRepeating(
+           &autofill::BrowserDriverInitHook,
+           autofill::ChromeAutofillClient::FromWebContents(web_contents),
+-          g_browser_process->GetApplicationLocale()));
++          g_browser_process->GetApplicationLocale(),
++          /*enable_secondary_autofill_manager*/ false));
+   ChromePasswordManagerClient::CreateForWebContentsWithAutofillClient(
+       web_contents,
+       autofill::ChromeAutofillClient::FromWebContents(web_contents));
+diff --git a/components/autofill/content/browser/content_autofill_driver_factory.cc b/components/autofill/content/browser/content_autofill_driver_factory.cc
+--- a/components/autofill/content/browser/content_autofill_driver_factory.cc
++++ b/components/autofill/content/browser/content_autofill_driver_factory.cc
+@@ -44,12 +44,18 @@ void BrowserDriverInitHook(AutofillClient* client,
+                            const std::string& app_locale,
+                            bool enable_secondary_autofill_manager,
+                            ContentAutofillDriver* driver) {
++#if BUILDFLAG(IS_ANDROID)
+   driver->set_autofill_manager(std::make_unique<BrowserAutofillManager>(
+       driver, client, app_locale,
+       AutofillManager::EnableDownloadManager(false)),
+     enable_secondary_autofill_manager == false ? nullptr :
+       base::WrapUnique(new AndroidAutofillManager(driver, client,
+           AutofillManager::EnableDownloadManager(false))));
++#else
++  driver->set_autofill_manager(std::make_unique<BrowserAutofillManager>(
++      driver, client, app_locale,
++      AutofillManager::EnableDownloadManager(false)), nullptr);
++#endif
+   if (client && ShouldEnableHeavyFormDataScraping(client->GetChannel()))
+     driver->GetAutofillAgent()->EnableHeavyFormDataScraping();
+ }
+--
+2.25.1

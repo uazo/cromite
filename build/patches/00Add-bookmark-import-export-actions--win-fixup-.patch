@@ -1,0 +1,109 @@
+From: Your Name <you@example.com>
+Date: Wed, 12 Oct 2022 11:30:34 +0000
+Subject: Add bookmark import/export actions (win fixup)
+
+---
+ chrome/browser/BUILD.gn                                    | 2 ++
+ chrome/browser/about_flags.cc                              | 2 ++
+ chrome/browser/bookmarks/bookmark_html_writer.cc           | 7 ++++++-
+ .../lib/browser/headless_select_file_dialog_factory.cc     | 4 ++++
+ ui/shell_dialogs/select_file_dialog_win.cc                 | 5 +++++
+ 5 files changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -3617,6 +3617,8 @@ static_library("browser") {
+       "badging/badge_manager_factory.h",
+       "banners/app_banner_manager_desktop.cc",
+       "banners/app_banner_manager_desktop.h",
++      "bookmarks/bookmark_html_writer.cc",
++      "bookmarks/bookmark_html_writer.h",
+       "bookmarks/url_and_id.h",
+       "cart/cart_db.cc",
+       "cart/cart_db.h",
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -8940,11 +8940,13 @@ const FeatureEntry kFeatureEntries[] = {
+      FEATURE_VALUE_TYPE(net::features::kIsCleartextPermitted)},
+ #endif
+ 
++#if BUILDFLAG(IS_ANDROID)
+     {"export-bookmarks-use-saf",
+      flag_descriptions::kBookmarksExportUseSafName,
+      flag_descriptions::kBookmarksExportUseSafDescription, kOsAndroid,
+      FEATURE_VALUE_TYPE(
+          chrome::android::kBookmarksExportUseSaf)},
++#endif
+ 
+ #if BUILDFLAG(IS_CHROMEOS_ASH)
+     {"snooping-protection", flag_descriptions::kSnoopingProtectionName,
+diff --git a/chrome/browser/bookmarks/bookmark_html_writer.cc b/chrome/browser/bookmarks/bookmark_html_writer.cc
+--- a/chrome/browser/bookmarks/bookmark_html_writer.cc
++++ b/chrome/browser/bookmarks/bookmark_html_writer.cc
+@@ -27,7 +27,9 @@
+ #include "base/task/thread_pool.h"
+ #include "base/time/time.h"
+ #include "base/values.h"
++#if BUILDFLAG(IS_ANDROID)
+ #include "base/android/content_uri_utils.h"
++#endif
+ #include "chrome/browser/bookmarks/bookmark_model_factory.h"
+ #include "chrome/browser/favicon/favicon_service_factory.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -239,12 +241,15 @@ class Writer : public base::RefCountedThreadSafe<Writer> {
+   // Opens the file, returning true on success.
+   bool OpenFile() {
+     int flags = base::File::FLAG_CREATE_ALWAYS | base::File::FLAG_WRITE;
++#if BUILDFLAG(IS_ANDROID)
+     if (path_.IsContentUri()) {
+       file_ = std::make_unique<base::File>(base::OpenContentUriForWrite(path_));
+     } else {
+       file_ = std::make_unique<base::File>(path_, flags);
+     }
+-
++#else
++    file_ = std::make_unique<base::File>(path_, flags);
++#endif
+     if (!file_->IsValid()) {
+       PLOG(ERROR) << "Could not create " << path_;
+       return false;
+diff --git a/headless/lib/browser/headless_select_file_dialog_factory.cc b/headless/lib/browser/headless_select_file_dialog_factory.cc
+--- a/headless/lib/browser/headless_select_file_dialog_factory.cc
++++ b/headless/lib/browser/headless_select_file_dialog_factory.cc
+@@ -54,6 +54,10 @@ class HeadlessSelectFileDialog : public ui::SelectFileDialog {
+   // ui::SelectFileDialog:
+   bool HasMultipleFileTypeChoicesImpl() override { return false; }
+ 
++  void ShowToast(const std::string& message) override {
++    // nothing to do, used only on android
++  }
++
+   SelectFileDialogCallback callback_;
+ };
+ 
+diff --git a/ui/shell_dialogs/select_file_dialog_win.cc b/ui/shell_dialogs/select_file_dialog_win.cc
+--- a/ui/shell_dialogs/select_file_dialog_win.cc
++++ b/ui/shell_dialogs/select_file_dialog_win.cc
+@@ -191,6 +191,7 @@ class SelectFileDialogImpl : public ui::SelectFileDialog,
+                             int index);
+ 
+   bool HasMultipleFileTypeChoicesImpl() override;
++  void ShowToast(const std::string& message) override;
+ 
+   // Returns the filter to be used while displaying the open/save file dialog.
+   // This is computed from the extensions for the file types being opened.
+@@ -268,6 +269,10 @@ bool SelectFileDialogImpl::HasMultipleFileTypeChoicesImpl() {
+   return has_multiple_file_type_choices_;
+ }
+ 
++void SelectFileDialogImpl::ShowToast(const std::string& message) {
++  // nothing to do, used only on android
++}
++
+ bool SelectFileDialogImpl::IsRunning(gfx::NativeWindow owning_window) const {
+   if (!owning_window->GetRootWindow())
+     return false;
+--
+2.25.1

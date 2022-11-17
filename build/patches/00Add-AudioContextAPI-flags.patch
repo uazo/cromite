@@ -1,0 +1,540 @@
+From: Your Name <you@example.com>
+Date: Mon, 7 Nov 2022 16:45:13 +0000
+Subject: Add AudioContextAPI flags
+
+---
+ chrome/browser/about_flags.cc                 |  8 ++++
+ chrome/browser/flag_descriptions.cc           |  9 ++++
+ chrome/browser/flag_descriptions.h            |  5 +++
+ third_party/blink/common/features.cc          |  5 +++
+ third_party/blink/public/common/features.h    |  3 ++
+ .../modules/webaudio/analyser_handler.h       | 16 +++----
+ .../modules/webaudio/analyser_node.cc         | 20 +++++----
+ .../renderer/modules/webaudio/analyser_node.h |  8 ++--
+ .../modules/webaudio/analyser_node.idl        |  8 ++--
+ .../renderer/modules/webaudio/audio_buffer.cc | 34 ++++++++++++--
+ .../renderer/modules/webaudio/audio_buffer.h  |  7 +--
+ .../modules/webaudio/audio_buffer.idl         |  6 +++
+ .../modules/webaudio/audio_context.cc         |  5 +++
+ .../modules/webaudio/base_audio_context.cc    | 12 +++++
+ .../modules/webaudio/base_audio_context.h     |  2 +
+ .../modules/webaudio/realtime_analyser.cc     | 44 +++++++++++++++++--
+ .../modules/webaudio/realtime_analyser.h      | 10 +++--
+ 17 files changed, 163 insertions(+), 39 deletions(-)
+
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -3587,6 +3587,14 @@ const FeatureEntry kFeatureEntries[] = {
+      flag_descriptions::kKioskEnableAppServiceDescription, kOsCrOS,
+      FEATURE_VALUE_TYPE(features::kKioskEnableAppService)},
+ #endif  // BUILDFLAG(IS_CHROMEOS)
++    {"audio-context-api",
++     flag_descriptions::kAudioContextAPIEnabledName,
++     flag_descriptions::kAudioContextAPIEnabledDescription, kOsAll,
++     FEATURE_VALUE_TYPE(blink::features::kAudioContextAPIEnabled)},
++    {"fingerprinting-audio-context-data-noise",
++     flag_descriptions::kAudioContextShuffleEnabledName,
++     flag_descriptions::kAudioContextShuffleEnabledDescription, kOsAll,
++     FEATURE_VALUE_TYPE(blink::features::kAudioContextShuffleEnabled)},
+ #if !BUILDFLAG(IS_ANDROID)
+     {"enable-webrtc-remote-event-log",
+      flag_descriptions::kWebRtcRemoteEventLogName,
+diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descriptions.cc
+--- a/chrome/browser/flag_descriptions.cc
++++ b/chrome/browser/flag_descriptions.cc
+@@ -3217,6 +3217,15 @@ const char kWebrtcUseMinMaxVEADimensionsDescription[] =
+     "When enabled, WebRTC will only use the Video Encode Accelerator for "
+     "video resolutions inside those published as supported.";
+ 
++const char kAudioContextAPIEnabledName[] =
++    "Audio Context API";
++const char kAudioContextAPIEnabledDescription[] =
++    "When enabled, api are available for the audio context.";
++const char kAudioContextShuffleEnabledName[] =
++    "Enable Audio Context fingerprint deception";
++const char kAudioContextShuffleEnabledDescription[] =
++    "Scale the output values of xxx with a randomly selected factor.";
++
+ const char kWebUsbDeviceDetectionName[] =
+     "Automatic detection of WebUSB-compatible devices";
+ const char kWebUsbDeviceDetectionDescription[] =
+diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
+--- a/chrome/browser/flag_descriptions.h
++++ b/chrome/browser/flag_descriptions.h
+@@ -1824,6 +1824,11 @@ extern const char kWebrtcSrtpAesGcmDescription[];
+ extern const char kWebrtcUseMinMaxVEADimensionsName[];
+ extern const char kWebrtcUseMinMaxVEADimensionsDescription[];
+ 
++extern const char kAudioContextAPIEnabledName[];
++extern const char kAudioContextAPIEnabledDescription[];
++extern const char kAudioContextShuffleEnabledName[];
++extern const char kAudioContextShuffleEnabledDescription[];
++
+ extern const char kWebUsbDeviceDetectionName[];
+ extern const char kWebUsbDeviceDetectionDescription[];
+ 
+diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
+--- a/third_party/blink/common/features.cc
++++ b/third_party/blink/common/features.cc
+@@ -565,6 +565,11 @@ const base::Feature kWebRtcUseMinMaxVEADimensions {
+ #endif
+ };
+ 
++const base::Feature kAudioContextAPIEnabled {
++  "AudioContextAPIEnabled", base::FEATURE_ENABLED_BY_DEFAULT};
++const base::Feature kAudioContextShuffleEnabled {
++  "AudioContextShuffleEnabled", base::FEATURE_ENABLED_BY_DEFAULT};
++
+ // Blink garbage collection.
+ // Enables compaction of backing stores on Blink's heap.
+ const base::Feature kBlinkHeapCompaction{"BlinkHeapCompaction",
+diff --git a/third_party/blink/public/common/features.h b/third_party/blink/public/common/features.h
+--- a/third_party/blink/public/common/features.h
++++ b/third_party/blink/public/common/features.h
+@@ -257,6 +257,9 @@ BLINK_COMMON_EXPORT bool IsPlzDedicatedWorkerEnabled();
+ 
+ BLINK_COMMON_EXPORT extern const base::Feature kWebRtcUseMinMaxVEADimensions;
+ 
++BLINK_COMMON_EXPORT extern const base::Feature kAudioContextAPIEnabled;
++BLINK_COMMON_EXPORT extern const base::Feature kAudioContextShuffleEnabled;
++
+ // Blink garbage collection.
+ BLINK_COMMON_EXPORT extern const base::Feature kBlinkHeapCompaction;
+ BLINK_COMMON_EXPORT extern const base::Feature kBlinkHeapConcurrentMarking;
+diff --git a/third_party/blink/renderer/modules/webaudio/analyser_handler.h b/third_party/blink/renderer/modules/webaudio/analyser_handler.h
+--- a/third_party/blink/renderer/modules/webaudio/analyser_handler.h
++++ b/third_party/blink/renderer/modules/webaudio/analyser_handler.h
+@@ -40,17 +40,17 @@ class AnalyserHandler final : public AudioBasicInspectorHandler {
+     return analyser_.SmoothingTimeConstant();
+   }
+ 
+-  void GetFloatFrequencyData(DOMFloat32Array* array, double current_time) {
+-    analyser_.GetFloatFrequencyData(array, current_time);
++  void GetFloatFrequencyData(DOMFloat32Array* array, double current_time, ExceptionState& exception_state) {
++    analyser_.GetFloatFrequencyData(array, current_time, exception_state);
+   }
+-  void GetByteFrequencyData(DOMUint8Array* array, double current_time) {
+-    analyser_.GetByteFrequencyData(array, current_time);
++  void GetByteFrequencyData(DOMUint8Array* array, double current_time, ExceptionState& exception_state) {
++    analyser_.GetByteFrequencyData(array, current_time, exception_state);
+   }
+-  void GetFloatTimeDomainData(DOMFloat32Array* array) {
+-    analyser_.GetFloatTimeDomainData(array);
++  void GetFloatTimeDomainData(DOMFloat32Array* array, ExceptionState& exception_state) {
++    analyser_.GetFloatTimeDomainData(array, exception_state);
+   }
+-  void GetByteTimeDomainData(DOMUint8Array* array) {
+-    analyser_.GetByteTimeDomainData(array);
++  void GetByteTimeDomainData(DOMUint8Array* array, ExceptionState& exception_state) {
++    analyser_.GetByteTimeDomainData(array, exception_state);
+   }
+ 
+   // AnalyserNode needs special handling when updating the pull status
+diff --git a/third_party/blink/renderer/modules/webaudio/analyser_node.cc b/third_party/blink/renderer/modules/webaudio/analyser_node.cc
+--- a/third_party/blink/renderer/modules/webaudio/analyser_node.cc
++++ b/third_party/blink/renderer/modules/webaudio/analyser_node.cc
+@@ -117,22 +117,26 @@ double AnalyserNode::smoothingTimeConstant() const {
+   return GetAnalyserHandler().SmoothingTimeConstant();
+ }
+ 
+-void AnalyserNode::getFloatFrequencyData(NotShared<DOMFloat32Array> array) {
++void AnalyserNode::getFloatFrequencyData(NotShared<DOMFloat32Array> array,
++                                         ExceptionState& exception_state) {
+   GetAnalyserHandler().GetFloatFrequencyData(array.Get(),
+-                                             context()->currentTime());
++                                             context()->currentTime(), exception_state);
+ }
+ 
+-void AnalyserNode::getByteFrequencyData(NotShared<DOMUint8Array> array) {
++void AnalyserNode::getByteFrequencyData(NotShared<DOMUint8Array> array,
++                                        ExceptionState& exception_state) {
+   GetAnalyserHandler().GetByteFrequencyData(array.Get(),
+-                                            context()->currentTime());
++                                            context()->currentTime(), exception_state);
+ }
+ 
+-void AnalyserNode::getFloatTimeDomainData(NotShared<DOMFloat32Array> array) {
+-  GetAnalyserHandler().GetFloatTimeDomainData(array.Get());
++void AnalyserNode::getFloatTimeDomainData(NotShared<DOMFloat32Array> array,
++                                          ExceptionState& exception_state) {
++  GetAnalyserHandler().GetFloatTimeDomainData(array.Get(), exception_state);
+ }
+ 
+-void AnalyserNode::getByteTimeDomainData(NotShared<DOMUint8Array> array) {
+-  GetAnalyserHandler().GetByteTimeDomainData(array.Get());
++void AnalyserNode::getByteTimeDomainData(NotShared<DOMUint8Array> array,
++                                         ExceptionState& exception_state) {
++  GetAnalyserHandler().GetByteTimeDomainData(array.Get(), exception_state);
+ }
+ 
+ void AnalyserNode::ReportDidCreate() {
+diff --git a/third_party/blink/renderer/modules/webaudio/analyser_node.h b/third_party/blink/renderer/modules/webaudio/analyser_node.h
+--- a/third_party/blink/renderer/modules/webaudio/analyser_node.h
++++ b/third_party/blink/renderer/modules/webaudio/analyser_node.h
+@@ -57,10 +57,10 @@ class AnalyserNode final : public AudioBasicInspectorNode {
+   double maxDecibels() const;
+   void setSmoothingTimeConstant(double, ExceptionState&);
+   double smoothingTimeConstant() const;
+-  void getFloatFrequencyData(NotShared<DOMFloat32Array>);
+-  void getByteFrequencyData(NotShared<DOMUint8Array>);
+-  void getFloatTimeDomainData(NotShared<DOMFloat32Array>);
+-  void getByteTimeDomainData(NotShared<DOMUint8Array>);
++  void getFloatFrequencyData(NotShared<DOMFloat32Array>, ExceptionState&);
++  void getByteFrequencyData(NotShared<DOMUint8Array>, ExceptionState&);
++  void getFloatTimeDomainData(NotShared<DOMFloat32Array>, ExceptionState&);
++  void getByteTimeDomainData(NotShared<DOMUint8Array>, ExceptionState&);
+ 
+   // InspectorHelperMixin
+   void ReportDidCreate() final;
+diff --git a/third_party/blink/renderer/modules/webaudio/analyser_node.idl b/third_party/blink/renderer/modules/webaudio/analyser_node.idl
+--- a/third_party/blink/renderer/modules/webaudio/analyser_node.idl
++++ b/third_party/blink/renderer/modules/webaudio/analyser_node.idl
+@@ -40,10 +40,10 @@
+ 
+     // Copies the current frequency data into the passed array.
+     // If the array has fewer elements than the frequencyBinCount, the excess elements will be dropped.
+-    //[HighEntropy, Measure] void getFloatFrequencyData(Float32Array array);
+-    //[HighEntropy, Measure] void getByteFrequencyData(Uint8Array array);
++    [HighEntropy, Measure, RaisesException] void getFloatFrequencyData(Float32Array array);
++    [HighEntropy, Measure, RaisesException] void getByteFrequencyData(Uint8Array array);
+ 
+     // Real-time waveform data
+-    //[HighEntropy, Measure] void getFloatTimeDomainData(Float32Array array);
+-    //[HighEntropy, Measure] void getByteTimeDomainData(Uint8Array array);
++    [HighEntropy, Measure, RaisesException] void getFloatTimeDomainData(Float32Array array);
++    [HighEntropy, Measure, RaisesException] void getByteTimeDomainData(Uint8Array array);
+ };
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
+@@ -29,6 +29,7 @@
+ #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
+ 
+ #include <memory>
++#include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/renderer/bindings/modules/v8/v8_audio_buffer_options.h"
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
+ #include "third_party/blink/renderer/platform/audio/audio_bus.h"
+@@ -197,8 +198,14 @@ AudioBuffer::AudioBuffer(AudioBus* bus)
+ }
+ 
+ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(
++    ScriptState* script_state,
+     unsigned channel_index,
+     ExceptionState& exception_state) {
++  if (!base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kNotSupportedError, "getChannelData() is unavailable");
++    return NotShared<DOMFloat32Array>(nullptr);
++  }
+   if (channel_index >= channels_.size()) {
+     exception_state.ThrowDOMException(
+         DOMExceptionCode::kIndexSizeError,
+@@ -208,7 +215,16 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(
+     return NotShared<DOMFloat32Array>(nullptr);
+   }
+ 
+-  return getChannelData(channel_index);
++  NotShared<DOMFloat32Array> array = getChannelData(channel_index);
++  DOMFloat32Array* destination_array = array.Get();
++  size_t len = destination_array->length();
++  if (len > 0) {
++    float* destination = destination_array->Data();
++    for (unsigned i = 0; i < len; ++i) {
++      destination[i] = BaseAudioContext::ShuffleAudioData(destination[i], i);
++    }
++  }
++  return array;
+ }
+ 
+ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(unsigned channel_index) {
+@@ -219,13 +235,20 @@ NotShared<DOMFloat32Array> AudioBuffer::getChannelData(unsigned channel_index) {
+   return NotShared<DOMFloat32Array>(channels_[channel_index].Get());
+ }
+ 
+-void AudioBuffer::copyFromChannel(NotShared<DOMFloat32Array> destination,
++void AudioBuffer::copyFromChannel(ScriptState* script_state,
++                                  NotShared<DOMFloat32Array> destination,
+                                   int32_t channel_number,
+                                   ExceptionState& exception_state) {
+-  return copyFromChannel(destination, channel_number, 0, exception_state);
++  if (!base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kNotSupportedError, "copyFromChannel() is unavailable");
++    return;
++  }
++  return copyFromChannel(script_state, destination, channel_number, 0, exception_state);
+ }
+ 
+-void AudioBuffer::copyFromChannel(NotShared<DOMFloat32Array> destination,
++void AudioBuffer::copyFromChannel(ScriptState* script_state,
++                                  NotShared<DOMFloat32Array> destination,
+                                   int32_t channel_number,
+                                   size_t buffer_offset,
+                                   ExceptionState& exception_state) {
+@@ -264,6 +287,9 @@ void AudioBuffer::copyFromChannel(NotShared<DOMFloat32Array> destination,
+   DCHECK_LE(buffer_offset + count, data_length);
+ 
+   memmove(dst, src + buffer_offset, count * sizeof(*src));
++  for (unsigned i = 0; i < count; i++) {
++    dst[i] = BaseAudioContext::ShuffleAudioData(dst[i], i);
++  }
+ }
+ 
+ void AudioBuffer::copyToChannel(NotShared<DOMFloat32Array> source,
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.h b/third_party/blink/renderer/modules/webaudio/audio_buffer.h
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.h
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.h
+@@ -44,6 +44,7 @@ class AudioBus;
+ class AudioBufferOptions;
+ class ExceptionState;
+ class SharedAudioBuffer;
++class ScriptState;
+ 
+ class MODULES_EXPORT AudioBuffer final : public ScriptWrappable {
+   DEFINE_WRAPPERTYPEINFO();
+@@ -88,13 +89,13 @@ class MODULES_EXPORT AudioBuffer final : public ScriptWrappable {
+ 
+   // Channel data access
+   unsigned numberOfChannels() const { return channels_.size(); }
+-  NotShared<DOMFloat32Array> getChannelData(unsigned channel_index,
++  NotShared<DOMFloat32Array> getChannelData(ScriptState*, unsigned channel_index,
+                                             ExceptionState&);
+   NotShared<DOMFloat32Array> getChannelData(unsigned channel_index);
+-  void copyFromChannel(NotShared<DOMFloat32Array>,
++  void copyFromChannel(ScriptState*, NotShared<DOMFloat32Array>,
+                        int32_t channel_number,
+                        ExceptionState&);
+-  void copyFromChannel(NotShared<DOMFloat32Array>,
++  void copyFromChannel(ScriptState*, NotShared<DOMFloat32Array>,
+                        int32_t channel_number,
+                        size_t buffer_offset,
+                        ExceptionState&);
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.idl b/third_party/blink/renderer/modules/webaudio/audio_buffer.idl
+--- a/third_party/blink/renderer/modules/webaudio/audio_buffer.idl
++++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.idl
+@@ -37,6 +37,12 @@
+ 
+     // Channel access
+     readonly attribute unsigned long numberOfChannels;
++    [CallWith=ScriptState, HighEntropy=Direct, Measure, RaisesException] Float32Array getChannelData(
++        unsigned long channelIndex);
++    [CallWith=ScriptState, HighEntropy, Measure, RaisesException] void copyFromChannel(
++        Float32Array destination,
++        unsigned long channelNumber,
++        optional unsigned long bufferOffset = 0);
+     [RaisesException] void copyToChannel(
+         Float32Array source,
+         unsigned long channelNumber,
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+@@ -10,6 +10,7 @@
+ #include "services/metrics/public/cpp/ukm_builders.h"
+ #include "services/metrics/public/cpp/ukm_recorder.h"
+ #include "third_party/blink/public/common/browser_interface_broker_proxy.h"
++#include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
+ #include "third_party/blink/public/platform/web_audio_latency_hint.h"
+ #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
+@@ -507,6 +508,10 @@ double AudioContext::baseLatency() const {
+   DCHECK(IsMainThread());
+   DCHECK(destination());
+ 
++  if (!base::FeatureList::IsEnabled(features::kAudioContextShuffleEnabled) &&
++      !base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    return base_latency_;
++  }
+   // remove precision past two decimal digits
+   int l = base_latency_ * 100;
+   return double(l)/100;
+diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b/third_party/blink/renderer/modules/webaudio/base_audio_context.cc
+--- a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/base_audio_context.cc
+@@ -29,6 +29,7 @@
+ 
+ #include "base/metrics/histogram_functions.h"
+ #include "build/build_config.h"
++#include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
+ #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
+ #include "third_party/blink/public/platform/platform.h"
+@@ -701,6 +702,17 @@ Document* BaseAudioContext::GetDocument() const {
+   return window ? window->document() : nullptr;
+ }
+ 
++/*static*/
++float BaseAudioContext::ShuffleAudioData(float data, unsigned index) {
++  if (base::FeatureList::IsEnabled(features::kAudioContextShuffleEnabled)) {
++    float rnd = 1.0f +
++                (base::RandDouble() / 10000.0) *
++                  (base::RandInt(0,10) > 5 ? 1.f : -1.f);
++    return data * rnd;
++  }
++  return data;
++}
++
+ void BaseAudioContext::NotifySourceNodeStartedProcessing(AudioNode* node) {
+   DCHECK(IsMainThread());
+   GraphAutoLocker locker(this);
+diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.h b/third_party/blink/renderer/modules/webaudio/base_audio_context.h
+--- a/third_party/blink/renderer/modules/webaudio/base_audio_context.h
++++ b/third_party/blink/renderer/modules/webaudio/base_audio_context.h
+@@ -338,6 +338,8 @@ class MODULES_EXPORT BaseAudioContext
+   // if the execution context does not exist.
+   bool CheckExecutionContextAndThrowIfNecessary(ExceptionState&);
+ 
++  static float ShuffleAudioData(float data, unsigned index);
++
+  protected:
+   enum ContextType { kRealtimeContext, kOfflineContext };
+ 
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc b/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
+--- a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
++++ b/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc
+@@ -26,7 +26,9 @@
+ #include <limits.h>
+ #include <algorithm>
+ #include <complex>
++#include "third_party/blink/public/common/features.h"
+ #include "third_party/blink/renderer/modules/webaudio/realtime_analyser.h"
++#include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
+ #include "third_party/blink/renderer/platform/audio/audio_bus.h"
+ #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
+ #include "third_party/blink/renderer/platform/audio/vector_math.h"
+@@ -187,15 +189,23 @@ void RealtimeAnalyser::ConvertFloatToDb(DOMFloat32Array* destination_array) {
+       float linear_value = source[i];
+       double db_mag = audio_utilities::LinearToDecibels(linear_value);
+       destination[i] = static_cast<float>(db_mag);
++      destination[i] = BaseAudioContext::ShuffleAudioData(destination[i], i);
+     }
+   }
+ }
+ 
+ void RealtimeAnalyser::GetFloatFrequencyData(DOMFloat32Array* destination_array,
+-                                             double current_time) {
++                                             double current_time,
++                                             ExceptionState& exception_state) {
+   DCHECK(IsMainThread());
+   DCHECK(destination_array);
+ 
++  if (!base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kNotSupportedError, "GetFloatFrequencyData() is unavailable");
++    return;
++  }
++
+   if (current_time <= last_analysis_time_) {
+     ConvertFloatToDb(destination_array);
+     return;
+@@ -230,6 +240,8 @@ void RealtimeAnalyser::ConvertToByteData(DOMUint8Array* destination_array) {
+       double scaled_value =
+           UCHAR_MAX * (db_mag - min_decibels) * range_scale_factor;
+ 
++      scaled_value = BaseAudioContext::ShuffleAudioData(scaled_value, i);
++
+       // Clip to valid range.
+       if (scaled_value < 0) {
+         scaled_value = 0;
+@@ -244,10 +256,17 @@ void RealtimeAnalyser::ConvertToByteData(DOMUint8Array* destination_array) {
+ }
+ 
+ void RealtimeAnalyser::GetByteFrequencyData(DOMUint8Array* destination_array,
+-                                            double current_time) {
++                                            double current_time,
++                                            ExceptionState& exception_state) {
+   DCHECK(IsMainThread());
+   DCHECK(destination_array);
+ 
++  if (!base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kNotSupportedError, "GetByteFrequencyData() is unavailable");
++    return;
++  }
++
+   if (current_time <= last_analysis_time_) {
+     // FIXME: Is it worth caching the data so we don't have to do the conversion
+     // every time?  Perhaps not, since we expect many calls in the same
+@@ -264,10 +283,17 @@ void RealtimeAnalyser::GetByteFrequencyData(DOMUint8Array* destination_array,
+ }
+ 
+ void RealtimeAnalyser::GetFloatTimeDomainData(
+-    DOMFloat32Array* destination_array) {
++    DOMFloat32Array* destination_array,
++    ExceptionState& exception_state) {
+   DCHECK(IsMainThread());
+   DCHECK(destination_array);
+ 
++  if (!base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kNotSupportedError, "GetFloatTimeDomainData() is unavailable");
++    return;
++  }
++
+   unsigned fft_size = FftSize();
+   size_t len =
+       std::min(static_cast<size_t>(fft_size), destination_array->length());
+@@ -286,15 +312,23 @@ void RealtimeAnalyser::GetFloatTimeDomainData(
+           input_buffer[(i + write_index - fft_size + kInputBufferSize) %
+                        kInputBufferSize];
+ 
++      value = BaseAudioContext::ShuffleAudioData(value, i);
+       destination[i] = value;
+     }
+   }
+ }
+ 
+-void RealtimeAnalyser::GetByteTimeDomainData(DOMUint8Array* destination_array) {
++void RealtimeAnalyser::GetByteTimeDomainData(DOMUint8Array* destination_array,
++                                             ExceptionState& exception_state) {
+   DCHECK(IsMainThread());
+   DCHECK(destination_array);
+ 
++  if (!base::FeatureList::IsEnabled(features::kAudioContextAPIEnabled)) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kNotSupportedError, "GetByteTimeDomainData() is unavailable");
++    return;
++  }
++
+   unsigned fft_size = FftSize();
+   size_t len =
+       std::min(static_cast<size_t>(fft_size), destination_array->length());
+@@ -313,6 +347,8 @@ void RealtimeAnalyser::GetByteTimeDomainData(DOMUint8Array* destination_array) {
+           input_buffer[(i + write_index - fft_size + kInputBufferSize) %
+                        kInputBufferSize];
+ 
++      value = BaseAudioContext::ShuffleAudioData(value, i);
++
+       // Scale from nominal -1 -> +1 to unsigned byte.
+       double scaled_value = 128 * (value + 1);
+ 
+diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.h b/third_party/blink/renderer/modules/webaudio/realtime_analyser.h
+--- a/third_party/blink/renderer/modules/webaudio/realtime_analyser.h
++++ b/third_party/blink/renderer/modules/webaudio/realtime_analyser.h
+@@ -32,6 +32,8 @@
+ #include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
+ #include "third_party/blink/renderer/platform/audio/audio_array.h"
+ #include "third_party/blink/renderer/platform/audio/fft_frame.h"
++#include "third_party/blink/renderer/platform/bindings/exception_messages.h"
++#include "third_party/blink/renderer/platform/bindings/exception_state.h"
+ 
+ namespace blink {
+ 
+@@ -71,10 +73,10 @@ class RealtimeAnalyser final {
+   void SetSmoothingTimeConstant(double k) { smoothing_time_constant_ = k; }
+   double SmoothingTimeConstant() const { return smoothing_time_constant_; }
+ 
+-  void GetFloatFrequencyData(DOMFloat32Array*, double);
+-  void GetByteFrequencyData(DOMUint8Array*, double);
+-  void GetFloatTimeDomainData(DOMFloat32Array*);
+-  void GetByteTimeDomainData(DOMUint8Array*);
++  void GetFloatFrequencyData(DOMFloat32Array*, double, ExceptionState&);
++  void GetByteFrequencyData(DOMUint8Array*, double, ExceptionState&);
++  void GetFloatTimeDomainData(DOMFloat32Array*, ExceptionState&);
++  void GetByteTimeDomainData(DOMUint8Array*, ExceptionState&);
+ 
+   // The audio thread writes input data here.
+   void WriteInput(AudioBus*, uint32_t frames_to_process);
+--
+2.25.1
