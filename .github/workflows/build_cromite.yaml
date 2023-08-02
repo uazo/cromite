@@ -23,7 +23,7 @@ on:
         required: true
         default: 'all'
       build:
-        description: 'android arch [arm64/x64/all]'
+        description: 'android arch [arm/arm64/x64/all]'
         required: true
         default: 'all'
       type:
@@ -163,7 +163,7 @@ jobs:
         # kythe
         KYTHE_CORPUS: chromium.googlesource.com/chromium/src
         KYTHE_ROOT_DIRECTORY: /home/lg/working_dir/chromium/src
-        KYTHE_OUTPUT_DIRECTORY: /home/lg/working_dir/chromium/src/out/bromite-android-arm64/kythe
+        KYTHE_OUTPUT_DIRECTORY: /home/lg/working_dir/chromium/src/out/bromite-android-arm/kythe
         # cross build
         DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL: /win_sdk/10.0.22621.0/
         WINDOWSSDKDIR: "/win_sdk/10.0.22621.0/Windows Kits/10/"
@@ -175,6 +175,7 @@ jobs:
         KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         CROMITE_PREF_HASH_SEED_BIN: ${{ secrets.CROMITE_PREF_HASH_SEED_BIN }}
       volumes:
+        - /storage/images/${{ github.event.inputs.sha }}/android/${{ github.event.inputs.debug }}/arm:/home/lg/working_dir/chromium/src/out/bromite-android-arm
         - /storage/images/${{ github.event.inputs.sha }}/android/${{ github.event.inputs.debug }}/arm64:/home/lg/working_dir/chromium/src/out/bromite-android-arm64
         - /storage/images/${{ github.event.inputs.sha }}/android/${{ github.event.inputs.debug }}/x64:/home/lg/working_dir/chromium/src/out/bromite-android-x86_64
         - /storage/images/${{ github.event.inputs.sha }}/win/x64:/home/lg/working_dir/chromium/src/out/bromite-windows-x86_64
@@ -196,6 +197,10 @@ jobs:
           https_proxy=
           
           # set out folder permissions
+          test -d chromium/src/out/bromite-android-arm || sudo mkdir -p chromium/src/out/bromite-android-arm && \
+            sudo chown lg chromium/src/out &&
+            sudo chown lg chromium/src/out/bromite-android-arm
+
           test -d chromium/src/out/bromite-android-arm64 || sudo mkdir -p chromium/src/out/bromite-android-arm64 && \
             sudo chown lg chromium/src/out &&
             sudo chown lg chromium/src/out/bromite-android-arm64
@@ -222,7 +227,35 @@ jobs:
           echo "${{ secrets.KEYSTORE }}" > cromite.keystore.asc
           gpg --homedir ./ -d --passphrase "${{ secrets.KEYSTORE_PASSPHRASE }}" --batch cromite.keystore.asc > cromite.keystore
           echo "::endgroup::"
-          
+
+      - name: Build Bromite Android arm
+        if: ${{ (github.event.inputs.target_os == 'android' || github.event.inputs.target_os == 'all') && (github.event.inputs.build == 'arm' || github.event.inputs.build == 'all') }}
+        shell: bash
+        run: |
+          PATH=$WORKSPACE/chromium/src/third_party/llvm-build/Release+Asserts/bin:$WORKSPACE/depot_tools/:/usr/local/go/bin:$WORKSPACE/mtool/bin:$PATH
+          cd $WORKSPACE/chromium/src
+
+          echo "::group::-------- gn gen"
+          gn gen --args="import(\"/home/lg/working_dir/bromite/build/bromite.gn_args\") $(cat ../../build_args.gni) target_cpu = \"arm\" " out/bromite-android-arm
+          echo "::endgroup::"
+
+          echo "::group::-------- gn args"
+          gn args out/bromite-android-arm/ --list --short
+          gn args out/bromite-android-arm/ --list >out/bromite-android-arm/gn_list
+          echo "::endgroup::"
+
+          ninja -C out/bromite-android-arm chrome_public_apk
+
+          cp ../../bromite/build/RELEASE out/bromite-android-arm
+
+      - name: Get ninja logs Android arm
+        if: ${{ (github.event.inputs.target_os == 'android' || github.event.inputs.target_os == 'all') && (github.event.inputs.build == 'arm' || github.event.inputs.build == 'all') }}
+        shell: bash
+        run: |
+          cd $WORKSPACE
+          $WORKSPACE/ninjatracing/ninjatracing $WORKSPACE/chromium/src/out/bromite-android-arm/.ninja_log >$WORKSPACE/chromium/src/out/bromite-android-arm/ninja_log_trace.json
+          python3 $WORKSPACE/chromium/src/third_party/catapult/tracing/bin/trace2html $WORKSPACE/chromium/src/out/bromite-android-arm/ninja_log_trace.json
+
       - name: Build Bromite Android arm64
         if: ${{ (github.event.inputs.target_os == 'android' || github.event.inputs.target_os == 'all') && (github.event.inputs.build == 'arm64' || github.event.inputs.build == 'all') }}
         shell: bash
