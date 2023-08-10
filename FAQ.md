@@ -1,91 +1,73 @@
 # Frequently Asked Questions
 
-## Does Google Sync/Translate/Data saver work?
-No.
-This is not a limitation of Bromite but of all Chromium-based projects in general, as general public is not allowed to use Google's APIs for free unless when using Chrome.
+## Does Google Sync/Translate/Data Saver work?
+No. This is not a limitation of Cromite but of all Chromium-based projects in general, as the general public is not allowed to use Google's APIs for free unless when using Chrome. Additionally, these features would not be privacy-friendly.
 
-Additionally, these features would not be privacy-friendly.
-
-## Does Bromite require root?
+## Does Cromite require root?
 No.
 
-## Is Bromite de-googled?
-
+## Is Cromite de-googled?
 Yes, although this has not been verified (and hardly can be) under all situations; if you were to find connections to cloud-based services please report them via the issue tracker.
-Bromite uses [ungoogled-chromium's python script](https://github.com/Eloston/ungoogled-chromium/blob/master/utils/domain_substitution.py) to disable URLs in the codebase since version `78.0.3904.93`.
+Cromite uses [ungoogled-chromium's python script](https://github.com/Eloston/ungoogled-chromium/blob/master/utils/domain_substitution.py) to disable URLs in the codebase.
+Other projects which follow a strict approach on this include [Iridium](https://iridiumbrowser.de/).
 
-Projects which follow a strict approach on this are [Iridium](https://iridiumbrowser.de/) and [Inox patchset](https://github.com/gcarq/inox-patchset).
-
-## Does Bromite support DRM media?
-
+## Does Cromite support DRM media?
 Yes, in order to play protected/encrypted media content the browser will use Android's DRM media framework to automatically negotiate access (same as Chromium).
-This means for example that requests to Android license servers will be performed (`www.googleapis.com`), see https://w3c.github.io/encrypted-media/#direct-individualization
+This means for example that requests to Android license servers will be performed (`www.googleapis.com`), see https://w3c.github.io/encrypted-media/#direct-individualization.
 To disable this functionality you should disable protected content playback from Site settings -> Protected Content.
 
 ## What is the SystemWebView?
-It is the core component of Android for all web page visualizations. For example when you access a new wifi network and need to activate it, that is using the SystemWebView. If you do not know what it is then you do not need to install it.
-
-See also [the wiki page](https://github.com/bromite/bromite/wiki/Installing-SystemWebView) for community-contributed installation instructions.
-
-Ad-blocking was present and always enabled in the SystemWebView from version `72.0.3626.120` till version `77.0.3865.104`, when it stopped working due to [upstream NetworkService changes](https://docs.google.com/document/d/1TZEuPvr2KAbP4_TZpuuwtEEArQsyAkc2HDu68l66YwU/edit?ts=598244df#heading=h.ougoi5i6508y).
+It is the core component of Android for all web page visualizations. For example when you access a new wifi network and need to activate it, that is using the SystemWebView. Cromite does not currently offer a SystemWebView apk and there are no plans to do so (see [issue 62](https://github.com/uazo/bromite-buildtools/issues/62)).
 
 ## How to enable DNS-over-HTTPS?
 
-See [this page](https://www.bromite.org/doh).
+DNS-over-HTTPS (DoH) is enabled by default in opportunistic mode (same as upstream Chromium); it is advised to choose a provider instead in order to use explicit mode. Enable DoH from Settings -> Privacy and Security -> Use Secure DNS -> Choose another provider and then enter the DoH template URL.
 
-## Can you add HTTPS everywhere?
-No.
-We cannot add add-ons to Bromite (merely some features).
+## Can you add HTTPS Everywhere?
+Cromite does not support add-ons. However you can achieve the same effect via Settings -> Privacy and Security -> Always use secure connections
 
-## Is Bromite on Play Store?
-No, and this is not going to change. Many limitations apply for submissions there, including which ads are allowed to be blocked.
+## Is Cromite on Play Store?
+No, and this is not going to change. Many limitations apply for submissions there, including which ads are allowed to be blocked. Cromite favors user freedom in software choice.
 
-Bromite favors user freedom in software choice: the device is yours so you get to choose which software to run on it, end of the story.
+## Is Cromite on F-Droid?
+It is not on the official (default) F-Droid repository. This repository only accepts apps that the F-Droid maintainers can build from source, with a strict policy against including any non-FOSS binary blobs or native libraries, thus making it near impossible for any Chromium-based browser to be accepted - see [here](https://forum.f-droid.org/t/chromium-base-browser-or-bromite-in-main-f-droid-repo/17220/9) for further details. 
+You can however use the F-Droid client to install and receive updates via [the official Cromite F-Droid repository](https://www.cromite.org/fdroid/repo).
 
-## Is Bromite on F-Droid?
-It is not on the official F-Droid repository and there are no (more) plans to submit it.
+## Does Cromite support WebRTC?
+Partially, with mitigations to minimise IP leaks. 
 
-You can use F-Droid client to install and receive updates via [the official Bromite F-Droid repository](https://www.bromite.org/fdroid).
-
-## Does Bromite support WebRTC?
-Partially, see https://github.com/bromite/bromite/wiki/WebRTC
-
-## Using Bromite will favour the monopoly of the Chromium/Blink engine, why do you develop and maintain Bromite?
+## Using Cromite will favour the monopoly of the Chromium/Blink engine, why do you develop and maintain Cromite?
 In short, to show what a Chromium-based engine could do **for the user** if the user experience and needs were the main focus of modern browser design.
 
 For an Android browser using an alternative engine see [Fennec F-Droid](https://f-droid.org/en/packages/org.mozilla.fennec_fdroid/).
 
-## Does Bromite support extensions?
-No; Bromite will support extensions only if upstream (Chromium) does, or similarly another project maintains the patch and functionality.
+## Does Cromite support extensions?
+No. Cromite does however integrate Adblock Plus functionality and has experimental support for Greasemonkey-style userscripts.
 
 ## Why do push notifications not work on this website?
 
 The [Chromium Blink engine](https://www.chromium.org/blink) uses [GCM](https://en.wikipedia.org/wiki/Google_Cloud_Messaging) to deliver messages
-when websites use the [Push API](https://w3c.github.io/push-api/); this will not work in Bromite because cloud integrations are disabled (GCM in this case).
+when websites use the [Push API](https://w3c.github.io/push-api/); this will not work in Cromite because cloud integrations are disabled (GCM in this case).
 
 [ServiceWorker notifications](https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/showNotification) do work instead since they use
 [android.app.Notification](https://developer.android.com/guide/topics/ui/notifiers/notifications).
 
 ## Can PWAs be installed?
 
-PWAs are only supported as home shortcuts; WebAPKs will not work because they are generated server-side on googleapis.com (which is not allowed in Bromite).
+PWAs are only supported as home shortcuts; WebAPKs will not work because they are generated server-side on googleapis.com (which is not allowed in Cromite).
 
-## Does Bromite support the Android autofill framework?
+## Does Cromite support the Android autofill framework?
 
-Yes, since version 94.0.4606.109 the native Android autofill can be used; this does not require accessibility services as a workaround.
+Yes, Cromite uses the native Android autofill framework.
 
-## Does Bromite support casting media content?
+## Does Cromite support casting media content?
 
 No, this would require Play Store binary blobs.
 
 ## Can you add this search engine as default?
-No.
-Bromite does not make any choice related to default search engines, the Chromium default is used.
-Various Android browsers get some fee to ship their apps with a specific default search engine, Bromite does not get any fee from anyone.
-Changing the default search engine would lead to an endless series of requests to change it based on personal preferences, thus no change is made to the default.
-See also: https://github.com/bromite/bromite/wiki/SearchEngines
+No. Cromite does not make any choice related to default search engines, the Chromium defaults are used.
+Some Android browsers receive commissions to ship their apps with a specific default search engine. Cromite does not receive any fee from anyone.
+Changing the default search engine would lead to an endless series of requests to change it based on personal preferences.
+You can manually add any search engine that supports OpenSearch. Visit the search engine home page, then under Settings -> Search Engine you should see the option to pick that search engine as your default search provider.
 
-## Some sites show ads, how can I fix this?
-You can compare the blocked URLs with a desktop browser and Bromite (using [remote debugging](https://developer.chrome.com/docs/devtools/remote-debugging/)) and figure out some new filter rules to be added.
-If the ads are blocked via cosmetic filtering then blocking them is not possible with Bromite's engine and you might need something like an [user script](https://github.com/bromite/bromite/wiki/UserScripts) instead.
-See also: https://github.com/bromite/bromite/wiki/AdBlocking
+
