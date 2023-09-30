@@ -12,7 +12,7 @@
 </a>
 <br>
 
-### **** the documentation is a Work in progress (not the browser :) ****
+### the documentation is a Work in progress (not the browser :) 
 
 Cromite is a [Chromium](https://www.chromium.org/Home) fork based on [Bromite](https://github.com/bromite/bromite) with built-in support for ad blocking and an eye for privacy.
 
