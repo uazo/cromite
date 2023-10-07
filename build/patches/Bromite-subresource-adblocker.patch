@@ -29,8 +29,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/browser_process_impl.cc        |  20 ++
  chrome/browser/browser_process_impl.h         |   2 +
  chrome/browser/chrome_browser_main.cc         |   3 +
- .../flags/android/cached_feature_flags.cc     |  11 +
- .../browser/flags/CachedFeatureFlags.java     |  10 +
+ .../browser/flags/CachedFeatureFlags.java     |  14 +
  .../net/system_network_context_manager.cc     |   3 +
  .../sessions/session_restore_android.cc       |   6 +-
  .../strings/android_chrome_strings.grd        |  14 +
@@ -51,7 +50,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/subresource_filter_features.cc    | 116 +-------
  .../core/common/indexed_ruleset.cc            |   5 +-
  third_party/blink/common/features.cc          |  12 +-
- 39 files changed, 1188 insertions(+), 135 deletions(-)
+ 38 files changed, 1181 insertions(+), 135 deletions(-)
  create mode 100644 chrome/android/java/res/layout/adblock_editor.xml
  create mode 100644 chrome/android/java/res/xml/adblock_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AdBlockEditor.java
@@ -64,7 +63,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
-@@ -293,6 +293,7 @@ if (current_toolchain == default_toolchain) {
+@@ -301,6 +301,7 @@ if (current_toolchain == default_toolchain) {
        "//chrome/android/modules/image_editor/provider:java",
        "//chrome/android/modules/stack_unwinder/provider:java",
        "//chrome/android/webapk/libs/client:client_java",
@@ -75,7 +74,7 @@ diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -460,6 +460,7 @@ chrome_java_resources = [
+@@ -441,6 +441,7 @@ chrome_java_resources = [
    "java/res/layout/account_chooser_dialog_title.xml",
    "java/res/layout/account_divider_preference.xml",
    "java/res/layout/account_management_account_row.xml",
@@ -83,7 +82,7 @@ diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_ja
    "java/res/layout/auto_sign_in_first_run_dialog.xml",
    "java/res/layout/autofill_billing_address_dropdown.xml",
    "java/res/layout/autofill_card_name_and_number.xml",
-@@ -656,6 +657,7 @@ chrome_java_resources = [
+@@ -639,6 +640,7 @@ chrome_java_resources = [
    "java/res/xml/about_chrome_preferences.xml",
    "java/res/xml/account_management_preferences.xml",
    "java/res/xml/ad_services_config.xml",
@@ -94,7 +93,7 @@ diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_ja
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -946,6 +946,8 @@ chrome_java_sources = [
+@@ -948,6 +948,8 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/permissions/PermissionSettingsBridge.java",
    "java/src/org/chromium/chrome/browser/permissions/PermissionUpdateRequester.java",
    "java/src/org/chromium/chrome/browser/photo_picker/DecoderServiceImpl.java",
@@ -437,7 +436,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabMod
 diff --git a/chrome/app/generated_resources.grd b/chrome/app/generated_resources.grd
 --- a/chrome/app/generated_resources.grd
 +++ b/chrome/app/generated_resources.grd
-@@ -14277,6 +14277,16 @@ Please help our engineers fix this problem. Tell us what happened right before y
+@@ -14314,6 +14314,16 @@ Please help our engineers fix this problem. Tell us what happened right before y
        Never show this again.
      </message>
  
@@ -508,7 +507,7 @@ diff --git a/chrome/browser/browser_process.h b/chrome/browser/browser_process.h
 diff --git a/chrome/browser/browser_process_impl.cc b/chrome/browser/browser_process_impl.cc
 --- a/chrome/browser/browser_process_impl.cc
 +++ b/chrome/browser/browser_process_impl.cc
-@@ -1129,6 +1129,26 @@ BrowserProcessImpl::component_updater() {
+@@ -1128,6 +1128,26 @@ BrowserProcessImpl::component_updater() {
    return component_updater_.get();
  }
  
@@ -557,7 +556,7 @@ diff --git a/chrome/browser/browser_process_impl.h b/chrome/browser/browser_proc
 diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_browser_main.cc
 --- a/chrome/browser/chrome_browser_main.cc
 +++ b/chrome/browser/chrome_browser_main.cc
-@@ -427,6 +427,9 @@ StartupProfileInfo CreateInitialProfile(
+@@ -429,6 +429,9 @@ StartupProfileInfo CreateInitialProfile(
    // missing code in the above test.
    CHECK(profile_info.profile) << "Cannot get default profile.";
  
@@ -567,61 +566,32 @@ diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_brows
  #else
  #if BUILDFLAG(IS_CHROMEOS_LACROS)
    // Lacros has a special "primary" profile that is tied to the active ChromeOS
-diff --git a/chrome/browser/flags/android/cached_feature_flags.cc b/chrome/browser/flags/android/cached_feature_flags.cc
---- a/chrome/browser/flags/android/cached_feature_flags.cc
-+++ b/chrome/browser/flags/android/cached_feature_flags.cc
-@@ -8,6 +8,9 @@
- 
- #include "base/android/jni_string.h"
- #include "base/feature_list.h"
-+#include "chrome/browser/browser_process.h"
-+#include "chrome/common/pref_names.h"
-+#include "components/prefs/pref_service.h"
- #include "content/public/browser/network_service_util.h"
- #include "content/public/common/content_features.h"
- 
-@@ -41,3 +44,11 @@ static jboolean JNI_CachedFeatureFlags_IsNetworkServiceWarmUpEnabled(
-   return content::IsOutOfProcessNetworkService() &&
-          base::FeatureList::IsEnabled(features::kWarmUpNetworkProcess);
- }
-+
-+static ScopedJavaLocalRef<jstring> JNI_CachedFeatureFlags_GetAdBlockFiltersURL(JNIEnv* env) {
-+  return base::android::ConvertUTF8ToJavaString(env, g_browser_process->local_state()->GetString(prefs::kAdBlockFiltersURL));
-+}
-+
-+static void JNI_CachedFeatureFlags_SetAdBlockFiltersURL(JNIEnv* env, const JavaParamRef<jstring>& url) {
-+  g_browser_process->local_state()->SetString(prefs::kAdBlockFiltersURL, base::android::ConvertJavaStringToUTF8(env, url));
-+}
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
 --- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
 +++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
-@@ -101,6 +101,14 @@ public class CachedFeatureFlags {
-                 ChromeFeatureList.isEnabled(ChromeFeatureList.CACHE_ACTIVITY_TASKID));
+@@ -224,4 +224,18 @@ public class CachedFeatureFlags {
+     static void setOverrideForTesting(String preferenceKey, String overrideValue) {
+         sValuesOverridden.setOverrideForTesting(preferenceKey, overrideValue);
      }
- 
-+     public static void setAdBlockFiltersURL(String url) {
-+         CachedFeatureFlagsJni.get().setAdBlockFiltersURL(url);
-+     }
 +
-+     public static String getAdBlockFiltersURL() {
-+         return CachedFeatureFlagsJni.get().getAdBlockFiltersURL();
-+     }
++    public static void setAdBlockFiltersURL(String url) {
++        CachedFeatureFlagsJni.get().setAdBlockFiltersURL(url);
++    }
 +
-     /**
-      * Caches flags that must take effect on startup but are set via native code.
-      */
-@@ -319,5 +327,7 @@ public class CachedFeatureFlags {
-     @NativeMethods
-     interface Natives {
-         boolean isNetworkServiceWarmUpEnabled();
++    public static String getAdBlockFiltersURL() {
++        return CachedFeatureFlagsJni.get().getAdBlockFiltersURL();
++    }
++
++    @NativeMethods
++    interface Natives {
 +        void setAdBlockFiltersURL(String url);
 +        String getAdBlockFiltersURL();
-     }
++    }
  }
 diff --git a/chrome/browser/net/system_network_context_manager.cc b/chrome/browser/net/system_network_context_manager.cc
 --- a/chrome/browser/net/system_network_context_manager.cc
 +++ b/chrome/browser/net/system_network_context_manager.cc
-@@ -567,6 +567,9 @@ SystemNetworkContextManager::~SystemNetworkContextManager() {
+@@ -588,6 +588,9 @@ SystemNetworkContextManager::~SystemNetworkContextManager() {
  void SystemNetworkContextManager::RegisterPrefs(PrefRegistrySimple* registry) {
    StubResolverConfigReader::RegisterPrefs(registry);
  
@@ -674,7 +644,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -2608,6 +2608,9 @@ inline constexpr char kAudioCaptureAllowed[] = "hardware.audio_capture_enabled";
+@@ -2610,6 +2610,9 @@ inline constexpr char kAudioCaptureAllowed[] = "hardware.audio_capture_enabled";
  inline constexpr char kAudioCaptureAllowedUrls[] =
      "hardware.audio_capture_allowed_urls";
  
@@ -1918,7 +1888,7 @@ diff --git a/components/subresource_filter/core/common/indexed_ruleset.cc b/comp
 diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
 --- a/third_party/blink/common/features.cc
 +++ b/third_party/blink/common/features.cc
-@@ -144,8 +144,8 @@ BASE_FEATURE(kAutofillSendUnidentifiedKeyAfterFill,
+@@ -152,8 +152,8 @@ BASE_FEATURE(kAutofillSendUnidentifiedKeyAfterFill,
  // Apply lazy-loading to ad frames which have embeds likely impacting Core Web
  // Vitals.
  BASE_FEATURE(kAutomaticLazyFrameLoadingToAds,
@@ -1929,7 +1899,7 @@ diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/fea
  
  // The timeout value that forces loading iframes that are lazy loaded by
  // LazyAds. After this timeout, the frame loading is triggered even when the
-@@ -165,8 +165,8 @@ const base::FeatureParam<int> kSkipFrameCountForLazyAds(
+@@ -173,8 +173,8 @@ const base::FeatureParam<int> kSkipFrameCountForLazyAds(
  // Apply lazy-loading to frames which have embeds likely impacting Core Web
  // Vitals.
  BASE_FEATURE(kAutomaticLazyFrameLoadingToEmbeds,
@@ -1940,7 +1910,7 @@ diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/fea
  
  // The timeout value that forces loading iframes that are lazy loaded by
  // LazyEmbeds. After this timeout, the frame loading is triggered even when the
-@@ -188,8 +188,8 @@ const base::FeatureParam<int> kSkipFrameCountForLazyEmbeds(
+@@ -196,8 +196,8 @@ const base::FeatureParam<int> kSkipFrameCountForLazyEmbeds(
  // to gather Blink.AutomaticLazyLoadFrame.LazyEmbedFrameCount UKM data even when
  // kAutomaticLazyFrameLoadingToEmbeds is disabled.
  BASE_FEATURE(kAutomaticLazyFrameLoadingToEmbedUrls,
