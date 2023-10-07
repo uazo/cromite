@@ -8,7 +8,11 @@ sudo apt install sed
 cd chromium/src
 
 echo -e ${RED} ------- remove v8 subrepo ${NC}
-rm -rf v8/.git
+rm -rf v8/.git 
+cp -r v8 v8bis
+git rm -rf v8 || true
+git submodule deinit -f v8 || true
+mv v8bis v8
 git add -f v8 >/dev/null
 git commit -m ":NOEXPORT: v8 repo" >/dev/null
 
