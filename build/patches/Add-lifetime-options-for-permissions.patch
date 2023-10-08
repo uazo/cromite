@@ -57,6 +57,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../one_time_permissions_tracker.h            |  5 +-
  .../one_time_permissions_tracker_factory.cc   |  2 +-
  .../permission_prompt_bubble_base_view.cc     |  2 +-
+ .../browser/content_autofill_driver.cc        | 64 ++++++++-------
+ .../content/browser/content_autofill_driver.h |  2 +-
+ .../autofill/core/browser/autofill_driver.h   |  2 +
  .../site_settings/PermissionInfo.java         | 14 +++-
  .../site_settings/SingleWebsiteSettings.java  | 10 +++
  .../WebsitePreferenceBridge.java              |  6 +-
@@ -80,14 +83,14 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../android/permissions_android_strings.grd   | 17 ++++
  .../geolocation_permission_context_android.cc | 35 ++++++--
  .../geolocation_permission_context_android.h  | 14 +++-
- .../permissions/permission_context_base.cc    | 54 +++++++++++--
- .../permissions/permission_context_base.h     | 25 +++++-
+ .../permissions/permission_context_base.cc    | 51 ++++++++++--
+ .../permissions/permission_context_base.h     | 23 +++++-
  components/permissions/permission_prompt.h    |  3 +-
- components/permissions/permission_request.cc  | 34 +++++++-
- components/permissions/permission_request.h   | 18 ++++-
+ components/permissions/permission_request.cc  | 30 ++++++-
+ components/permissions/permission_request.h   | 16 +++-
  .../permissions/permission_request_manager.cc | 45 +++++++----
  .../permissions/permission_request_manager.h  | 11 ++-
- 35 files changed, 520 insertions(+), 60 deletions(-)
+ 38 files changed, 546 insertions(+), 91 deletions(-)
 
 diff --git a/chrome/browser/permissions/last_tab_standing_tracker.cc b/chrome/browser/permissions/last_tab_standing_tracker.cc
 --- a/chrome/browser/permissions/last_tab_standing_tracker.cc
@@ -238,6 +241,207 @@ diff --git a/chrome/browser/ui/views/permissions/permission_prompt_bubble_base_v
        return;
      case PermissionDialogButton::kDeny:
        RecordDecision(permissions::PermissionAction::DENIED);
+diff --git a/components/autofill/content/browser/content_autofill_driver.cc b/components/autofill/content/browser/content_autofill_driver.cc
+--- a/components/autofill/content/browser/content_autofill_driver.cc
++++ b/components/autofill/content/browser/content_autofill_driver.cc
+@@ -426,8 +426,8 @@ void ContentAutofillDriver::FormsSeen(
+                         const std::vector<FormGlobalId>& removed_forms) {
+                        target->GetAutofillManager().OnFormsSeen(
+                            WithNewVersion(updated_forms), removed_forms);
+-                       if (target->secondary_autofill_manager_) {
+-                         target->secondary_autofill_manager_->OnFormsSeen(
++                       if (target->secondary_autofill_manager()) {
++                         target->secondary_autofill_manager()->OnFormsSeen(
+                            WithNewVersion(updated_forms), removed_forms);
+                        }
+                      });
+@@ -457,8 +457,8 @@ void ContentAutofillDriver::FormSubmitted(
+         }
+         target->GetAutofillManager().OnFormSubmitted(
+             WithNewVersion(form), known_success, submission_source);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnFormSubmitted(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnFormSubmitted(
+             WithNewVersion(form), known_success, submission_source);
+         }
+       });
+@@ -482,8 +482,8 @@ void ContentAutofillDriver::TextFieldDidChange(const FormData& raw_form,
+          base::TimeTicks timestamp) {
+         target->GetAutofillManager().OnTextFieldDidChange(
+             WithNewVersion(form), field, bounding_box, timestamp);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnTextFieldDidChange(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnTextFieldDidChange(
+             WithNewVersion(form), field, bounding_box, timestamp);
+         }
+       });
+@@ -505,8 +505,8 @@ void ContentAutofillDriver::TextFieldDidScroll(const FormData& raw_form,
+          const FormFieldData& field, const gfx::RectF& bounding_box) {
+         target->GetAutofillManager().OnTextFieldDidScroll(WithNewVersion(form),
+                                                           field, bounding_box);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnTextFieldDidScroll(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnTextFieldDidScroll(
+               WithNewVersion(form), field, bounding_box);
+         }
+       });
+@@ -529,8 +529,8 @@ void ContentAutofillDriver::SelectControlDidChange(
+          const FormFieldData& field, const gfx::RectF& bounding_box) {
+         target->GetAutofillManager().OnSelectControlDidChange(
+             WithNewVersion(form), field, bounding_box);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnSelectControlDidChange(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnSelectControlDidChange(
+             WithNewVersion(form), field, bounding_box);
+         }
+       });
+@@ -555,8 +555,8 @@ void ContentAutofillDriver::AskForValuesToFill(
+          AutofillSuggestionTriggerSource trigger_source) {
+         target->GetAutofillManager().OnAskForValuesToFill(
+             WithNewVersion(form), field, bounding_box, trigger_source);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnAskForValuesToFill(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnAskForValuesToFill(
+               WithNewVersion(form), field, bounding_box, trigger_source);
+         }
+       });
+@@ -570,8 +570,8 @@ void ContentAutofillDriver::HidePopup() {
+     DCHECK(!target->IsPrerendering())
+         << "We should never affect UI while prerendering";
+     target->GetAutofillManager().OnHidePopup();
+-    if (target->secondary_autofill_manager_)
+-      target->secondary_autofill_manager_->OnHidePopup();
++    if (target->secondary_autofill_manager())
++      target->secondary_autofill_manager()->OnHidePopup();
+   });
+ }
+ 
+@@ -583,8 +583,8 @@ void ContentAutofillDriver::FocusNoLongerOnForm(bool had_interacted_form) {
+       this, had_interacted_form,
+       [](autofill::AutofillDriver* target, bool had_interacted_form) {
+         target->GetAutofillManager().OnFocusNoLongerOnForm(had_interacted_form);
+-        if (target->secondary_autofill_manager_)
+-          target->secondary_autofill_manager_->OnFocusNoLongerOnForm(had_interacted_form);
++        if (target->secondary_autofill_manager())
++          target->secondary_autofill_manager()->OnFocusNoLongerOnForm(had_interacted_form);
+       });
+ }
+ 
+@@ -604,15 +604,15 @@ void ContentAutofillDriver::FocusOnFormField(const FormData& raw_form,
+          const FormFieldData& field, const gfx::RectF& bounding_box) {
+         target->GetAutofillManager().OnFocusOnFormField(WithNewVersion(form),
+                                                         field, bounding_box);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnFocusOnFormField(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnFocusOnFormField(
+             WithNewVersion(form), field, bounding_box);
+         }
+       },
+       [](autofill::AutofillDriver* target) {
+         target->GetAutofillManager().OnFocusNoLongerOnForm(true);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnFocusNoLongerOnForm(true);
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnFocusNoLongerOnForm(true);
+         }
+       });
+ }
+@@ -628,8 +628,8 @@ void ContentAutofillDriver::DidFillAutofillFormData(const FormData& raw_form,
+          base::TimeTicks timestamp) {
+         target->GetAutofillManager().OnDidFillAutofillFormData(
+             WithNewVersion(form), timestamp);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnDidFillAutofillFormData(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnDidFillAutofillFormData(
+             WithNewVersion(form), timestamp);
+         }
+       });
+@@ -641,8 +641,8 @@ void ContentAutofillDriver::DidEndTextFieldEditing() {
+   }
+   router().DidEndTextFieldEditing(this, [](autofill::AutofillDriver* target) {
+     target->GetAutofillManager().OnDidEndTextFieldEditing();
+-    if (target->secondary_autofill_manager_)
+-      target->secondary_autofill_manager_->OnDidEndTextFieldEditing();
++    if (target->secondary_autofill_manager())
++      target->secondary_autofill_manager()->OnDidEndTextFieldEditing();
+   });
+ }
+ 
+@@ -657,8 +657,8 @@ void ContentAutofillDriver::SelectOrSelectListFieldOptionsDidChange(
+         cast(target)
+             ->GetAutofillManager()
+             .OnSelectOrSelectListFieldOptionsDidChange(WithNewVersion(form));
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnSelectOrSelectMenuFieldOptionsDidChange(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnSelectOrSelectListFieldOptionsDidChange(
+             WithNewVersion(form));
+         }
+       });
+@@ -680,8 +680,8 @@ void ContentAutofillDriver::JavaScriptChangedAutofilledValue(
+          const FormFieldData& field, const std::u16string& old_value) {
+         target->GetAutofillManager().OnJavaScriptChangedAutofilledValue(
+             WithNewVersion(form), field, old_value);
+-        if (target->secondary_autofill_manager_) {
+-          target->secondary_autofill_manager_->OnJavaScriptChangedAutofilledValue(
++        if (target->secondary_autofill_manager()) {
++          target->secondary_autofill_manager()->OnJavaScriptChangedAutofilledValue(
+             WithNewVersion(form), field, old_value);
+         }
+       });
+@@ -696,8 +696,8 @@ void ContentAutofillDriver::OnContextMenuShownInField(
+          const FieldGlobalId& field_global_id) {
+         target->GetAutofillManager().OnContextMenuShownInField(form_global_id,
+                                                                field_global_id);
+-        if (target->secondary_autofill_manager_)
+-          target->secondary_autofill_manager_->OnContextMenuShownInField(form_global_id, field_global_id);
++        if (target->secondary_autofill_manager())
++          target->secondary_autofill_manager()->OnContextMenuShownInField(form_global_id, field_global_id);
+       });
+ }
+ 
+@@ -722,6 +722,10 @@ ContentAutofillDriver::GetAutofillAgent() {
+   return autofill_agent_;
+ }
+ 
++raw_ptr<AutofillManager> ContentAutofillDriver::secondary_autofill_manager() {
++  return secondary_autofill_manager_.get();
++}
++
+ void ContentAutofillDriver::SetFrameAndFormMetaData(
+     FormData& form,
+     FormFieldData* optional_field) const {
+diff --git a/components/autofill/content/browser/content_autofill_driver.h b/components/autofill/content/browser/content_autofill_driver.h
+--- a/components/autofill/content/browser/content_autofill_driver.h
++++ b/components/autofill/content/browser/content_autofill_driver.h
+@@ -131,7 +131,7 @@ class ContentAutofillDriver : public AutofillDriver,
+     autofill_manager_ = std::move(autofill_manager);
+     secondary_autofill_manager_ = std::move(secondary_autofill_manager);
+   }
+-  AutofillManager* secondary_autofill_manager() { return secondary_autofill_manager_.get(); }
++  raw_ptr<AutofillManager> secondary_autofill_manager() override;
+ 
+   content::RenderFrameHost* render_frame_host() { return &*render_frame_host_; }
+   const content::RenderFrameHost* render_frame_host() const {
+diff --git a/components/autofill/core/browser/autofill_driver.h b/components/autofill/core/browser/autofill_driver.h
+--- a/components/autofill/core/browser/autofill_driver.h
++++ b/components/autofill/core/browser/autofill_driver.h
+@@ -69,6 +69,8 @@ class AutofillDriver {
+   // Returns the AutofillManager owned by the AutofillDriver.
+   virtual AutofillManager& GetAutofillManager() = 0;
+ 
++  virtual raw_ptr<AutofillManager> secondary_autofill_manager() = 0;
++
+   // Returns whether the AutofillDriver instance is associated with an active
+   // frame in the MPArch sense.
+   virtual bool IsInActiveFrame() const = 0;
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/PermissionInfo.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/PermissionInfo.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/PermissionInfo.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/PermissionInfo.java
@@ -1001,27 +1205,24 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
 diff --git a/components/permissions/permission_context_base.cc b/components/permissions/permission_context_base.cc
 --- a/components/permissions/permission_context_base.cc
 +++ b/components/permissions/permission_context_base.cc
-@@ -257,6 +257,19 @@ PermissionContextBase::CreatePermissionRequest(
+@@ -257,6 +257,16 @@ PermissionContextBase::CreatePermissionRequest(
        std::move(delete_callback));
  }
  
 +std::unique_ptr<PermissionRequest> PermissionContextBase::CreatePermissionRequest(
-+    const GURL& request_origin,
-+    ContentSettingsType content_settings_type,
-+    bool has_gesture,
 +    content::WebContents* web_contents,
++    PermissionRequestData request_data,
 +    PermissionRequest::PermissionDecidedCallbackWithLifetime permission_decided_callback,
 +    base::OnceClosure delete_callback) const {
 +  return std::make_unique<PermissionRequest>(
-+      request_origin, ContentSettingsTypeToRequestType(content_settings_type),
-+      has_gesture, std::move(permission_decided_callback),
++      std::move(request_data), std::move(permission_decided_callback),
 +      std::move(delete_callback));
 +}
 +
  content::PermissionResult PermissionContextBase::GetPermissionStatus(
      content::RenderFrameHost* render_frame_host,
      const GURL& requesting_origin,
-@@ -466,7 +479,8 @@ void PermissionContextBase::PermissionDecided(const PermissionRequestID& id,
+@@ -466,7 +476,8 @@ void PermissionContextBase::PermissionDecided(const PermissionRequestID& id,
                                                const GURL& embedding_origin,
                                                ContentSetting content_setting,
                                                bool is_one_time,
@@ -1031,7 +1232,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    DCHECK(content_setting == CONTENT_SETTING_ALLOW ||
           content_setting == CONTENT_SETTING_BLOCK ||
           content_setting == CONTENT_SETTING_DEFAULT);
-@@ -481,13 +495,14 @@ void PermissionContextBase::PermissionDecided(const PermissionRequestID& id,
+@@ -481,13 +492,14 @@ void PermissionContextBase::PermissionDecided(const PermissionRequestID& id,
    // missing if a permission prompt was preignored and we already notified an
    // origin about it.
    if (request->second.second) {
@@ -1050,7 +1251,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    }
  }
  
-@@ -539,11 +554,27 @@ void PermissionContextBase::NotifyPermissionSet(
+@@ -539,11 +551,27 @@ void PermissionContextBase::NotifyPermissionSet(
      ContentSetting content_setting,
      bool is_one_time,
      bool is_final_decision) {
@@ -1079,7 +1280,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    }
  
    if (is_final_decision) {
-@@ -573,6 +604,15 @@ void PermissionContextBase::UpdateContentSetting(const GURL& requesting_origin,
+@@ -573,6 +601,15 @@ void PermissionContextBase::UpdateContentSetting(const GURL& requesting_origin,
                                                   const GURL& embedding_origin,
                                                   ContentSetting content_setting,
                                                   bool is_one_time) {
@@ -1095,7 +1296,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    DCHECK_EQ(requesting_origin, requesting_origin.DeprecatedGetOriginAsURL());
    DCHECK_EQ(embedding_origin, embedding_origin.DeprecatedGetOriginAsURL());
    DCHECK(content_setting == CONTENT_SETTING_ALLOW ||
-@@ -582,6 +622,8 @@ void PermissionContextBase::UpdateContentSetting(const GURL& requesting_origin,
+@@ -582,6 +619,8 @@ void PermissionContextBase::UpdateContentSetting(const GURL& requesting_origin,
    constraints.set_session_model(is_one_time
                                      ? content_settings::SessionModel::OneTime
                                      : content_settings::SessionModel::Durable);
@@ -1135,22 +1336,20 @@ diff --git a/components/permissions/permission_context_base.h b/components/permi
    virtual void UpdateContentSetting(const GURL& requesting_origin,
                                      const GURL& embedding_origin,
                                      ContentSetting content_setting,
-@@ -194,6 +208,14 @@ class PermissionContextBase : public content_settings::Observer {
+@@ -194,6 +208,12 @@ class PermissionContextBase : public content_settings::Observer {
        PermissionRequest::PermissionDecidedCallback permission_decided_callback,
        base::OnceClosure delete_callback) const;
  
 +  virtual std::unique_ptr<PermissionRequest> CreatePermissionRequest(
-+      const GURL& request_origin,
-+      ContentSettingsType content_settings_type,
-+      bool has_gesture,
 +      content::WebContents* web_contents,
++      PermissionRequestData request_data,
 +      PermissionRequest::PermissionDecidedCallbackWithLifetime permission_decided_callback,
 +      base::OnceClosure delete_callback) const;
 +
    base::ObserverList<permissions::Observer> permission_observers_;
  
    // Set by subclasses to inform the base class that they will handle adding
-@@ -216,7 +238,8 @@ class PermissionContextBase : public content_settings::Observer {
+@@ -216,7 +236,8 @@ class PermissionContextBase : public content_settings::Observer {
                           const GURL& embedding_origin,
                           ContentSetting content_setting,
                           bool is_one_time,
@@ -1177,26 +1376,22 @@ diff --git a/components/permissions/permission_prompt.h b/components/permissions
 diff --git a/components/permissions/permission_request.cc b/components/permissions/permission_request.cc
 --- a/components/permissions/permission_request.cc
 +++ b/components/permissions/permission_request.cc
-@@ -35,6 +35,18 @@ PermissionRequest::PermissionRequest(
+@@ -35,6 +35,14 @@ PermissionRequest::PermissionRequest(
        permission_decided_callback_(std::move(permission_decided_callback)),
        delete_callback_(std::move(delete_callback)) {}
  
 +PermissionRequest::PermissionRequest(
-+    const GURL& requesting_origin,
-+    RequestType request_type,
-+    bool has_gesture,
++    PermissionRequestData request_data,
 +    PermissionDecidedCallbackWithLifetime permission_decided_callback,
 +    base::OnceClosure delete_callback)
-+    : requesting_origin_(requesting_origin),
-+      request_type_(request_type),
-+      has_gesture_(has_gesture),
++    : data_(std::move(request_data)),
 +      permission_decided_callback_withlifetime_(std::move(permission_decided_callback)),
 +      delete_callback_(std::move(delete_callback)) {}
 +
  PermissionRequest::~PermissionRequest() {
    DCHECK(delete_callback_.is_null());
  }
-@@ -274,19 +286,37 @@ bool PermissionRequest::ShouldUseTwoOriginPrompt() const {
+@@ -274,19 +282,37 @@ bool PermissionRequest::ShouldUseTwoOriginPrompt() const {
               permissions::features::kPermissionStorageAccessAPI);
  }
  
@@ -1251,20 +1446,18 @@ diff --git a/components/permissions/permission_request.h b/components/permission
    // `permission_decided_callback` is called when the permission request is
    // resolved by the user (see comment on PermissionDecidedCallback above).
    // `delete_callback` is called when the permission request is no longer needed
-@@ -63,6 +68,12 @@ class PermissionRequest {
+@@ -63,6 +68,10 @@ class PermissionRequest {
                      PermissionDecidedCallback permission_decided_callback,
                      base::OnceClosure delete_callback);
  
-+  PermissionRequest(const GURL& requesting_origin,
-+                    RequestType request_type,
-+                    bool has_gesture,
++  PermissionRequest(PermissionRequestData request_data,
 +                    PermissionDecidedCallbackWithLifetime permission_decided_callback,
 +                    base::OnceClosure delete_callback);
 +
    PermissionRequest(const PermissionRequest&) = delete;
    PermissionRequest& operator=(const PermissionRequest&) = delete;
  
-@@ -128,10 +139,10 @@ class PermissionRequest {
+@@ -128,10 +137,10 @@ class PermissionRequest {
    // If |is_one_time| is true the permission will last until all tabs of
    // |origin| are closed or navigated away from, and then the permission will
    // automatically expire after 1 day.
@@ -1277,7 +1470,7 @@ diff --git a/components/permissions/permission_request.h b/components/permission
  
    // Called when the user has cancelled the permission request. This
    // corresponds to a denial, but is segregated in case the context needs to
-@@ -170,6 +181,9 @@ class PermissionRequest {
+@@ -170,6 +179,9 @@ class PermissionRequest {
    // Called once a decision is made about the permission.
    PermissionDecidedCallback permission_decided_callback_;
  
