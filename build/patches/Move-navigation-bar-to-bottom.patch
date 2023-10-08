@@ -9,6 +9,7 @@ The bottom bar will also be colored as the navigation bar to make the interface
 more pleasant and fixes upstream bug 1285311.
 Support for tablet mode is also included.
 
+Need: bromite-build-utils.patch
 Original License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
@@ -25,7 +26,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../tab_management/TabListCoordinator.java    | 81 +++++++++++++++++++
  .../tab_management/TabListRecyclerView.java   | 19 ++++-
  .../tab_management/TabSwitcherMediator.java   | 16 ++++
- .../ChromeAccessibilitySettingsDelegate.java  | 52 ++++++++++++
+ .../ChromeAccessibilitySettingsDelegate.java  | 50 ++++++++++++
  .../chrome/browser/app/ChromeActivity.java    | 13 +++
  .../compositor/CompositorViewHolder.java      |  9 +++
  .../layouts/LayoutManagerChrome.java          | 18 ++++-
@@ -56,7 +57,6 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/flag_descriptions.cc           |  4 +
  chrome/browser/flag_descriptions.h            |  3 +
  .../flags/android/chrome_feature_list.cc      |  2 +
- .../browser/flags/CachedFeatureFlags.java     | 18 +++++
  .../chrome/browser/flags/CachedFlag.java      |  6 ++
  .../browser/flags/ChromeFeatureList.java      |  5 ++
  chrome/browser/prefs/browser_prefs.cc         |  2 +-
@@ -64,11 +64,11 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../ui/appmenu/AppMenuHandlerImpl.java        | 11 +++
  .../omnibox/LocationBarCoordinator.java       |  6 +-
  ...mniboxSuggestionsDropdownEmbedderImpl.java | 14 +++-
- .../browser/omnibox/UrlBarCoordinator.java    | 10 +++
+ .../browser/omnibox/UrlBarCoordinator.java    |  9 +++
  .../suggestions/AutocompleteCoordinator.java  | 16 +++-
  .../suggestions/AutocompleteMediator.java     |  7 +-
  .../DropdownItemViewInfoListManager.java      | 15 +++-
- .../OmniboxSuggestionsDropdown.java           | 31 ++++++-
+ .../OmniboxSuggestionsDropdown.java           | 39 ++++++++-
  .../OmniboxSuggestionsDropdownEmbedder.java   |  9 +++
  .../strings/android_chrome_strings.grd        |  6 ++
  chrome/browser/ui/android/toolbar/BUILD.gn    |  1 +
@@ -87,7 +87,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../accessibility/AccessibilitySettings.java  | 16 ++++
  .../AccessibilitySettingsDelegate.java        |  6 ++
  .../render_widget_host_view_android.cc        |  3 +
- 75 files changed, 884 insertions(+), 63 deletions(-)
+ 74 files changed, 871 insertions(+), 63 deletions(-)
 
 diff --git a/cc/base/features.cc b/cc/base/features.cc
 --- a/cc/base/features.cc
@@ -633,13 +633,11 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
-@@ -15,6 +15,14 @@ import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
- import org.chromium.components.user_prefs.UserPrefs;
- import org.chromium.content_public.browser.BrowserContextHandle;
+@@ -21,6 +21,12 @@ import org.chromium.chrome.browser.flags.CromiteNativeUtils;
+ import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+ import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
  
 +import android.app.Activity;
-+import org.chromium.chrome.browser.flags.ChromeFeatureList;
-+import org.chromium.chrome.browser.flags.CachedFeatureFlags;
 +import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
 +import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
 +import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
@@ -648,7 +646,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/s
  /** The Chrome implementation of AccessibilitySettingsDelegate. */
  public class ChromeAccessibilitySettingsDelegate implements AccessibilitySettingsDelegate {
      private static class ReaderForAccessibilityDelegate implements BooleanPreferenceDelegate {
-@@ -35,6 +43,12 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
+@@ -41,6 +47,12 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
          }
      }
  
@@ -661,7 +659,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/s
      private final Profile mProfile;
  
      /**
-@@ -74,6 +88,44 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
+@@ -80,6 +92,44 @@ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySetting
          return new ForceTabletUIDelegate();
      }
  
@@ -673,7 +671,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/s
 +
 +        @Override
 +        public void setEnabled(boolean value) {
-+            CachedFeatureFlags.setFlagEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM,
++            CromiteNativeUtils.setFlagEnabled(ChromeFeatureList.MOVE_TOP_TOOLBAR_TO_BOTTOM,
 +                    "move-top-toolbar-to-bottom", value);
 +        }
 +    }
@@ -1754,41 +1752,6 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
      &kNotificationPermissionVariant,
      &kNotificationPermissionBottomSheet,
      &kOfflineIndicatorV2,
-diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
---- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
-+++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
-@@ -188,6 +188,23 @@ public class CachedFeatureFlags {
-         return value;
-     }
- 
-+    /**
-+     * Allows the modification of the flag value on the java side.
-+     * Currently only the feature flag with on / off values is managed.
-+     *
-+     * @param featureName the feature name from ChromeFeatureList.
-+     * @param flagName the flag name name from about_flags.cc.
-+     */
-+    public static void setFlagEnabled(String featureName, String flagName, Boolean newValue) {
-+        CachedFeatureFlagsJni.get().setEnabled(flagName, newValue);
-+
-+        CachedFlag cachedFlag = ChromeFeatureList.sAllCachedFlags.get(featureName);
-+        String preferenceName = cachedFlag.getSharedPreferenceKey();
-+
-+        SharedPreferencesManager.getInstance().writeBoolean(preferenceName, newValue);
-+        cachedFlag.setValueReturnedOverride(newValue);
-+    }
-+
-     @AnyThread
-     static double getConsistentDoubleValue(String preferenceName, double defaultValue) {
-         CachedFlagsSafeMode.getInstance().onFlagChecked();
-@@ -235,6 +252,7 @@ public class CachedFeatureFlags {
- 
-     @NativeMethods
-     interface Natives {
-+        void setEnabled(String featureName, boolean newValue);
-         void setAdBlockFiltersURL(String url);
-         String getAdBlockFiltersURL();
-     }
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFlag.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFlag.java
 --- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFlag.java
 +++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFlag.java
@@ -2027,26 +1990,25 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarCoordinator.java
-@@ -25,6 +25,9 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
+@@ -25,6 +25,10 @@ import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
  import java.lang.annotation.Retention;
  import java.lang.annotation.RetentionPolicy;
  
 +import org.chromium.chrome.browser.flags.ChromeFeatureList;
 +import org.chromium.chrome.browser.flags.CachedFeatureFlags;
++import android.view.WindowManager;
 +
  /**
   * Coordinates the interactions with the UrlBar text component.
   */
-@@ -234,6 +237,13 @@ public class UrlBarCoordinator implements UrlBarEditingTextStateProvider, UrlFoc
+@@ -234,6 +238,11 @@ public class UrlBarCoordinator implements UrlBarEditingTextStateProvider, UrlFoc
          // to show or hide keyboard anyway. This may happen when we schedule keyboard hide, and
          // receive a second request to hide the keyboard instantly.
          if (showKeyboard) {
 +            if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +                // probably due to an android bug, fix the size rather than pan the view.
 +                // with the pan the bar may not always follow the focus if not at the first input by the user
-+                setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE, /* delay */ false);
-+            } else {
-+                setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN, /* delay */ false);
++                mWindowDelegate.setWindowSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 +            }
              mKeyboardVisibilityDelegate.showKeyboard(mUrlBar);
          } else {
@@ -2179,17 +2141,18 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdown.java
-@@ -35,6 +35,9 @@ import org.chromium.chrome.browser.util.KeyNavigationUtil;
+@@ -35,6 +35,10 @@ import org.chromium.chrome.browser.util.KeyNavigationUtil;
  import org.chromium.components.browser_ui.styles.ChromeColors;
  import org.chromium.ui.base.ViewUtils;
  
++import android.graphics.Rect;
 +import org.chromium.chrome.browser.flags.ChromeFeatureList;
 +import org.chromium.chrome.browser.flags.CachedFeatureFlags;
 +
  /** A widget for showing a list of omnibox suggestions. */
  public class OmniboxSuggestionsDropdown extends RecyclerView {
      /**
-@@ -188,7 +191,8 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -188,7 +192,8 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
       * Constructs a new list designed for containing omnibox suggestions.
       * @param context Context used for contained views.
       */
@@ -2199,7 +2162,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          super(context, null, android.R.attr.dropDownListViewStyle);
          setFocusable(true);
          setFocusableInTouchMode(true);
-@@ -199,13 +203,25 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -199,13 +204,25 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
          setItemAnimator(null);
  
          mLayoutScrollListener = new SuggestionLayoutScrollListener(context);
@@ -2226,7 +2189,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          ViewCompat.setPaddingRelative(this, 0, 0, 0, paddingBottom);
  
          mStandardBgColor = shouldShowModernizeVisualUpdate
-@@ -340,8 +356,15 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+@@ -340,8 +357,16 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
          try (TraceEvent tracing = TraceEvent.scoped("OmniboxSuggestionsList.Measure");
                  TimingMetric metric = OmniboxMetrics.recordSuggestionListMeasureTime()) {
              OmniboxAlignment omniboxAlignment = mEmbedder.getCurrentAlignment();
@@ -2237,13 +2200,27 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 +                top = 0;
 +            }
 +            maybeUpdateLayoutParams(top);
-+            boolean useAlignmentSpecifiedHeight = false;
++            boolean useAlignmentSpecifiedHeight =
++                !ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled();
 +            int availableViewportHeight = useAlignmentSpecifiedHeight
 +                    ? omniboxAlignment.height
 +                    : calculateAvailableViewportHeight() - top;
              int desiredWidth = omniboxAlignment.width;
              adjustHorizontalPosition();
              notifyObserversIfViewportHeightChanged(availableViewportHeight);
+@@ -353,6 +378,12 @@ public class OmniboxSuggestionsDropdown extends RecyclerView {
+         }
+     }
+ 
++    private int calculateAvailableViewportHeight() {
++        Rect mTempRect = new Rect();
++        mEmbedder.getWindowDelegate().getWindowVisibleDisplayFrame(mTempRect);
++        return mTempRect.height();
++    }
++
+     private void maybeUpdateLayoutParams(int topMargin) {
+         // Update the layout params to ensure the parent correctly positions the suggestions
+         // under the anchor view.
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java

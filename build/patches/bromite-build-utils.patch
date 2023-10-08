@@ -3,23 +3,31 @@ Date: Fri, 9 Jun 2023 15:11:46 +0000
 Subject: bromite build utils
 
 ---
- build/android/gyp/java_cpp_enum.py           | 36 ++++++--
- build/android/gyp/util/build_utils.py        | 25 +++++-
- build/bromite/bromite_utils.gni              | 69 ++++++++++++++
- build/bromite/gyp/cpp_bromite_include.py     | 35 ++++++++
- build/bromite/gyp/cpp_bromite_include.pydeps |  9 ++
- build/bromite/gyp/java_bromite_impl.py       | 94 ++++++++++++++++++++
- build/bromite/gyp/java_bromite_impl.pydeps   |  9 ++
- build/config/BUILDCONFIG.gn                  |  1 +
- build/config/android/rules.gni               |  6 +-
- tools/grit/grit/grd_reader.py                | 27 ++++--
- tools/grit/preprocess_if_expr.py             | 32 ++++++-
- 11 files changed, 329 insertions(+), 14 deletions(-)
+ build/android/gyp/java_cpp_enum.py            | 36 +++++--
+ build/android/gyp/util/build_utils.py         | 25 ++++-
+ build/bromite/bromite_utils.gni               | 69 ++++++++++++++
+ build/bromite/gyp/cpp_bromite_include.py      | 35 +++++++
+ build/bromite/gyp/cpp_bromite_include.pydeps  |  9 ++
+ build/bromite/gyp/java_bromite_impl.py        | 94 +++++++++++++++++++
+ build/bromite/gyp/java_bromite_impl.pydeps    |  9 ++
+ build/config/BUILDCONFIG.gn                   |  1 +
+ build/config/android/rules.gni                |  6 +-
+ .../ChromeAccessibilitySettingsDelegate.java  |  6 ++
+ chrome/browser/flags/BUILD.gn                 | 10 +-
+ .../flags/android/cromite_native_utils.cc     | 27 ++++++
+ .../flags/android/cromite_native_utils.h      | 14 +++
+ .../browser/flags/CromiteNativeUtils.java     | 32 +++++++
+ tools/grit/grit/grd_reader.py                 | 27 +++++-
+ tools/grit/preprocess_if_expr.py              | 32 ++++++-
+ 16 files changed, 416 insertions(+), 16 deletions(-)
  create mode 100644 build/bromite/bromite_utils.gni
  create mode 100644 build/bromite/gyp/cpp_bromite_include.py
  create mode 100644 build/bromite/gyp/cpp_bromite_include.pydeps
  create mode 100644 build/bromite/gyp/java_bromite_impl.py
  create mode 100644 build/bromite/gyp/java_bromite_impl.pydeps
+ create mode 100755 chrome/browser/flags/android/cromite_native_utils.cc
+ create mode 100755 chrome/browser/flags/android/cromite_native_utils.h
+ create mode 100755 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java
 
 diff --git a/build/android/gyp/java_cpp_enum.py b/build/android/gyp/java_cpp_enum.py
 --- a/build/android/gyp/java_cpp_enum.py
@@ -425,6 +433,144 @@ diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
        outputs = [ _srcjar_path ]
      }
    }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
+@@ -15,6 +15,12 @@ import org.chromium.components.browser_ui.accessibility.PageZoomUtils;
+ import org.chromium.components.user_prefs.UserPrefs;
+ import org.chromium.content_public.browser.BrowserContextHandle;
+ 
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.flags.CachedFeatureFlags;
++import org.chromium.chrome.browser.flags.CromiteNativeUtils;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
++
+ /** The Chrome implementation of AccessibilitySettingsDelegate. */
+ public class ChromeAccessibilitySettingsDelegate implements AccessibilitySettingsDelegate {
+     private static class ReaderForAccessibilityDelegate implements BooleanPreferenceDelegate {
+diff --git a/chrome/browser/flags/BUILD.gn b/chrome/browser/flags/BUILD.gn
+--- a/chrome/browser/flags/BUILD.gn
++++ b/chrome/browser/flags/BUILD.gn
+@@ -5,7 +5,8 @@
+ import("//build/config/android/rules.gni")
+ 
+ android_library("java") {
+-  sources = [
++  sources = [ "android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java" ]
++  sources += [
+     "android/java/src/org/chromium/chrome/browser/flags/AllCachedFieldTrialParameters.java",
+     "android/java/src/org/chromium/chrome/browser/flags/BooleanCachedFieldTrialParameter.java",
+     "android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java",
+@@ -41,7 +42,8 @@ android_library("java") {
+ }
+ 
+ generate_jni("jni_headers") {
+-  sources = [
++  sources = [ "android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java" ]
++  sources += [
+     "android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureMap.java",
+     "android/java/src/org/chromium/chrome/browser/flags/ChromeSessionState.java",
+   ]
+@@ -49,6 +51,10 @@ generate_jni("jni_headers") {
+ 
+ static_library("flags_android") {
+   sources = [
++    "android/cromite_native_utils.cc",
++    "android/cromite_native_utils.h",
++  ]
++  sources += [
+     "android/chrome_session_state.cc",
+     "android/chrome_session_state.h",
+   ]
+diff --git a/chrome/browser/flags/android/cromite_native_utils.cc b/chrome/browser/flags/android/cromite_native_utils.cc
+new file mode 100755
+--- /dev/null
++++ b/chrome/browser/flags/android/cromite_native_utils.cc
+@@ -0,0 +1,27 @@
++#include "chrome/browser/flags/android/cromite_native_utils.h"
++
++#include "chrome/browser/browser_process.h"
++#include "chrome/browser/flags/jni_headers/CromiteNativeUtils_jni.h"
++#include "components/flags_ui/pref_service_flags_storage.h"
++
++#include "base/android/jni_string.h"
++
++using base::android::JavaParamRef;
++
++static void JNI_CromiteNativeUtils_SetEnabled(JNIEnv* env,
++    const JavaParamRef<jstring>& featureName, jboolean isEnabled) {
++  flags_ui::PrefServiceFlagsStorage flags_storage(
++      g_browser_process->local_state());
++  std::set<std::string> entries = flags_storage.GetFlags();
++
++  auto internal_name = base::android::ConvertJavaStringToUTF8(env, featureName);
++  entries.erase(internal_name);
++  entries.erase(internal_name + "@1"); // enabled
++  entries.erase(internal_name + "@2"); // disabled
++
++  if (isEnabled)
++    entries.insert(internal_name + "@1");
++
++  flags_storage.SetFlags(entries);
++  flags_storage.CommitPendingWrites();
++}
+diff --git a/chrome/browser/flags/android/cromite_native_utils.h b/chrome/browser/flags/android/cromite_native_utils.h
+new file mode 100755
+--- /dev/null
++++ b/chrome/browser/flags/android/cromite_native_utils.h
+@@ -0,0 +1,14 @@
++#ifndef CHROME_BROWSER_FLAGS_ANDROID_CROMITE_NATIVE_UTILS_H_
++#define CHROME_BROWSER_FLAGS_ANDROID_CROMITE_NATIVE_UTILS_H_
++
++#include <jni.h>
++
++#include "base/feature_list.h"
++
++namespace chrome {
++namespace android {
++
++}  // namespace android
++}  // namespace chrome
++
++#endif  // CHROME_BROWSER_FLAGS_ANDROID_CROMITE_NATIVE_UTILS_H_
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java
+new file mode 100755
+--- /dev/null
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java
+@@ -0,0 +1,32 @@
++package org.chromium.chrome.browser.flags;
++
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
++import org.chromium.chrome.browser.preferences.SharedPreferencesManager;
++
++import org.chromium.base.annotations.CalledByNative;
++import org.chromium.base.annotations.NativeMethods;
++
++public class CromiteNativeUtils {
++    /**
++     * Allows the modification of the flag value on the java side.
++     * Currently only the feature flag with on / off values is managed.
++     *
++     * @param featureName the feature name from ChromeFeatureList.
++     * @param flagName the flag name name from about_flags.cc.
++     */
++    public static void setFlagEnabled(String featureName, String flagName, Boolean newValue) {
++        CromiteNativeUtilsJni.get().setEnabled(flagName, newValue);
++
++        CachedFlag cachedFlag = ChromeFeatureList.sAllCachedFlags.get(featureName);
++        String preferenceName = cachedFlag.getSharedPreferenceKey();
++
++        SharedPreferencesManager.getInstance().writeBoolean(preferenceName, newValue);
++        cachedFlag.setValueReturnedOverride(newValue);
++    }
++
++    @NativeMethods
++    interface Natives {
++        void setEnabled(String featureName, boolean newValue);
++    }
++}
 diff --git a/tools/grit/grit/grd_reader.py b/tools/grit/grit/grd_reader.py
 --- a/tools/grit/grit/grd_reader.py
 +++ b/tools/grit/grit/grd_reader.py
