@@ -29,7 +29,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/browser_process_impl.cc        |  20 ++
  chrome/browser/browser_process_impl.h         |   2 +
  chrome/browser/chrome_browser_main.cc         |   3 +
- .../browser/flags/CachedFeatureFlags.java     |  14 +
+ chrome/browser/flags/BUILD.gn                 |   3 +
+ .../flags/android/adblock_native_gateway.cc   |  21 ++
+ .../browser/flags/AdBlockNativeGateway.java   |  20 ++
  .../net/system_network_context_manager.cc     |   3 +
  .../sessions/session_restore_android.cc       |   6 +-
  .../strings/android_chrome_strings.grd        |  14 +
@@ -50,11 +52,13 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/subresource_filter_features.cc    | 116 +-------
  .../core/common/indexed_ruleset.cc            |   5 +-
  third_party/blink/common/features.cc          |  12 +-
- 38 files changed, 1181 insertions(+), 135 deletions(-)
+ 40 files changed, 1211 insertions(+), 135 deletions(-)
  create mode 100644 chrome/android/java/res/layout/adblock_editor.xml
  create mode 100644 chrome/android/java/res/xml/adblock_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AdBlockEditor.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AdBlockPreferences.java
+ create mode 100755 chrome/browser/flags/android/adblock_native_gateway.cc
+ create mode 100755 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/AdBlockNativeGateway.java
  create mode 100644 components/component_updater/adblock_updater_service.cc
  create mode 100644 components/component_updater/adblock_updater_service.h
  create mode 100644 components/component_updater/download_filters_task.cc
@@ -281,7 +285,7 @@ new file mode 100644
 +import android.widget.EditText;
 +
 +import org.chromium.components.browser_ui.settings.SettingsUtils;
-+import org.chromium.chrome.browser.flags.CachedFeatureFlags;
++import org.chromium.chrome.browser.flags.AdBlockNativeGateway;
 +import org.chromium.chrome.R;
 +import org.chromium.components.url_formatter.UrlFormatter;
 +
@@ -304,7 +308,7 @@ new file mode 100644
 +        scrollView.getViewTreeObserver().addOnScrollChangedListener(
 +                SettingsUtils.getShowShadowOnScrollListener(v, v.findViewById(R.id.shadow)));
 +        mAdBlockFiltersUrlEdit = (EditText) v.findViewById(R.id.adblock_url_edit);
-+        mAdBlockFiltersUrlEdit.setText(CachedFeatureFlags.getAdBlockFiltersURL());
++        mAdBlockFiltersUrlEdit.setText(AdBlockNativeGateway.getAdBlockFiltersURL());
 +        mAdBlockFiltersUrlEdit.addTextChangedListener(this);
 +        mAdBlockFiltersUrlEdit.requestFocus();
 +
@@ -331,7 +335,7 @@ new file mode 100644
 +        mResetButton.setOnClickListener(new View.OnClickListener() {
 +            @Override
 +            public void onClick(View v) {
-+                mAdBlockFiltersUrlEdit.setText(CachedFeatureFlags.getAdBlockFiltersURL());
++                mAdBlockFiltersUrlEdit.setText(AdBlockNativeGateway.getAdBlockFiltersURL());
 +            }
 +        });
 +
@@ -340,7 +344,7 @@ new file mode 100644
 +        mSaveButton.setOnClickListener(new View.OnClickListener() {
 +            @Override
 +            public void onClick(View v) {
-+                CachedFeatureFlags.setAdBlockFiltersURL(
++                AdBlockNativeGateway.setAdBlockFiltersURL(
 +                        UrlFormatter.fixupUrl(mAdBlockFiltersUrlEdit.getText().toString()).getSpec());
 +                getActivity().finish();
 +            }
@@ -376,7 +380,7 @@ new file mode 100644
 +import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
 +import org.chromium.components.content_settings.ContentSettingsType;
 +import org.chromium.components.browser_ui.settings.SettingsUtils;
-+import org.chromium.chrome.browser.flags.CachedFeatureFlags;
++import org.chromium.chrome.browser.flags.AdBlockNativeGateway;
 +import androidx.annotation.VisibleForTesting;
 +import org.chromium.chrome.R;
 +
@@ -412,7 +416,7 @@ new file mode 100644
 +    }
 +
 +    private void updateCurrentAdBlockUrl() {
-+        mAdBlockEdit.setSummary(CachedFeatureFlags.getAdBlockFiltersURL());
++        mAdBlockEdit.setSummary(AdBlockNativeGateway.getAdBlockFiltersURL());
 +    }
 +
 +    @Override
@@ -566,20 +570,76 @@ diff --git a/chrome/browser/chrome_browser_main.cc b/chrome/browser/chrome_brows
  #else
  #if BUILDFLAG(IS_CHROMEOS_LACROS)
    // Lacros has a special "primary" profile that is tied to the active ChromeOS
-diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
---- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
-+++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CachedFeatureFlags.java
-@@ -224,4 +224,18 @@ public class CachedFeatureFlags {
-     static void setOverrideForTesting(String preferenceKey, String overrideValue) {
-         sValuesOverridden.setOverrideForTesting(preferenceKey, overrideValue);
-     }
+diff --git a/chrome/browser/flags/BUILD.gn b/chrome/browser/flags/BUILD.gn
+--- a/chrome/browser/flags/BUILD.gn
++++ b/chrome/browser/flags/BUILD.gn
+@@ -23,6 +23,7 @@ android_library("java") {
+     "android/java/src/org/chromium/chrome/browser/flags/StringCachedFieldTrialParameter.java",
+     "android/java/src/org/chromium/chrome/browser/flags/ValuesOverridden.java",
+     "android/java/src/org/chromium/chrome/browser/flags/ValuesReturned.java",
++    "android/java/src/org/chromium/chrome/browser/flags/AdBlockNativeGateway.java",
+   ]
+   deps = [
+     "//base:base_java",
+@@ -44,6 +45,7 @@ android_library("java") {
+ generate_jni("jni_headers") {
+   sources = [ "android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java" ]
+   sources += [
++    "android/java/src/org/chromium/chrome/browser/flags/AdBlockNativeGateway.java",
+     "android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureMap.java",
+     "android/java/src/org/chromium/chrome/browser/flags/ChromeSessionState.java",
+   ]
+@@ -58,6 +60,7 @@ static_library("flags_android") {
+     "android/chrome_session_state.cc",
+     "android/chrome_session_state.h",
+   ]
++  sources += [ "android/adblock_native_gateway.cc" ]
+   deps = [
+     ":jni_headers",
+     "//base",
+diff --git a/chrome/browser/flags/android/adblock_native_gateway.cc b/chrome/browser/flags/android/adblock_native_gateway.cc
+new file mode 100755
+--- /dev/null
++++ b/chrome/browser/flags/android/adblock_native_gateway.cc
+@@ -0,0 +1,21 @@
++#include "chrome/browser/flags/jni_headers/AdBlockNativeGateway_jni.h"
 +
++#include "base/android/jni_string.h"
++#include "chrome/browser/browser_process.h"
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_service.h"
++
++using base::android::ScopedJavaLocalRef;
++using base::android::JavaParamRef;
++
++static ScopedJavaLocalRef<jstring> JNI_AdBlockNativeGateway_GetAdBlockFiltersURL(
++    JNIEnv* env) {
++  return base::android::ConvertUTF8ToJavaString(env,
++      g_browser_process->local_state()->GetString(prefs::kAdBlockFiltersURL));
++}
++
++static void JNI_AdBlockNativeGateway_SetAdBlockFiltersURL(
++    JNIEnv* env, const JavaParamRef<jstring>& url) {
++  g_browser_process->local_state()->SetString(prefs::kAdBlockFiltersURL,
++      base::android::ConvertJavaStringToUTF8(env, url));
++}
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/AdBlockNativeGateway.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/AdBlockNativeGateway.java
+new file mode 100755
+--- /dev/null
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/AdBlockNativeGateway.java
+@@ -0,0 +1,20 @@
++package org.chromium.chrome.browser.flags;
++
++import org.chromium.base.annotations.CalledByNative;
++import org.chromium.base.annotations.NativeMethods;
++
++public class AdBlockNativeGateway {
 +    public static void setAdBlockFiltersURL(String url) {
-+        CachedFeatureFlagsJni.get().setAdBlockFiltersURL(url);
++        AdBlockNativeGatewayJni.get().setAdBlockFiltersURL(url);
 +    }
 +
 +    public static String getAdBlockFiltersURL() {
-+        return CachedFeatureFlagsJni.get().getAdBlockFiltersURL();
++        return AdBlockNativeGatewayJni.get().getAdBlockFiltersURL();
 +    }
 +
 +    @NativeMethods
@@ -587,7 +647,7 @@ diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/f
 +        void setAdBlockFiltersURL(String url);
 +        String getAdBlockFiltersURL();
 +    }
- }
++}
 diff --git a/chrome/browser/net/system_network_context_manager.cc b/chrome/browser/net/system_network_context_manager.cc
 --- a/chrome/browser/net/system_network_context_manager.cc
 +++ b/chrome/browser/net/system_network_context_manager.cc
