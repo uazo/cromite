@@ -16,7 +16,7 @@
 
 Cromite is a [Chromium](https://www.chromium.org/Home) fork based on [Bromite](https://github.com/bromite/bromite) with built-in support for ad blocking and an eye for privacy.
 
-Cromite is available for Android Marshmallow and above (v6.0, API level 23) and Windows.
+Cromite is available for Android Nougat and above (v7.0, API level 24, arm64-v8a) and Windows.
 
 For the Frequently Asked Questions see [F.A.Q.](./FAQ.md).
 
