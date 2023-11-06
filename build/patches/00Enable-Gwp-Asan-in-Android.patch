@@ -1,0 +1,149 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Sun, 5 Nov 2023 17:57:14 +0000
+Subject: Enable Gwp Asan in Android
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ android_webview/lib/aw_main_delegate.cc         |  2 +-
+ build/config/compiler/compiler.gni              |  8 ++------
+ chrome/android/java/AndroidManifest.xml         |  1 +
+ chrome/app/chrome_main_delegate.cc              |  2 +-
+ components/gwp_asan/buildflags/buildflags.gni   |  2 ++
+ components/gwp_asan/client/gwp_asan.cc          |  4 ++--
+ components/gwp_asan/client/gwp_asan_features.cc |  2 +-
+ components/memory_system/memory_system.cc       | 11 +++++++++--
+ 8 files changed, 19 insertions(+), 13 deletions(-)
+
+diff --git a/android_webview/lib/aw_main_delegate.cc b/android_webview/lib/aw_main_delegate.cc
+--- a/android_webview/lib/aw_main_delegate.cc
++++ b/android_webview/lib/aw_main_delegate.cc
+@@ -464,7 +464,7 @@ void AwMainDelegate::InitializeMemorySystem(const bool is_browser_process) {
+   const std::string process_type =
+       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+           switches::kProcessType);
+-  const bool gwp_asan_boost_sampling = is_canary_dev || is_browser_process;
++  const bool gwp_asan_boost_sampling = ((true)) || is_canary_dev || is_browser_process;
+ 
+   // Add PoissonAllocationSampler. On Android WebView we do not have obvious
+   // observers of PoissonAllocationSampler. Unfortunately, some potential
+diff --git a/build/config/compiler/compiler.gni b/build/config/compiler/compiler.gni
+--- a/build/config/compiler/compiler.gni
++++ b/build/config/compiler/compiler.gni
+@@ -185,13 +185,9 @@ if (is_chromeos) {
+   # 64-bit Windows ABI doesn't support frame pointers.
+   # NOTE: This setting is actually not used in the BUILD.gn for Windows,
+   # but it still reflects correctly that we don't emit frame pointers on x64.
+-  if (current_cpu == "x64") {
+-    enable_frame_pointers = false
+-  } else {
+-    enable_frame_pointers = true
+-  }
++  enable_frame_pointers = true
+ } else if (is_android) {
+-  enable_frame_pointers =
++  enable_frame_pointers = true ||
+       enable_profiling ||
+       # Ensure that stacks from arm64 crash dumps are usable (crbug.com/391706).
+       current_cpu == "arm64" ||
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -169,6 +169,7 @@ by a child template that "extends" this file.
+     <!-- Set android:largeHeap to "true" to allow more than the default
+          Java heap limit (32Mb on Nexus S, 48Mb on Xoom). -->
+       <application android:name="{% block application_name %}org.chromium.chrome.browser.base.SplitChromeApplication{% endblock %}"
++        android:gwpAsanMode="always"
+         android:icon="@drawable/ic_launcher"
+         android:roundIcon="@drawable/ic_launcher_round"
+         android:label="Cromite"
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -1885,7 +1885,7 @@ void ChromeMainDelegate::InitializeMemorySystem() {
+   const version_info::Channel channel = chrome::GetChannel();
+   const bool is_canary_dev = (channel == version_info::Channel::CANARY ||
+                               channel == version_info::Channel::DEV);
+-  const bool gwp_asan_boost_sampling = is_canary_dev || is_browser_process;
++  const bool gwp_asan_boost_sampling = ((true)) || is_canary_dev || is_browser_process;
+ 
+   memory_system::Initializer()
+       .SetGwpAsanParameters(gwp_asan_boost_sampling, process_type)
+diff --git a/components/gwp_asan/buildflags/buildflags.gni b/components/gwp_asan/buildflags/buildflags.gni
+--- a/components/gwp_asan/buildflags/buildflags.gni
++++ b/components/gwp_asan/buildflags/buildflags.gni
+@@ -26,3 +26,5 @@ declare_args() {
+   # Convenience definition
+   enable_gwp_asan = enable_gwp_asan_malloc || enable_gwp_asan_partitionalloc
+ }
++
++assert(enable_gwp_asan)
+diff --git a/components/gwp_asan/client/gwp_asan.cc b/components/gwp_asan/client/gwp_asan.cc
+--- a/components/gwp_asan/client/gwp_asan.cc
++++ b/components/gwp_asan/client/gwp_asan.cc
+@@ -288,7 +288,7 @@ void EnableForMalloc(bool boost_sampling, const char* process_type) {
+   std::ignore = init_once;
+ #else
+   std::ignore = internal::kGwpAsanMalloc;
+-  DLOG(WARNING) << "base::allocator shims are unavailable for GWP-ASan.";
++  LOG(WARNING) << "MemorySystem: base::allocator shims are unavailable for GWP-ASan.";
+ #endif  // BUILDFLAG(USE_ALLOCATOR_SHIM)
+ }
+ 
+@@ -308,7 +308,7 @@ void EnableForPartitionAlloc(bool boost_sampling, const char* process_type) {
+   std::ignore = init_once;
+ #else
+   std::ignore = internal::kGwpAsanPartitionAlloc;
+-  DLOG(WARNING) << "PartitionAlloc hooks are unavailable for GWP-ASan.";
++  LOG(WARNING) << "MemorySystem: PartitionAlloc hooks are unavailable for GWP-ASan.";
+ #endif  // BUILDFLAG(USE_PARTITION_ALLOC)
+ }
+ 
+diff --git a/components/gwp_asan/client/gwp_asan_features.cc b/components/gwp_asan/client/gwp_asan_features.cc
+--- a/components/gwp_asan/client/gwp_asan_features.cc
++++ b/components/gwp_asan/client/gwp_asan_features.cc
+@@ -9,7 +9,7 @@
+ namespace gwp_asan::internal {
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+ constexpr base::FeatureState kDefaultEnabled = base::FEATURE_ENABLED_BY_DEFAULT;
+ #else
+ constexpr base::FeatureState kDefaultEnabled =
+diff --git a/components/memory_system/memory_system.cc b/components/memory_system/memory_system.cc
+--- a/components/memory_system/memory_system.cc
++++ b/components/memory_system/memory_system.cc
+@@ -169,6 +169,7 @@ void MemorySystem::Impl::Initialize(
+ 
+   if (gwp_asan_parameters) {
+     InitializeGwpASan(*gwp_asan_parameters, initialization_data);
++    LOG(INFO) << "MemorySystem: Gwp Asan Initialized.";
+   }
+ 
+   if (profiling_client_parameters) {
+@@ -210,15 +211,21 @@ void MemorySystem::Impl::InitializeGwpASan(
+ #if BUILDFLAG(ENABLE_GWP_ASAN_MALLOC)
+   gwp_asan::EnableForMalloc(gwp_asan_parameters.boost_sampling,
+                             gwp_asan_parameters.process_type.c_str());
+-#endif
++#else // !BUILDFLAG(ENABLE_GWP_ASAN_MALLOC)
++#error "Gwp Asan for malloc is disabled!"
++#endif // BUILDFLAG(ENABLE_GWP_ASAN_MALLOC)
+ #if BUILDFLAG(ENABLE_GWP_ASAN_PARTITIONALLOC)
+   gwp_asan::EnableForPartitionAlloc(gwp_asan_parameters.boost_sampling,
+                                     gwp_asan_parameters.process_type.c_str());
+-#endif
++#else // !BUILDFLAG(ENABLE_GWP_ASAN_PARTITIONALLOC)
++#error "Gwp Asan for partition alloc is disabled!"
++#endif // BUILDFLAG(ENABLE_GWP_ASAN_PARTITIONALLOC)
+ 
+   gwp_asan::MaybeEnableLightweightDetector(
+       gwp_asan_parameters.boost_sampling,
+       gwp_asan_parameters.process_type.c_str());
++#else // !BUILDFLAG(ENABLE_GWP_ASAN)
++#error "Gwp Asan is disabled!"
+ #endif  // BUILDFLAG(ENABLE_GWP_ASAN)
+ }
+ 
+--
+2.25.1
