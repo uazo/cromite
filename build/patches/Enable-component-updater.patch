@@ -1,0 +1,541 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Tue, 2 Jun 2015 11:01:50 +0200
+Subject: Enable component updater
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ .../component_updater/component_installer.cc  | 46 +++++++++++--------
+ .../component_updater/component_installer.h   |  4 +-
+ .../component_updater_url_constants.cc        |  4 +-
+ .../component_updater/configurator_impl.cc    |  9 ++--
+ .../component_updater/configurator_impl.h     |  1 -
+ components/crx_file/crx_build_action_main.cc  | 11 +++--
+ components/crx_file/crx_verifier.cc           | 16 +++++++
+ components/update_client/component.cc         | 15 +++++-
+ components/update_client/crx_downloader.cc    |  5 ++
+ components/update_client/features.cc          |  3 ++
+ components/update_client/net/network_impl.cc  |  2 +
+ .../update_client/protocol_parser_json.cc     |  2 +
+ components/update_client/request_sender.cc    |  3 +-
+ components/update_client/update_checker.cc    |  6 ++-
+ components/update_client/update_engine.cc     |  9 ++++
+ components/update_client/utils.cc             |  3 ++
+ 16 files changed, 102 insertions(+), 37 deletions(-)
+
+diff --git a/components/component_updater/component_installer.cc b/components/component_updater/component_installer.cc
+--- a/components/component_updater/component_installer.cc
++++ b/components/component_updater/component_installer.cc
+@@ -81,7 +81,9 @@ ComponentInstaller::ComponentInstaller(
+ ComponentInstaller::~ComponentInstaller() = default;
+ 
+ void ComponentInstaller::Register(ComponentUpdateService* cus,
+-                                  base::OnceClosure callback) {
++                                  base::OnceClosure callback,
++                                  bool allowed) {
++  if (!allowed) return;
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+   DCHECK(cus);
+ 
+@@ -91,14 +93,16 @@ void ComponentInstaller::Register(ComponentUpdateService* cus,
+   Register(base::BindOnce(&ComponentUpdateService::RegisterComponent,
+                           base::Unretained(cus)),
+            std::move(callback), cus->GetRegisteredVersion(crx_id),
+-           cus->GetMaxPreviousProductVersion(crx_id));
++           cus->GetMaxPreviousProductVersion(crx_id), allowed);
+ }
+ 
+ void ComponentInstaller::Register(
+     RegisterCallback register_callback,
+     base::OnceClosure callback,
+     const base::Version& registered_version,
+-    const base::Version& max_previous_product_version) {
++    const base::Version& max_previous_product_version,
++    bool allowed) {
++  if (!allowed) return;
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+ 
+   if (!installer_policy_) {
+@@ -119,7 +123,7 @@ void ComponentInstaller::Register(
+ }
+ 
+ void ComponentInstaller::OnUpdateError(int error) {
+-  VLOG(0) << "Component update error: " << error;
++  LOG(INFO) << "Component update error: " << error;
+ }
+ 
+ Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
+@@ -129,6 +133,7 @@ Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
+   std::optional<base::Value::Dict> local_manifest =
+       update_client::ReadManifest(unpack_path);
+   if (!local_manifest) {
++    LOG(ERROR) << "Bad manifest";
+     return Result(InstallError::BAD_MANIFEST);
+   }
+ 
+@@ -139,7 +144,7 @@ Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
+ 
+   const base::Version manifest_version(*version_ascii);
+ 
+-  VLOG(1) << "Install: version=" << manifest_version.GetString()
++  LOG(INFO) << "Install: version=" << manifest_version.GetString()
+           << " current version=" << current_version_.GetString();
+ 
+   if (!manifest_version.IsValid()) {
+@@ -158,11 +163,11 @@ Result ComponentInstaller::InstallHelper(const base::FilePath& unpack_path,
+     }
+   }
+ 
+-  VLOG(1) << "unpack_path=" << unpack_path.AsUTF8Unsafe()
++  LOG(INFO) << "unpack_path=" << unpack_path.AsUTF8Unsafe()
+           << " install_path=" << local_install_path.AsUTF8Unsafe();
+ 
+   if (!base::Move(unpack_path, local_install_path)) {
+-    VPLOG(0) << "Move failed.";
++    LOG(INFO) << "Move failed.";
+     base::DeletePathRecursively(local_install_path);
+     return Result(InstallError::MOVE_FILES_ERROR);
+   }
+@@ -219,6 +224,7 @@ void ComponentInstaller::Install(
+       InstallHelper(unpack_path, &manifest, &version, &install_path);
+   base::DeletePathRecursively(unpack_path);
+   if (result.error) {
++    LOG(ERROR) << "ComponentInstaller: Install error " << result.error;
+     main_task_runner_->PostTask(FROM_HERE,
+                                 base::BindOnce(std::move(callback), result));
+     return;
+@@ -256,34 +262,34 @@ bool ComponentInstaller::FindPreinstallation(
+     scoped_refptr<RegistrationInfo> registration_info) {
+   base::FilePath path = root.Append(installer_policy_->GetRelativeInstallDir());
+   if (!base::PathExists(path)) {
+-    DVLOG(1) << "Relative install dir does not exist: " << path.MaybeAsASCII();
++    LOG(INFO) << "Relative install dir does not exist: " << path.MaybeAsASCII();
+     return false;
+   }
+ 
+   std::optional<base::Value::Dict> manifest = update_client::ReadManifest(path);
+   if (!manifest) {
+-    DVLOG(1) << "Manifest does not exist: " << path.MaybeAsASCII();
++    LOG(INFO) << "Manifest does not exist: " << path.MaybeAsASCII();
+     return false;
+   }
+ 
+   if (!installer_policy_->VerifyInstallation(*manifest, path)) {
+-    DVLOG(1) << "Installation verification failed: " << path.MaybeAsASCII();
++    LOG(INFO) << "Installation verification failed: " << path.MaybeAsASCII();
+     return false;
+   }
+ 
+   std::string* version_lexical = manifest->FindString("version");
+   if (!version_lexical || !base::IsStringASCII(*version_lexical)) {
+-    DVLOG(1) << "Failed to get component version from the manifest.";
++    LOG(INFO) << "Failed to get component version from the manifest.";
+     return false;
+   }
+ 
+   const base::Version version(*version_lexical);
+   if (!version.IsValid()) {
+-    DVLOG(1) << "Version in the manifest is invalid:" << *version_lexical;
++    LOG(INFO) << "Version in the manifest is invalid:" << *version_lexical;
+     return false;
+   }
+ 
+-  VLOG(1) << "Preinstalled component found for " << installer_policy_->GetName()
++  LOG(INFO) << "Preinstalled component found for " << installer_policy_->GetName()
+           << " at " << path.MaybeAsASCII() << " with version " << version
+           << ".";
+ 
+@@ -300,13 +306,13 @@ std::optional<base::Value::Dict>
+ ComponentInstaller::GetValidInstallationManifest(const base::FilePath& path) {
+   std::optional<base::Value::Dict> manifest = update_client::ReadManifest(path);
+   if (!manifest) {
+-    VPLOG(0) << "Failed to read manifest for " << installer_policy_->GetName()
++    LOG(INFO) << "Failed to read manifest for " << installer_policy_->GetName()
+              << " (" << path.MaybeAsASCII() << ").";
+     return std::nullopt;
+   }
+ 
+   if (!installer_policy_->VerifyInstallation(*manifest, path)) {
+-    VPLOG(0) << "Failed to verify installation for "
++    LOG(INFO) << "Failed to verify installation for "
+              << installer_policy_->GetName() << " (" << path.MaybeAsASCII()
+              << ").";
+     return std::nullopt;
+@@ -423,7 +429,7 @@ std::optional<base::FilePath> ComponentInstaller::GetComponentDirectory() {
+   base::FilePath base_dir =
+       base_component_dir.Append(installer_policy_->GetRelativeInstallDir());
+   if (!base::CreateDirectory(base_dir)) {
+-    VPLOG(0) << "Could not create the base directory for "
++    LOG(INFO) << "Could not create the base directory for "
+              << installer_policy_->GetName() << " (" << base_dir.MaybeAsASCII()
+              << ").";
+     return std::nullopt;
+@@ -508,14 +514,14 @@ void ComponentInstaller::UninstallOnTaskRunner() {
+     }
+ 
+     if (!base::DeletePathRecursively(path)) {
+-      DVLOG(0) << "Couldn't delete " << path.value();
++      LOG(INFO) << "Couldn't delete " << path.value();
+     }
+   }
+ 
+   // Delete the base directory if it's empty now.
+   if (base::IsDirectoryEmpty(*base_dir)) {
+     if (!base::DeleteFile(*base_dir)) {
+-      DVLOG(0) << "Couldn't delete " << base_dir->value();
++      LOG(INFO) << "Couldn't delete " << base_dir->value();
+     }
+   }
+ 
+@@ -558,7 +564,7 @@ void ComponentInstaller::FinishRegistration(
+   if (registration_info->manifest) {
+     ComponentReady(std::move(*registration_info->manifest));
+   } else {
+-    DVLOG(1) << "No component found for " << installer_policy_->GetName();
++    LOG(INFO) << "No component found for " << installer_policy_->GetName();
+   }
+ 
+   if (!callback.is_null()) {
+@@ -567,7 +573,7 @@ void ComponentInstaller::FinishRegistration(
+ }
+ 
+ void ComponentInstaller::ComponentReady(base::Value::Dict manifest) {
+-  VLOG(1) << "Component ready, version " << current_version_.GetString()
++  LOG(INFO) << "Component ready, version " << current_version_.GetString()
+           << " in " << current_install_dir_.value();
+   installer_policy_->ComponentReady(current_version_, current_install_dir_,
+                                     std::move(manifest));
+diff --git a/components/component_updater/component_installer.h b/components/component_updater/component_installer.h
+--- a/components/component_updater/component_installer.h
++++ b/components/component_updater/component_installer.h
+@@ -148,7 +148,7 @@ class ComponentInstaller final : public update_client::CrxInstaller {
+   // |cus| provides the registration logic.
+   // The passed |callback| will be called once the initial check for installed
+   // versions is done and the component has been registered.
+-  void Register(ComponentUpdateService* cus, base::OnceClosure callback);
++  void Register(ComponentUpdateService* cus, base::OnceClosure callback, bool allowed = false);
+ 
+   // Registers the component for update checks and installs.
+   // |register_callback| is called to do the registration.
+@@ -158,7 +158,7 @@ class ComponentInstaller final : public update_client::CrxInstaller {
+       base::OnceClosure callback,
+       const base::Version& registered_version = base::Version(kNullVersion),
+       const base::Version& max_previous_product_version =
+-          base::Version(kNullVersion));
++          base::Version(kNullVersion), bool allowed = false);
+ 
+   // Overrides from update_client::CrxInstaller.
+   void OnUpdateError(int error) override;
+diff --git a/components/component_updater/component_updater_url_constants.cc b/components/component_updater/component_updater_url_constants.cc
+--- a/components/component_updater/component_updater_url_constants.cc
++++ b/components/component_updater/component_updater_url_constants.cc
+@@ -15,9 +15,9 @@ namespace component_updater {
+ // The value of |kDefaultUrlSource| can be overridden with
+ // --component-updater=url-source=someurl.
+ const char kUpdaterJSONDefaultUrl[] =
+-    "https://update.googleapis.com/service/update2/json";
++    "https://www.cromite.org/components/query.json";
+ 
+ const char kUpdaterJSONFallbackUrl[] =
+-    "http://update.googleapis.com/service/update2/json";
++    "about:blank";
+ 
+ }  // namespace component_updater
+diff --git a/components/component_updater/configurator_impl.cc b/components/component_updater/configurator_impl.cc
+--- a/components/component_updater/configurator_impl.cc
++++ b/components/component_updater/configurator_impl.cc
+@@ -40,8 +40,7 @@ ConfiguratorImpl::ConfiguratorImpl(
+     : background_downloads_enabled_(config_policy.BackgroundDownloadsEnabled()),
+       deltas_enabled_(config_policy.DeltaUpdatesEnabled()),
+       fast_update_(config_policy.FastUpdate()),
+-      pings_enabled_(config_policy.PingsEnabled()),
+-      require_encryption_(require_encryption),
++      pings_enabled_(false),
+       url_source_override_(config_policy.UrlSourceOverride()),
+       initial_delay_(config_policy.InitialDelay()) {
+   if (config_policy.TestRequest()) {
+@@ -83,16 +82,14 @@ std::vector<GURL> ConfiguratorImpl::UpdateUrl() const {
+ 
+   std::vector<GURL> urls{GURL(kUpdaterJSONDefaultUrl),
+                          GURL(kUpdaterJSONFallbackUrl)};
+-  if (require_encryption_) {
+-    update_client::RemoveUnsecureUrls(&urls);
+-  }
++  update_client::RemoveUnsecureUrls(&urls);
+ 
+   return urls;
+ }
+ 
+ std::vector<GURL> ConfiguratorImpl::PingUrl() const {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-  return pings_enabled_ ? UpdateUrl() : std::vector<GURL>();
++  return std::vector<GURL>();
+ }
+ 
+ const base::Version& ConfiguratorImpl::GetBrowserVersion() const {
+diff --git a/components/component_updater/configurator_impl.h b/components/component_updater/configurator_impl.h
+--- a/components/component_updater/configurator_impl.h
++++ b/components/component_updater/configurator_impl.h
+@@ -107,7 +107,6 @@ class ConfiguratorImpl {
+   const bool deltas_enabled_;
+   const bool fast_update_;
+   const bool pings_enabled_;
+-  const bool require_encryption_;
+   const GURL url_source_override_;
+   const base::TimeDelta initial_delay_;
+ };
+diff --git a/components/crx_file/crx_build_action_main.cc b/components/crx_file/crx_build_action_main.cc
+--- a/components/crx_file/crx_build_action_main.cc
++++ b/components/crx_file/crx_build_action_main.cc
+@@ -9,6 +9,7 @@
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/logging.h"
++#include "base/strings/string_number_conversions.h"
+ #include "components/crx_file/crx_creator.h"
+ #include "crypto/rsa_private_key.h"
+ 
+@@ -25,9 +26,13 @@ int main(int argc, char* argv[]) {
+     VLOG(0) << "Failed to read key material from " << argv[3];
+     return -1;
+   }
++  auto signing_key = crypto::RSAPrivateKey::CreateFromPrivateKeyInfo(
++          std::vector<uint8_t>(key_file.begin(), key_file.end()));
++  std::vector<uint8_t> public_key;
++  signing_key->ExportPublicKey(&public_key);
++  VLOG(0) << "Pubkey: " << base::HexEncode(public_key);
++
+   return static_cast<int>(crx_file::Create(
+       base::FilePath::FromASCII(argv[1]), base::FilePath::FromASCII(argv[2]),
+-      crypto::RSAPrivateKey::CreateFromPrivateKeyInfo(
+-          std::vector<uint8_t>(key_file.begin(), key_file.end()))
+-          .get()));
++      signing_key.get()));
+ }
+diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verifier.cc
+--- a/components/crx_file/crx_verifier.cc
++++ b/components/crx_file/crx_verifier.cc
+@@ -13,6 +13,7 @@
+ #include <set>
+ #include <utility>
+ 
++#include "base/logging.h"
+ #include "base/base64.h"
+ #include "base/files/file.h"
+ #include "base/files/file_path.h"
+@@ -34,9 +35,15 @@ namespace {
+ 
+ // The SHA256 hash of the DER SPKI "ecdsa_2017_public" Crx3 key.
+ constexpr uint8_t kPublisherKeyHash[] = {
++#if BUILDFLAG(IS_ANDROID)
++    0x9F, 0x4A, 0x10, 0x80, 0x0F, 0x84, 0x13, 0xCB, 0x8F, 0x69, 0x92,
++    0xA6, 0x03, 0x44, 0x9D, 0xC5, 0xFE, 0x01, 0x4D, 0x00, 0xF3, 0x4E,
++    0x16, 0x79, 0xA1, 0x81, 0x95, 0x77, 0x1C, 0x5A, 0x21, 0x24};
++#else
+     0x61, 0xf7, 0xf2, 0xa6, 0xbf, 0xcf, 0x74, 0xcd, 0x0b, 0xc1, 0xfe,
+     0x24, 0x97, 0xcc, 0x9b, 0x04, 0x25, 0x4c, 0x65, 0x8f, 0x79, 0xf2,
+     0x14, 0x53, 0x92, 0x86, 0x7e, 0xa8, 0x36, 0x63, 0x67, 0xcf};
++#endif
+ 
+ // The SHA256 hash of the DER SPKI "ecdsa_2017_public" Crx3 test key.
+ constexpr uint8_t kPublisherTestKeyHash[] = {
+@@ -197,6 +204,13 @@ VerifierResult VerifyCrx3(
+       found_publisher_key =
+           found_publisher_key || key_hash == publisher_key ||
+           (accept_publisher_test_key && key_hash == *publisher_test_key);
++
++      DLOG(INFO) << "---key_hash: " << base::HexEncode(key_hash);
++      DLOG(INFO) << "---publisher_key: " << base::HexEncode(publisher_key);
++      DLOG(INFO) << "---found_publisher_key: " << found_publisher_key;
++      DLOG(INFO) << "---sig: " << sig;
++      DLOG(INFO) << "---key: " << key;
++
+       auto v = std::make_unique<crypto::SignatureVerifier>();
+       static_assert(sizeof(unsigned char) == sizeof(uint8_t),
+                     "Unsupported char size.");
+@@ -210,8 +224,10 @@ VerifierResult VerifyCrx3(
+       verifiers.push_back(std::move(v));
+     }
+   }
++#if !BUILDFLAG(IS_ANDROID)
+   if (public_key_bytes.empty() || !required_key_set.empty())
+     return VerifierResult::ERROR_REQUIRED_PROOF_MISSING;
++#endif
+ 
+   if (require_publisher_key && !found_publisher_key)
+     return VerifierResult::ERROR_REQUIRED_PROOF_MISSING;
+diff --git a/components/update_client/component.cc b/components/update_client/component.cc
+--- a/components/update_client/component.cc
++++ b/components/update_client/component.cc
+@@ -853,6 +853,19 @@ void Component::StateChecking::DoHandle() {
+     return;
+   }
+ 
++  LOG(INFO) << "Component: StateChecking"
++            << " component.id=" << component.id()
++            << " component.status_=" << component.status_
++            << " previous_version()=" << component.previous_version().GetString()
++            << " next_version()=" << component.next_version().GetString();
++
++#if BUILDFLAG(IS_ANDROID)
++  if (component.status_ == "ok" &&
++        component.previous_version().CompareTo(component.next_version()) == 0) {
++    component.status_ = "noupdate";
++  }
++#endif
++
+   if (component.status_ == "ok") {
+     metrics::RecordUpdateCheckResult(metrics::UpdateCheckResult::kHasUpdate);
+     TransitionState(std::make_unique<StateCanUpdate>(&component));
+@@ -949,8 +962,8 @@ void Component::StateCanUpdate::DoHandle() {
+ 
+   // Start computing the cost of the this update from here on.
+   component.update_begin_ = base::TimeTicks::Now();
+-  CHECK(component.update_context_->crx_cache_);
+   if (CanTryDiffUpdate()) {
++    CHECK(component.update_context_->crx_cache_);
+     base::ThreadPool::PostTaskAndReplyWithResult(
+         FROM_HERE, {base::MayBlock()},
+         base::BindOnce(&update_client::CrxCache::Contains,
+diff --git a/components/update_client/crx_downloader.cc b/components/update_client/crx_downloader.cc
+--- a/components/update_client/crx_downloader.cc
++++ b/components/update_client/crx_downloader.cc
+@@ -25,6 +25,7 @@
+ #include "components/update_client/update_client_metrics.h"
+ #include "components/update_client/url_fetcher_downloader.h"
+ #include "components/update_client/utils.h"
++#include "base/logging.h"
+ 
+ namespace update_client {
+ 
+@@ -98,6 +99,9 @@ base::OnceClosure CrxDownloader::StartDownload(
+   current_url_ = urls_.begin();
+   download_callback_ = std::move(download_callback);
+ 
++  LOG(INFO) << "CrxDownloader: StartDownload"
++            << " current_url_=" << *current_url_
++            << " expected_hash=" << expected_hash;
+   return DoStartDownload(*current_url_);
+ }
+ 
+@@ -129,6 +133,7 @@ void CrxDownloader::OnDownloadComplete(
+               return CrxDownloaderError::NONE;
+             }
+             DeleteFileAndEmptyParentDirectory(filepath);
++            LOG(ERROR) << "CrxDownloaderError: BAD_HASH";
+             return CrxDownloaderError::BAD_HASH;
+           },
+           result.response, expected_hash_),
+diff --git a/components/update_client/features.cc b/components/update_client/features.cc
+--- a/components/update_client/features.cc
++++ b/components/update_client/features.cc
+@@ -9,6 +9,9 @@
+ 
+ namespace update_client::features {
+ BASE_FEATURE(kPuffinPatches, "PuffinPatches", base::FEATURE_ENABLED_BY_DEFAULT);
++#if BUILDFLAG(IS_ANDROID)
++SET_CROMITE_FEATURE_DISABLED(kPuffinPatches);
++#endif
+ 
+ #if BUILDFLAG(IS_MAC)
+ BASE_FEATURE(kBackgroundCrxDownloaderMac,
+diff --git a/components/update_client/net/network_impl.cc b/components/update_client/net/network_impl.cc
+--- a/components/update_client/net/network_impl.cc
++++ b/components/update_client/net/network_impl.cc
+@@ -129,7 +129,9 @@ void NetworkFetcherImpl::PostRequest(
+       network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
+   // The `Content-Type` header set by |AttachStringForUpload| overwrites any
+   // `Content-Type` header present in the |ResourceRequest| above.
++#if !BUILDFLAG(IS_ANDROID)
+   simple_url_loader_->AttachStringForUpload(post_data, content_type);
++#endif
+   simple_url_loader_->SetOnResponseStartedCallback(base::BindOnce(
+       &NetworkFetcherImpl::OnResponseStartedCallback, base::Unretained(this),
+       std::move(response_started_callback)));
+diff --git a/components/update_client/protocol_parser_json.cc b/components/update_client/protocol_parser_json.cc
+--- a/components/update_client/protocol_parser_json.cc
++++ b/components/update_client/protocol_parser_json.cc
+@@ -16,6 +16,7 @@
+ #include "base/values.h"
+ #include "base/version.h"
+ #include "components/update_client/protocol_definition.h"
++#include "base/logging.h"
+ 
+ namespace update_client {
+ 
+@@ -323,6 +324,7 @@ bool ProtocolParserJSON::DoParse(const std::string& response_json,
+                                  Results* results) {
+   CHECK(results);
+ 
++  DLOG(INFO) << "ProtocolParserJSON: DoParse " << response_json;
+   if (response_json.empty()) {
+     ParseError("Empty JSON.");
+     return false;
+diff --git a/components/update_client/request_sender.cc b/components/update_client/request_sender.cc
+--- a/components/update_client/request_sender.cc
++++ b/components/update_client/request_sender.cc
+@@ -100,7 +100,8 @@ void RequestSender::SendInternal() {
+     url = BuildUpdateUrl(url, request_query_string);
+   }
+ 
+-  VLOG(2) << "Sending Omaha request: " << request_body_;
++  LOG(INFO) << "Sending Omaha request: " << url.spec();
++  DLOG(INFO) << "Request body (not send): " << request_body_;
+ 
+   network_fetcher_ = config_->GetNetworkFetcherFactory()->Create();
+   if (!network_fetcher_) {
+diff --git a/components/update_client/update_checker.cc b/components/update_client/update_checker.cc
+--- a/components/update_client/update_checker.cc
++++ b/components/update_client/update_checker.cc
+@@ -235,6 +235,10 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
+       config_->IsMachineExternallyManaged(), additional_attributes,
+       updater_state_attributes, std::move(apps));
+ 
++  bool enabled_cup_signing = config_->EnabledCupSigning();
++#if BUILDFLAG(IS_ANDROID)
++  enabled_cup_signing = false;
++#endif
+   request_sender_ = std::make_unique<RequestSender>(config_);
+   request_sender_->Send(
+       {url},
+@@ -243,7 +247,7 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
+                                           sent_ids, is_foreground),
+       config_->GetProtocolHandlerFactory()->CreateSerializer()->Serialize(
+           request),
+-      config_->EnabledCupSigning(),
++      enabled_cup_signing,
+       base::BindOnce(&UpdateCheckerImpl::OnRequestSenderComplete,
+                      base::Unretained(this), context,
+                      urls.size() > 1
+diff --git a/components/update_client/update_engine.cc b/components/update_client/update_engine.cc
+--- a/components/update_client/update_engine.cc
++++ b/components/update_client/update_engine.cc
+@@ -188,6 +188,15 @@ void UpdateEngine::StartOperation(
+       component->set_crx_component(*crx_component);
+       component->set_previous_version(component->crx_component()->version);
+       component->set_previous_fp(component->crx_component()->fingerprint);
++#if BUILDFLAG(IS_ANDROID)
++      if (!update_context->is_foreground && component->crx_component()->version.IsValid()
++          && component->crx_component()->version.components()[0] != 0) {
++        LOG(INFO) << "Component " << id << " do not need updates. "
++                  << "Current Version: " << component->crx_component()->version.GetString();
++        continue;
++      }
++#endif
++      LOG(INFO) << "Component " << id << " can be checked for updates.";
+       update_context->components_to_check_for_updates.push_back(id);
+     } else {
+       // |CrxDataCallback| did not return a CrxComponent instance for this
+diff --git a/components/update_client/utils.cc b/components/update_client/utils.cc
+--- a/components/update_client/utils.cc
++++ b/components/update_client/utils.cc
+@@ -109,6 +109,9 @@ bool VerifyFileHash256(const base::FilePath& filepath,
+   uint8_t actual_hash[crypto::kSHA256Length] = {0};
+   hasher->Finish(actual_hash, sizeof(actual_hash));
+ 
++  DLOG(INFO) << "VerifyFileHash256 "
++             << "actual_hash=" << base::HexEncode(actual_hash);
++
+   return memcmp(actual_hash, &expected_hash[0], sizeof(actual_hash)) == 0;
+ }
+ 
+--

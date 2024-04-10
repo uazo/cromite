@@ -1,0 +1,1058 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Wed, 10 Apr 2024 15:38:14 +0000
+Subject: Embed System Fonts on Android
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ chrome/browser/BUILD.gn                       | 13 +++
+ .../fonts_pack_component_installer.cc         | 97 +++++++++++++++++++
+ .../fonts_pack_component_installer.h          | 60 ++++++++++++
+ .../browser/component_updater/registration.cc |  5 +
+ chrome/renderer/BUILD.gn                      |  3 +
+ components/services/font/BUILD.gn             | 11 +++
+ components/services/font/font_service_app.cc  | 43 ++++++++
+ components/services/font/font_service_app.h   |  1 +
+ .../services/font/public/cpp/font_loader.cc   | 11 +++
+ .../services/font/public/cpp/font_loader.h    |  1 +
+ .../font/public/cpp/font_service_thread.cc    | 48 +++++++++
+ .../font/public/cpp/font_service_thread.h     |  5 +
+ .../font/public/mojom/font_service.mojom      |  2 +
+ content/browser/BUILD.gn                      |  9 ++
+ .../renderer_host/render_process_host_impl.cc | 12 ++-
+ content/child/BUILD.gn                        |  7 ++
+ content/renderer/BUILD.gn                     |  4 +
+ .../renderer/renderer_blink_platform_impl.cc  | 48 ++++++++-
+ skia/BUILD.gn                                 | 12 +++
+ .../fonts/skia/bromite_allowed_fonts.h        |  3 +
+ .../include/ports/SkFontConfigInterface.h     |  2 +
+ .../skia/include/ports/SkFontMgr_android.h    | 39 +++++++-
+ .../skia/src/ports/SkFontConfigInterface.cpp  |  4 +
+ .../skia/src/ports/SkFontMgr_android.cpp      | 45 ++++++---
+ .../src/ports/SkFontMgr_android_parser.cpp    | 37 +++++--
+ .../skia/src/ports/SkFontMgr_android_parser.h |  2 +
+ 26 files changed, 497 insertions(+), 27 deletions(-)
+ create mode 100644 chrome/browser/component_updater/fonts_pack_component_installer.cc
+ create mode 100644 chrome/browser/component_updater/fonts_pack_component_installer.h
+
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1911,6 +1911,13 @@ static_library("browser") {
+     "webid/federated_identity_permission_context_factory.h",
+   ]
+ 
++  if (is_android) {
++    sources += [
++      "component_updater/fonts_pack_component_installer.cc",
++      "component_updater/fonts_pack_component_installer.h",
++    ]
++  }
++
+   if (!is_android) {
+     sources += [
+       "password_manager/password_manager_settings_service_impl.cc",
+@@ -4897,6 +4904,12 @@ static_library("browser") {
+       "feedback/system_logs/log_sources/ozone_wayland_state_dump_source.h",
+     ]
+   }
++  if (is_android) {
++    deps += [
++      "//components/services/font:lib",
++      "//components/services/font/public/mojom",
++    ]
++  }
+   if (is_chromeos_ash) {
+     assert(enable_system_notifications)
+     sources += [
+diff --git a/chrome/browser/component_updater/fonts_pack_component_installer.cc b/chrome/browser/component_updater/fonts_pack_component_installer.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/component_updater/fonts_pack_component_installer.cc
+@@ -0,0 +1,97 @@
++#include "chrome/browser/component_updater/fonts_pack_component_installer.h"
++
++#include <optional>
++#include <utility>
++
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/functional/callback.h"
++#include "base/memory/ref_counted.h"
++#include "base/path_service.h"
++#include "base/strings/string_piece.h"
++#include "base/values.h"
++#include "base/version.h"
++#include "chrome/browser/browser_process.h"
++#include "components/component_updater/component_updater_paths.h"
++
++using component_updater::ComponentUpdateService;
++
++namespace component_updater {
++
++// The extension id is: gcmjkmgdlgnkkcocmoeiminaijmmjnii
++const uint8_t kFontsPackPublicKeySHA256[32] = {
++    0x62, 0xc9, 0xac, 0x63, 0xb6, 0xda, 0xa2, 0xe2, 0xce, 0x48, 0xc8,
++    0xd0, 0x89, 0xcc, 0x9d, 0x88, 0x02, 0x7c, 0x3e, 0x71, 0xcf, 0x5d,
++    0x6b, 0xb5, 0xdf, 0x21, 0x65, 0x82, 0x08, 0x97, 0x6a, 0x26};
++
++const char kFontsPackSetFetcherManifestName[] =
++    "System Fonts Pack";
++
++FontsPackComponentInstallerPolicy::
++    FontsPackComponentInstallerPolicy() = default;
++
++FontsPackComponentInstallerPolicy::
++    ~FontsPackComponentInstallerPolicy() = default;
++
++bool FontsPackComponentInstallerPolicy::
++    SupportsGroupPolicyEnabledComponentUpdates() const {
++  return false;
++}
++
++bool FontsPackComponentInstallerPolicy::RequiresNetworkEncryption()
++    const {
++  return true;
++}
++
++update_client::CrxInstaller::Result
++FontsPackComponentInstallerPolicy::OnCustomInstall(
++    const base::Value::Dict& manifest,
++    const base::FilePath& install_dir) {
++  return update_client::CrxInstaller::Result(0);  // Nothing custom here.
++}
++
++void FontsPackComponentInstallerPolicy::OnCustomUninstall() {}
++
++void FontsPackComponentInstallerPolicy::ComponentReady(
++    const base::Version& version,
++    const base::FilePath& install_dir,
++    base::Value::Dict manifest) {
++  DCHECK(!install_dir.empty());
++  LOG(INFO) << "Fonts Pack Version Ready: " << install_dir.value();
++}
++
++// Called during startup and installation before ComponentReady().
++bool FontsPackComponentInstallerPolicy::VerifyInstallation(
++    const base::Value::Dict& manifest,
++    const base::FilePath& install_dir) const {
++  return base::PathExists(install_dir);
++}
++
++base::FilePath
++FontsPackComponentInstallerPolicy::GetRelativeInstallDir() const {
++  return base::FilePath("fonts");
++}
++
++void FontsPackComponentInstallerPolicy::GetHash(
++    std::vector<uint8_t>* hash) const {
++  hash->assign(std::begin(kFontsPackPublicKeySHA256),
++               std::end(kFontsPackPublicKeySHA256));
++}
++
++std::string FontsPackComponentInstallerPolicy::GetName() const {
++  return kFontsPackSetFetcherManifestName;
++}
++
++update_client::InstallerAttributes
++FontsPackComponentInstallerPolicy::GetInstallerAttributes() const {
++  update_client::InstallerAttributes attributes;
++  return attributes;
++}
++
++void RegisterFontsPackComponent(ComponentUpdateService* cus) {
++  auto installer = base::MakeRefCounted<ComponentInstaller>(
++      std::make_unique<FontsPackComponentInstallerPolicy>());
++  installer->Register(cus, base::OnceClosure(), /*allowed*/true);
++}
++
++}  // namespace component_updater
+diff --git a/chrome/browser/component_updater/fonts_pack_component_installer.h b/chrome/browser/component_updater/fonts_pack_component_installer.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/component_updater/fonts_pack_component_installer.h
+@@ -0,0 +1,60 @@
++#ifndef CHROME_BROWSER_COMPONENT_UPDATER_FONTS_PACK_COMPONENT_INSTALLER_H_
++#define CHROME_BROWSER_COMPONENT_UPDATER_FONTS_PACK_COMPONENT_INSTALLER_H_
++
++#include <memory>
++#include <string>
++#include <vector>
++
++#include "base/values.h"
++#include "components/component_updater/component_installer.h"
++
++namespace base {
++class FilePath;
++}  // namespace base
++
++namespace component_updater {
++
++class ComponentUpdateService;
++
++// Component for receiving System fonts overrides.
++class FontsPackComponentInstallerPolicy
++    : public ComponentInstallerPolicy {
++ public:
++  static const char kManifestRulesetFormatKey[];
++  static const int kCurrentRulesetFormat;
++
++  FontsPackComponentInstallerPolicy();
++
++  FontsPackComponentInstallerPolicy(
++      const FontsPackComponentInstallerPolicy&) = delete;
++  FontsPackComponentInstallerPolicy& operator=(
++      const FontsPackComponentInstallerPolicy&) = delete;
++
++  ~FontsPackComponentInstallerPolicy() override;
++
++ private:
++  static std::string GetInstallerTag();
++
++  // ComponentInstallerPolicy implementation.
++  bool SupportsGroupPolicyEnabledComponentUpdates() const override;
++  bool RequiresNetworkEncryption() const override;
++  update_client::CrxInstaller::Result OnCustomInstall(
++      const base::Value::Dict& manifest,
++      const base::FilePath& install_dir) override;
++  void OnCustomUninstall() override;
++  bool VerifyInstallation(const base::Value::Dict& manifest,
++                          const base::FilePath& install_dir) const override;
++  void ComponentReady(const base::Version& version,
++                      const base::FilePath& install_dir,
++                      base::Value::Dict manifest) override;
++  base::FilePath GetRelativeInstallDir() const override;
++  void GetHash(std::vector<uint8_t>* hash) const override;
++  std::string GetName() const override;
++  update_client::InstallerAttributes GetInstallerAttributes() const override;
++};
++
++void RegisterFontsPackComponent(ComponentUpdateService* cus);
++
++}  // namespace component_updater
++
++#endif  // CHROME_BROWSER_COMPONENT_UPDATER_FONTS_PACK_COMPONENT_INSTALLER_H_
+diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
+--- a/chrome/browser/component_updater/registration.cc
++++ b/chrome/browser/component_updater/registration.cc
+@@ -96,10 +96,15 @@
+ #include "ui/aura/env.h"
+ #endif
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "chrome/browser/component_updater/fonts_pack_component_installer.h"
++#endif
++
+ namespace component_updater {
+ 
+ void RegisterComponentsForUpdate() {
+   auto* const cus = g_browser_process->component_updater();
++  RegisterFontsPackComponent(cus);
+ 
+ #if BUILDFLAG(IS_WIN)
+   RegisterRecoveryImprovedComponent(cus, g_browser_process->local_state());
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -287,6 +287,9 @@ static_library("renderer") {
+       "//ppapi/shared_impl",
+     ]
+ 
++    if (is_android) {
++      deps += [ "//components/services/font/public/cpp" ]
++    }
+     if (is_linux || is_chromeos) {
+       deps += [ "//components/services/font/public/cpp" ]
+     }
+diff --git a/components/services/font/BUILD.gn b/components/services/font/BUILD.gn
+--- a/components/services/font/BUILD.gn
++++ b/components/services/font/BUILD.gn
+@@ -25,6 +25,17 @@ source_set("lib") {
+     "//ui/gfx",
+   ]
+ 
++  if (is_android) {
++    sources -= [
++      "fontconfig_matching.cc",
++      "fontconfig_matching.h",
++    ]
++    deps -= [
++      "//build:chromeos_buildflags",
++      "//third_party/fontconfig",
++    ]
++  }
++
+   public_deps = [ "//skia" ]
+ 
+   if (enable_pdf && (is_linux || is_chromeos)) {
+diff --git a/components/services/font/font_service_app.cc b/components/services/font/font_service_app.cc
+--- a/components/services/font/font_service_app.cc
++++ b/components/services/font/font_service_app.cc
+@@ -21,6 +21,12 @@
+ #include "ui/gfx/font_fallback_linux.h"
+ #include "ui/gfx/font_render_params.h"
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "base/path_service.h"
++#include "base/files/file_util.h"
++#include "components/component_updater/component_updater_paths.h"
++#endif
++
+ #if BUILDFLAG(ENABLE_PDF)
+ #include "components/services/font/pdf_fontconfig_matching.h"  // nogncheck
+ #endif
+@@ -98,6 +104,8 @@ void FontServiceApp::BindReceiver(
+ void FontServiceApp::MatchFamilyName(const std::string& family_name,
+                                      mojom::TypefaceStylePtr requested_style,
+                                      MatchFamilyNameCallback callback) {
++#if BUILDFLAG(IS_ANDROID)
++#else
+   TRACE_EVENT0("fonts", "FontServiceApp::MatchFamilyName");
+ 
+   SkFontConfigInterface::FontIdentity result_identity;
+@@ -158,6 +166,7 @@ void FontServiceApp::MatchFamilyName(const std::string& family_name,
+ 
+   std::move(callback).Run(std::move(identity), result_family_cppstring,
+                           std::move(style));
++#endif
+ }
+ 
+ void FontServiceApp::OpenStream(uint32_t id_number,
+@@ -172,12 +181,41 @@ void FontServiceApp::OpenStream(uint32_t id_number,
+   std::move(callback).Run(std::move(file));
+ }
+ 
++void FontServiceApp::OpenStreamFromName(const std::string& name,
++                                        OpenStreamCallback callback) {
++  TRACE_EVENT0("fonts", "FontServiceApp::OpenStreamFromName");
++
++  base::File empty_file;
++
++  base::FilePath local_install_path;
++  if (!base::PathService::Get(component_updater::DIR_COMPONENT_USER, &local_install_path)) {
++    std::move(callback).Run(std::move(empty_file));
++    return;
++  }
++  local_install_path = local_install_path
++    .Append("fonts")
++    .Append("1.0.0")
++    .AppendASCII(name);
++
++  if (!base::PathExists(local_install_path)) {
++    LOG(ERROR) << "System font " << local_install_path << " not found";
++    std::move(callback).Run(std::move(empty_file));
++    return;
++  }
++
++  base::File font_file(local_install_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
++  std::move(callback).Run(std::move(font_file));
++}
++
+ void FontServiceApp::FallbackFontForCharacter(
+     uint32_t character,
+     const std::string& locale,
+     FallbackFontForCharacterCallback callback) {
+   TRACE_EVENT0("fonts", "FontServiceApp::FallbackFontForCharacter");
+ 
++#if BUILDFLAG(IS_ANDROID)
++  std::move(callback).Run(nullptr, "", false, false);
++#else
+   gfx::FallbackFontData fallback_font;
+   if (gfx::GetFallbackFontForChar(character, locale, &fallback_font)) {
+     size_t index = FindOrAddPath(fallback_font.filepath);
+@@ -192,6 +230,7 @@ void FontServiceApp::FallbackFontForCharacter(
+   } else {
+     std::move(callback).Run(nullptr, "", false, false);
+   }
++#endif
+ }
+ 
+ void FontServiceApp::FontRenderStyleForStrike(
+@@ -235,6 +274,9 @@ void FontServiceApp::MatchFontByPostscriptNameOrFullFontName(
+   TRACE_EVENT0("fonts",
+                "FontServiceApp::MatchFontByPostscriptNameOrFullFontName");
+ 
++#if BUILDFLAG(IS_ANDROID)
++  std::move(callback).Run(nullptr);
++#else
+   std::optional<FontConfigLocalMatching::FontConfigMatchResult> match_result =
+       FontConfigLocalMatching::FindFontByPostscriptNameOrFullFontName(family);
+   if (match_result) {
+@@ -246,6 +288,7 @@ void FontServiceApp::MatchFontByPostscriptNameOrFullFontName(
+     return;
+   }
+   std::move(callback).Run(nullptr);
++#endif
+ }
+ 
+ #if BUILDFLAG(ENABLE_PDF)
+diff --git a/components/services/font/font_service_app.h b/components/services/font/font_service_app.h
+--- a/components/services/font/font_service_app.h
++++ b/components/services/font/font_service_app.h
+@@ -36,6 +36,7 @@ class FontServiceApp : public mojom::FontService {
+                        mojom::TypefaceStylePtr requested_style,
+                        MatchFamilyNameCallback callback) override;
+   void OpenStream(uint32_t id_number, OpenStreamCallback callback) override;
++  void OpenStreamFromName(const std::string& name, OpenStreamCallback callback) override;
+   void FallbackFontForCharacter(
+       uint32_t character,
+       const std::string& locale,
+diff --git a/components/services/font/public/cpp/font_loader.cc b/components/services/font/public/cpp/font_loader.cc
+--- a/components/services/font/public/cpp/font_loader.cc
++++ b/components/services/font/public/cpp/font_loader.cc
+@@ -63,6 +63,17 @@ SkStreamAsset* FontLoader::openStream(const FontIdentity& identity) {
+   }
+ }
+ 
++SkStreamAsset* FontLoader::openStreamFromName(const char* filename) {
++  scoped_refptr<internal::MappedFontFile> mapped_font_file =
++      thread_->OpenStreamFromFile(filename);
++  if (!mapped_font_file)
++    return nullptr;
++
++  // Get notified with |mapped_font_file| is destroyed.
++  mapped_font_file->set_observer(this);
++  return mapped_font_file->CreateMemoryStream();
++}
++
+ sk_sp<SkTypeface> FontLoader::makeTypeface(const FontIdentity& identity,
+                                            sk_sp<SkFontMgr> mgr) {
+   TRACE_EVENT0("fonts", "FontServiceThread::makeTypeface");
+diff --git a/components/services/font/public/cpp/font_loader.h b/components/services/font/public/cpp/font_loader.h
+--- a/components/services/font/public/cpp/font_loader.h
++++ b/components/services/font/public/cpp/font_loader.h
+@@ -46,6 +46,7 @@ class FontLoader : public SkFontConfigInterface,
+                        SkString* out_family_name,
+                        SkFontStyle* out_style) override;
+   SkStreamAsset* openStream(const FontIdentity& identity) override;
++  SkStreamAsset* openStreamFromName(const char* filename) override;
+   sk_sp<SkTypeface> makeTypeface(const FontIdentity& identity,
+                                  sk_sp<SkFontMgr> mgr) override;
+ 
+diff --git a/components/services/font/public/cpp/font_service_thread.cc b/components/services/font/public/cpp/font_service_thread.cc
+--- a/components/services/font/public/cpp/font_service_thread.cc
++++ b/components/services/font/public/cpp/font_service_thread.cc
+@@ -247,6 +247,54 @@ void FontServiceThread::OpenStreamImpl(base::WaitableEvent* done_event,
+                                 done_event, output_file));
+ }
+ 
++scoped_refptr<MappedFontFile> FontServiceThread::OpenStreamFromFile(
++    const std::string& filename) {
++  DCHECK(!task_runner_->RunsTasksInCurrentSequence());
++
++  base::ElapsedTimer timer;
++
++  base::File stream_file;
++  // This proxies to the other thread, which proxies to mojo. Only on the
++  // reply from mojo do we return from this.
++  base::WaitableEvent done_event;
++  task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&FontServiceThread::OpenStreamFromFileImpl, this,
++                                &done_event, &stream_file, filename));
++  done_event.Wait();
++
++  base::UmaHistogramMicrosecondsTimes(
++      "Blink.Fonts.FontServiceThread.OpenStreamTime", timer.Elapsed());
++
++  if (!stream_file.IsValid()) {
++    // The font-service may have been killed.
++    return nullptr;
++  }
++
++  // Converts the file to out internal type.
++  scoped_refptr<MappedFontFile> mapped_font_file =
++      new MappedFontFile(0);
++  if (!mapped_font_file->Initialize(std::move(stream_file)))
++    return nullptr;
++
++  return mapped_font_file;
++}
++
++void FontServiceThread::OpenStreamFromFileImpl(base::WaitableEvent* done_event,
++                                       base::File* output_file,
++                                       const std::string& file) {
++  DCHECK(task_runner_->RunsTasksInCurrentSequence());
++
++  if (!font_service_.is_connected()) {
++    done_event->Signal();
++    return;
++  }
++
++  pending_waitable_events_.insert(done_event);
++  font_service_->OpenStreamFromName(
++      file, base::BindOnce(&FontServiceThread::OnOpenStreamComplete, this,
++                                done_event, output_file));
++}
++
+ void FontServiceThread::OnOpenStreamComplete(base::WaitableEvent* done_event,
+                                              base::File* output_file,
+                                              base::File file) {
+diff --git a/components/services/font/public/cpp/font_service_thread.h b/components/services/font/public/cpp/font_service_thread.h
+--- a/components/services/font/public/cpp/font_service_thread.h
++++ b/components/services/font/public/cpp/font_service_thread.h
+@@ -54,6 +54,8 @@ class FontServiceThread : public base::RefCountedThreadSafe<FontServiceThread> {
+                        SkFontStyle* out_style);
+   scoped_refptr<MappedFontFile> OpenStream(
+       const SkFontConfigInterface::FontIdentity& identity);
++  scoped_refptr<MappedFontFile> OpenStreamFromFile(
++      const std::string& filename);
+ 
+   bool FallbackFontForCharacter(
+       uint32_t character,
+@@ -117,6 +119,9 @@ class FontServiceThread : public base::RefCountedThreadSafe<FontServiceThread> {
+   void OpenStreamImpl(base::WaitableEvent* done_event,
+                       base::File* output_file,
+                       const uint32_t id_number);
++  void OpenStreamFromFileImpl(base::WaitableEvent* done_event,
++                      base::File* output_file,
++                      const std::string& filename);
+   void OnOpenStreamComplete(base::WaitableEvent* done_event,
+                             base::File* output_file,
+                             base::File file);
+diff --git a/components/services/font/public/mojom/font_service.mojom b/components/services/font/public/mojom/font_service.mojom
+--- a/components/services/font/public/mojom/font_service.mojom
++++ b/components/services/font/public/mojom/font_service.mojom
+@@ -65,6 +65,8 @@ interface FontService {
+   // Returns a handle to the raw font specified by |id_number|.
+   OpenStream(uint32 id_number) => (mojo_base.mojom.ReadOnlyFile? font_handle);
+ 
++  OpenStreamFromName(string family_name) => (mojo_base.mojom.ReadOnlyFile? font_handle);
++
+   // Returns a fallback FontIdentity and Typeface style for the given character
+   // and locale. If no fallback font can be found, returns a null identity.
+   FallbackFontForCharacter(uint32 character, string locale) =>
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -2441,6 +2441,15 @@ source_set("browser") {
+     ]
+   }
+ 
++  if (is_android) {
++    sources += [
++      "font_service.cc",
++      "font_service.h",
++    ]
++
++    public_deps += [ "//components/services/font/public/mojom" ]
++  }
++
+   if (is_linux || is_chromeos) {
+     sources += [
+       "child_process_launcher_helper_linux.cc",
+diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
+--- a/content/browser/renderer_host/render_process_host_impl.cc
++++ b/content/browser/renderer_host/render_process_host_impl.cc
+@@ -226,6 +226,11 @@
+ #include "third_party/blink/public/mojom/android_font_lookup/android_font_lookup.mojom.h"
+ #endif
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "components/services/font/public/mojom/font_service.mojom.h"  // nogncheck
++#include "content/browser/font_service.h"  // nogncheck
++#endif
++
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+ #include <sys/resource.h>
+ 
+@@ -1166,7 +1171,12 @@ class RenderProcessHostImpl::IOThreadHostImpl : public mojom::ChildProcessHost {
+       if (!receiver)
+         return;
+     }
+-
++#if BUILDFLAG(IS_ANDROID)
++    if (auto font_receiver = receiver.As<font_service::mojom::FontService>()) {
++      ConnectToFontService(std::move(font_receiver));
++      return;
++    }
++#endif
+ #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+     if (auto font_receiver = receiver.As<font_service::mojom::FontService>()) {
+       ConnectToFontService(std::move(font_receiver));
+diff --git a/content/child/BUILD.gn b/content/child/BUILD.gn
+--- a/content/child/BUILD.gn
++++ b/content/child/BUILD.gn
+@@ -132,6 +132,13 @@ target(link_target_type, "child") {
+     ]
+   }
+ 
++  if (is_android) {
++    deps += [
++      "//components/services/font/public/cpp",
++      "//components/services/font/public/mojom",
++    ]
++  }
++
+   if (is_win) {
+     sources += [
+       "dwrite_font_proxy/dwrite_font_proxy_init_impl_win.cc",
+diff --git a/content/renderer/BUILD.gn b/content/renderer/BUILD.gn
+--- a/content/renderer/BUILD.gn
++++ b/content/renderer/BUILD.gn
+@@ -346,6 +346,10 @@ target(link_target_type, "renderer") {
+     }
+   }
+ 
++  if (is_android) {
++    deps += [ "//components/services/font/public/cpp" ]
++  }
++
+   if (is_linux || is_chromeos) {
+     deps += [ "//components/services/font/public/cpp" ]
+   }
+diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer/renderer_blink_platform_impl.cc
+--- a/content/renderer/renderer_blink_platform_impl.cc
++++ b/content/renderer/renderer_blink_platform_impl.cc
+@@ -129,6 +129,23 @@
+ #include "content/common/android/sync_compositor_statics.h"
+ #endif
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "components/services/font/public/mojom/font_service.mojom.h"  // nogncheck
++#include "components/services/font/public/cpp/font_loader.h"
++#include "content/browser/font_service.h"  // nogncheck
++
++#include "base/path_service.h"
++#include "base/base_paths_android.h"
++#include "base/file_descriptor_store.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/files/file_path.h"
++#include "content/public/common/content_descriptor_keys.h"
++#include "skia/ext/font_utils.h"
++#include "third_party/skia/include/core/SkFontMgr.h"
++#include "third_party/skia/include/ports/SkFontMgr_android.h"
++#include "third_party/blink/public/platform/web_font_render_style.h"
++#endif
++
+ using blink::Platform;
+ using blink::WebAudioDevice;
+ using blink::WebAudioLatencyHint;
+@@ -173,6 +190,30 @@ gpu::ContextType ToGpuContextType(blink::Platform::ContextType type) {
+   return gpu::CONTEXT_TYPE_OPENGLES2;
+ }
+ 
++void InitializeCustomFonts() {
++  std::string font_config = "cromite_fonts.xml";
++  sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());
++  SkStreamAsset* asset = fci->openStreamFromName(font_config.c_str());
++  if (!asset) {
++    LOG(ERROR) << "Unable to activate custom fonts.";
++    return;
++  }
++
++  std::string android_fonts_dir = "use_fd";
++
++  auto custom = std::make_unique<SkFontMgr_Android_CustomFonts>();
++  custom->fSystemFontUse =
++      SkFontMgr_Android_CustomFonts::SystemFontUse::kOnlyCustom;
++  custom->fBasePath = android_fonts_dir.c_str();
++  custom->fFontsXml = font_config.c_str();
++  custom->fFallbackFontsXml = font_config.c_str();
++  custom->fIsolated = false;
++
++  sk_sp<SkFontMgr> skia_font_manager =
++      SkFontMgr_New_Android(std::move(custom));
++  skia::OverrideDefaultSkFontMgr(std::move(skia_font_manager));
++}
++
+ }  // namespace
+ 
+ //------------------------------------------------------------------------------
+@@ -186,18 +227,21 @@ RendererBlinkPlatformImpl::RendererBlinkPlatformImpl(
+       is_locked_to_site_(false),
+       main_thread_scheduler_(main_thread_scheduler),
+       next_frame_sink_id_(uint32_t{std::numeric_limits<int32_t>::max()} + 1) {
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+   sk_sp<font_service::FontLoader> font_loader;
+ #endif
+ 
+   // RenderThread may not exist in some tests.
+   if (RenderThreadImpl::current()) {
+-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID)
+     mojo::PendingRemote<font_service::mojom::FontService> font_service;
+     RenderThreadImpl::current()->BindHostReceiver(
+         font_service.InitWithNewPipeAndPassReceiver());
+     font_loader = sk_make_sp<font_service::FontLoader>(std::move(font_service));
+     SkFontConfigInterface::SetGlobal(font_loader);
++#if BUILDFLAG(IS_ANDROID)
++    InitializeCustomFonts();
++#endif
+ #endif
+   }
+ 
+diff --git a/skia/BUILD.gn b/skia/BUILD.gn
+--- a/skia/BUILD.gn
++++ b/skia/BUILD.gn
+@@ -447,6 +447,18 @@ component("skia") {
+     ]
+   }
+ 
++  if (is_android) {
++    sources += [
++      "//third_party/skia/src/ports/SkFontConfigInterface.cpp",
++      "//third_party/skia/src/ports/SkFontMgr_FontConfigInterface.cpp",
++    ]
++    public += [
++      "include/ports/SkFontConfigInterface.h",
++      "include/ports/SkFontMgr_FontConfigInterface.h",
++    ]
++    defines += [ "CROMITE_IS_ANDROID" ]
++  }
++
+   if (is_linux || is_chromeos || is_android) {
+     sources += [
+       # Retain the files for the SkFontMgr_Android on linux to emulate android
+diff --git a/third_party/blink/renderer/platform/fonts/skia/bromite_allowed_fonts.h b/third_party/blink/renderer/platform/fonts/skia/bromite_allowed_fonts.h
+--- a/third_party/blink/renderer/platform/fonts/skia/bromite_allowed_fonts.h
++++ b/third_party/blink/renderer/platform/fonts/skia/bromite_allowed_fonts.h
+@@ -198,6 +198,9 @@ bool IsInList(const std::u16string& font_name, const char16_t*(&list)[N]) {
+ }
+ 
+ bool IsFontAllowed(const std::u16string& font_name) {
++#if BUILDFLAG(IS_ANDROID)
++  if ((true)) return true;
++#endif
+   for (const char16_t* last_resort_font_name : kAllowedFontNames) {
+     if (base::EqualsCaseInsensitiveASCII(font_name, last_resort_font_name))
+       return true;
+diff --git a/third_party/skia/include/ports/SkFontConfigInterface.h b/third_party/skia/include/ports/SkFontConfigInterface.h
+--- a/third_party/skia/include/ports/SkFontConfigInterface.h
++++ b/third_party/skia/include/ports/SkFontConfigInterface.h
+@@ -91,6 +91,8 @@ public:
+      */
+     virtual SkStreamAsset* openStream(const FontIdentity&) = 0;
+ 
++    virtual SkStreamAsset* openStreamFromName(const char* filename) = 0;
++
+     /**
+      *  Return an SkTypeface for the given FontIdentity.
+      *
+diff --git a/third_party/skia/include/ports/SkFontMgr_android.h b/third_party/skia/include/ports/SkFontMgr_android.h
+--- a/third_party/skia/include/ports/SkFontMgr_android.h
++++ b/third_party/skia/include/ports/SkFontMgr_android.h
+@@ -9,6 +9,11 @@
+ #define SkFontMgr_android_DEFINED
+ 
+ #include "include/core/SkRefCnt.h"
++#include "include/core/SkStream.h"
++#include "src/core/SkTHash.h"
++
++#include "include/ports/SkFontConfigInterface.h"
++#include "include/ports/SkFontMgr_FontConfigInterface.h"
+ 
+ class SkFontMgr;
+ 
+@@ -37,9 +42,41 @@ struct SkFontMgr_Android_CustomFonts {
+      *  system IO resources on initialization.
+      */
+     bool fIsolated;
++
++    struct SkFontMgr_Android_CustomFonts_MappedData {
++        int fd;
++        int64_t offset;
++        size_t size;
++    };
++    skia_private::THashMap<std::string,
++        SkFontMgr_Android_CustomFonts_MappedData> platform_file_map;
++
++    void add_platform_file(std::string key, int fd, int64_t offset, size_t size) {
++        SkFontMgr_Android_CustomFonts_MappedData data = {fd, offset, size};
++        platform_file_map.set(key, std::move(data));
++    }
++
++    std::unique_ptr<SkStreamAsset> getPlatformFile(const char* filename) const {
++        sk_sp<SkFontConfigInterface> fci(SkFontConfigInterface::RefGlobal());
++        SkStreamAsset* asset = fci->openStreamFromName(filename);
++        if (asset) {
++            return std::unique_ptr<SkStreamAsset>(asset);
++        }
++
++        const auto* it = platform_file_map.find(filename);
++        if (!it) {
++            return nullptr;
++        }
++        auto whole_data = SkData::MakeFromFD(it->fd);
++        auto data = SkData::MakeSubset(whole_data.get(), it->offset, it->size);
++        if (!data) {
++            return nullptr;
++        }
++        return std::unique_ptr<SkStreamAsset>(new SkMemoryStream(std::move(data)));
++    }
+ };
+ 
+ /** Create a font manager for Android. If 'custom' is NULL, use only system fonts. */
+-SK_API sk_sp<SkFontMgr> SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* custom);
++SK_API sk_sp<SkFontMgr> SkFontMgr_New_Android(std::unique_ptr<SkFontMgr_Android_CustomFonts> custom);
+ 
+ #endif // SkFontMgr_android_DEFINED
+diff --git a/third_party/skia/src/ports/SkFontConfigInterface.cpp b/third_party/skia/src/ports/SkFontConfigInterface.cpp
+--- a/third_party/skia/src/ports/SkFontConfigInterface.cpp
++++ b/third_party/skia/src/ports/SkFontConfigInterface.cpp
+@@ -22,7 +22,11 @@ sk_sp<SkFontConfigInterface> SkFontConfigInterface::RefGlobal() {
+     if (gFontConfigInterface) {
+         return sk_ref_sp(gFontConfigInterface);
+     }
++#if defined(CROMITE_IS_ANDROID)
++    return nullptr;
++#else
+     return sk_ref_sp(SkFontConfigInterface::GetSingletonDirectInterface());
++#endif
+ }
+ 
+ void SkFontConfigInterface::SetGlobal(sk_sp<SkFontConfigInterface> fc) {
+diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia/src/ports/SkFontMgr_android.cpp
+--- a/third_party/skia/src/ports/SkFontMgr_android.cpp
++++ b/third_party/skia/src/ports/SkFontMgr_android.cpp
+@@ -65,20 +65,25 @@ public:
+                              bool isFixedPitch,
+                              const SkString& familyName,
+                              const TArray<SkLanguage, true>& lang,
+-                             FontVariant variantStyle)
++                             FontVariant variantStyle,
++                             const SkFontMgr_Android_CustomFonts* custom)
+         : INHERITED(style, isFixedPitch, familyName)
+         , fPathName(pathName)
+         , fIndex(index)
+         , fAxes(axes, axesCount)
+         , fLang(lang)
+         , fVariantStyle(variantStyle)
+-        , fFile(cacheFontFiles ? sk_fopen(fPathName.c_str(), kRead_SkFILE_Flag) : nullptr) {
+-        if (cacheFontFiles) {
++        , fFile(cacheFontFiles ? sk_fopen(fPathName.c_str(), kRead_SkFILE_Flag) : nullptr)
++        , custom_(custom) {
++        if (cacheFontFiles && !custom_) {
+             SkASSERT(fFile);
+         }
+     }
+ 
+     std::unique_ptr<SkStreamAsset> makeStream() const {
++        if (custom_) {
++            return custom_->getPlatformFile(fPathName.c_str());
++        }
+         if (fFile) {
+             sk_sp<SkData> data(SkData::MakeFromFILE(fFile));
+             return data ? std::make_unique<SkMemoryStream>(std::move(data)) : nullptr;
+@@ -116,7 +121,7 @@ public:
+                                                     this->isFixedPitch(),
+                                                     fFamilyName,
+                                                     fLang,
+-                                                    fVariantStyle);
++                                                    fVariantStyle, custom_);
+     }
+ 
+     const SkString fPathName;
+@@ -125,6 +130,7 @@ public:
+     const STArray<4, SkLanguage, true> fLang;
+     const FontVariant fVariantStyle;
+     SkAutoTCallVProc<FILE, sk_fclose> fFile;
++    const SkFontMgr_Android_CustomFonts* custom_;
+ 
+     using INHERITED = SkTypeface_Android;
+ };
+@@ -136,7 +142,7 @@ template <typename D, typename S> sk_sp<D> sk_sp_static_cast(sk_sp<S>&& s) {
+ class SkFontStyleSet_Android : public SkFontStyleSet {
+ public:
+     explicit SkFontStyleSet_Android(const FontFamily& family, const SkFontScanner* scanner,
+-                                    const bool cacheFontFiles) {
++                                    const bool cacheFontFiles, const SkFontMgr_Android_CustomFonts* custom) {
+         const SkString* cannonicalFamilyName = nullptr;
+         if (family.fNames.size() > 0) {
+             cannonicalFamilyName = &family.fNames[0];
+@@ -145,12 +151,20 @@ public:
+ 
+         // TODO? make this lazy
+         for (int i = 0; i < family.fFonts.size(); ++i) {
++            bool use_custom = false;
+             const FontFileInfo& fontFile = family.fFonts[i];
+ 
+             SkString pathName(family.fBasePath);
+             pathName.append(fontFile.fFileName);
+ 
+-            std::unique_ptr<SkStreamAsset> stream = SkStream::MakeFromFile(pathName.c_str());
++            std::unique_ptr<SkStreamAsset> stream;
++            if (!custom && !fontFile.fFileName.startsWith('#')) {
++                stream = SkStream::MakeFromFile(pathName.c_str());
++            } else if (custom) {
++                use_custom = true;
++                pathName = fontFile.fFileName;
++                stream = custom->getPlatformFile(pathName.c_str());
++            }
+             if (!stream) {
+                 SkDEBUGF("Requested font file %s does not exist or cannot be opened.\n",
+                          pathName.c_str());
+@@ -202,7 +216,8 @@ public:
+ 
+             fStyles.push_back().reset(new SkTypeface_AndroidSystem(
+                     pathName, cacheFontFiles, ttcIndex, axisValues.get(), axisDefinitions.size(),
+-                    style, isFixedWidth, familyName, family.fLanguages, variant));
++                    style, isFixedWidth, familyName, family.fLanguages, variant,
++                    use_custom ? custom : nullptr));
+         }
+     }
+ 
+@@ -256,13 +271,16 @@ struct NameToFamily {
+ 
+ class SkFontMgr_Android : public SkFontMgr {
+ public:
+-    SkFontMgr_Android(const SkFontMgr_Android_CustomFonts* custom) {
++    SkFontMgr_Android(std::unique_ptr<SkFontMgr_Android_CustomFonts> custom_in) {
++        custom_ = std::move(custom_in);
++        auto* custom = custom_.get();
++
+         fScanner = std::make_unique<SkFontScanner_FreeType>();
+         SkTDArray<FontFamily*> families;
+         if (custom && SkFontMgr_Android_CustomFonts::kPreferSystem != custom->fSystemFontUse) {
+             SkString base(custom->fBasePath);
+             SkFontMgr_Android_Parser::GetCustomFontFamilies(
+-                families, base, custom->fFontsXml, custom->fFallbackFontsXml);
++                families, base, custom, custom->fFontsXml, custom->fFallbackFontsXml);
+         }
+         if (!custom ||
+             (custom && SkFontMgr_Android_CustomFonts::kOnlyCustom != custom->fSystemFontUse))
+@@ -272,7 +290,7 @@ public:
+         if (custom && SkFontMgr_Android_CustomFonts::kPreferSystem == custom->fSystemFontUse) {
+             SkString base(custom->fBasePath);
+             SkFontMgr_Android_Parser::GetCustomFontFamilies(
+-                families, base, custom->fFontsXml, custom->fFallbackFontsXml);
++                families, base, custom, custom->fFontsXml, custom->fFallbackFontsXml);
+         }
+         this->buildNameToFamilyMap(families, custom ? custom->fIsolated : false);
+         this->findDefaultStyleSet();
+@@ -438,6 +456,7 @@ protected:
+ private:
+ 
+     std::unique_ptr<SkFontScanner> fScanner;
++    std::unique_ptr<SkFontMgr_Android_CustomFonts> custom_;
+ 
+     TArray<sk_sp<SkFontStyleSet_Android>> fStyleSets;
+     sk_sp<SkFontStyleSet> fDefaultStyleSet;
+@@ -457,7 +476,7 @@ private:
+         }
+ 
+         sk_sp<SkFontStyleSet_Android> newSet =
+-            sk_make_sp<SkFontStyleSet_Android>(family, fScanner.get(), isolated);
++            sk_make_sp<SkFontStyleSet_Android>(family, fScanner.get(), isolated, custom_.get());
+         if (0 == newSet->count()) {
+             return;
+         }
+@@ -504,7 +523,7 @@ static char const * const gSystemFontUseStrings[] = {
+ 
+ }  // namespace
+ 
+-sk_sp<SkFontMgr> SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* custom) {
++sk_sp<SkFontMgr> SkFontMgr_New_Android(std::unique_ptr<SkFontMgr_Android_CustomFonts> custom) {
+     if (custom) {
+         SkASSERT(0 <= custom->fSystemFontUse);
+         SkASSERT(custom->fSystemFontUse < std::size(gSystemFontUseStrings));
+@@ -514,5 +533,5 @@ sk_sp<SkFontMgr> SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* cust
+                  custom->fFontsXml,
+                  custom->fFallbackFontsXml);
+     }
+-    return sk_make_sp<SkFontMgr_Android>(custom);
++    return sk_make_sp<SkFontMgr_Android>(std::move(custom));
+ }
+diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
+--- a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
++++ b/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
+@@ -645,14 +645,27 @@ static const XML_Memory_Handling_Suite sk_XML_alloc = {
+  * families array. Returns the version of the file, negative if the file does not exist.
+  */
+ static int parse_config_file(const char* filename, SkTDArray<FontFamily*>& families,
+-                             const SkString& basePath, bool isFallback)
++                             const SkString& basePath, bool isFallback,
++                             const SkFontMgr_Android_CustomFonts* custom = nullptr)
+ {
+     SkFILEStream file(filename);
+-
+-    // Some of the files we attempt to parse (in particular, /vendor/etc/fallback_fonts.xml)
+-    // are optional - failure here is okay because one of these optional files may not exist.
+-    if (!file.isValid()) {
+-        SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "'%s' could not be opened\n", filename);
++    std::unique_ptr<SkStreamAsset> stream;
++    if (!custom && filename[0] != '#') {
++        // Some of the files we attempt to parse (in particular, /vendor/etc/fallback_fonts.xml)
++        // are optional - failure here is okay because one of these optional files may not exist.
++        if (!file.isValid()) {
++            SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "'%s' could not be opened\n", filename);
++            return -1;
++        }
++        stream = file.fork();
++    } else if (custom) {
++        stream = custom->getPlatformFile(filename);
++        if (!stream) {
++            SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "'%s' platform file map not found\n", filename);
++            return -1;
++        }
++    } else {
++        SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "'%s' custom fonts not set\n", filename);
+         return -1;
+     }
+ 
+@@ -684,8 +697,9 @@ static int parse_config_file(const char* filename, SkTDArray<FontFamily*>& famil
+             SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "could not buffer enough to continue\n");
+             return -1;
+         }
+-        size_t len = file.read(buffer, bufferSize);
+-        done = file.isAtEnd();
++        size_t len = stream->read(buffer, bufferSize);
++        // SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "%.*s", len, buffer);
++        done = stream->isAtEnd();
+         XML_Status status = XML_ParseBuffer(parser, len, done);
+         if (XML_STATUS_ERROR == status) {
+             XML_Error error = XML_GetErrorCode(parser);
+@@ -760,6 +774,7 @@ static void append_fallback_font_families_for_locale(SkTDArray<FontFamily*>& fal
+ static void append_system_fallback_font_families(SkTDArray<FontFamily*>& fallbackFonts,
+                                                  const SkString& basePath)
+ {
++    if ((true)) return;
+     parse_config_file(FALLBACK_FONTS_FILE, fallbackFonts, basePath, true);
+     append_fallback_font_families_for_locale(fallbackFonts,
+                                              LOCALE_FALLBACK_FONTS_SYSTEM_DIR,
+@@ -769,6 +784,7 @@ static void append_system_fallback_font_families(SkTDArray<FontFamily*>& fallbac
+ static void mixin_vendor_fallback_font_families(SkTDArray<FontFamily*>& fallbackFonts,
+                                                 const SkString& basePath)
+ {
++    if ((true)) return;
+     SkTDArray<FontFamily*> vendorFonts;
+     parse_config_file(VENDOR_FONTS_FILE, vendorFonts, basePath, true);
+     append_fallback_font_families_for_locale(vendorFonts,
+@@ -817,15 +833,16 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(SkTDArray<FontFamily*>& fon
+ 
+ void SkFontMgr_Android_Parser::GetCustomFontFamilies(SkTDArray<FontFamily*>& fontFamilies,
+                                                      const SkString& basePath,
++                                                     const SkFontMgr_Android_CustomFonts* custom,
+                                                      const char* fontsXml,
+                                                      const char* fallbackFontsXml,
+                                                      const char* langFallbackFontsDir)
+ {
+     if (fontsXml) {
+-        parse_config_file(fontsXml, fontFamilies, basePath, false);
++        parse_config_file(fontsXml, fontFamilies, basePath, false, custom);
+     }
+     if (fallbackFontsXml) {
+-        parse_config_file(fallbackFontsXml, fontFamilies, basePath, true);
++        parse_config_file(fallbackFontsXml, fontFamilies, basePath, true, custom);
+     }
+     if (langFallbackFontsDir) {
+         append_fallback_font_families_for_locale(fontFamilies,
+diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.h b/third_party/skia/src/ports/SkFontMgr_android_parser.h
+--- a/third_party/skia/src/ports/SkFontMgr_android_parser.h
++++ b/third_party/skia/src/ports/SkFontMgr_android_parser.h
+@@ -15,6 +15,7 @@
+ #include "include/private/base/SkTArray.h"
+ #include "include/private/base/SkTDArray.h"
+ #include "src/core/SkTHash.h"
++#include "include/ports/SkFontMgr_android.h"
+ 
+ #include <climits>
+ #include <limits>
+@@ -110,6 +111,7 @@ void GetSystemFontFamilies(SkTDArray<FontFamily*>& fontFamilies);
+ /** Parses font configuration files and appends result to fontFamilies. */
+ void GetCustomFontFamilies(SkTDArray<FontFamily*>& fontFamilies,
+                            const SkString& basePath,
++                           const SkFontMgr_Android_CustomFonts* custom,
+                            const char* fontsXml,
+                            const char* fallbackFontsXml,
+                            const char* langFallbackFontsDir = nullptr);
+--
