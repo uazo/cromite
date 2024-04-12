@@ -9,11 +9,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <optional>
 #include "base/allocator/partition_allocator/src/partition_alloc/page_allocator.h"
 #include "base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h"
 #include "base/bits.h"
@@ -253,8 +253,11 @@ void SetFlags(IsolateHolder::ScriptMode mode,
                          "--stress-per-context-marking-worklist",
                          "--no-stress-per-context-marking-worklist");
   SetV8FlagsIfOverridden(
-      features::kV8ProfileGuidedOptimization, "--profile-guided-optimization",
-      "--profile-guided-optimization-for-empty-feedback-vector");
+      features::kV8ProfileGuidedOptimization,
+      "--profile-guided-optimization "
+      "--profile-guided-optimization-for-empty-feedback-vector",
+      "--noprofile-guided-optimization "
+      "--noprofile-guided-optimization-for-empty-feedback-vector");
   SetV8FlagsIfOverridden(features::kV8FlushEmbeddedBlobICache,
                          "--experimental-flush-embedded-blob-icache",
                          "--no-experimental-flush-embedded-blob-icache");
@@ -336,6 +339,8 @@ void SetFlags(IsolateHolder::ScriptMode mode,
           "--efficiency-mode-delay-turbofan=%i",
           delay);
     }
+  } else {
+    SetV8FlagsFormatted("--no-efficiency-mode-for-tiering-heuristics");
   }
 
   if (base::FeatureList::IsEnabled(
@@ -353,6 +358,8 @@ void SetFlags(IsolateHolder::ScriptMode mode,
   bool any_slow_histograms_alias =
       base::FeatureList::IsEnabled(
           features::kV8SlowHistogramsCodeMemoryWriteProtection) ||
+      base::FeatureList::IsEnabled(
+          features::kV8SlowHistogramsIntelJCCErratumMitigation) ||
       base::FeatureList::IsEnabled(features::kV8SlowHistogramsSparkplug) ||
       base::FeatureList::IsEnabled(
           features::kV8SlowHistogramsSparkplugAndroid) ||

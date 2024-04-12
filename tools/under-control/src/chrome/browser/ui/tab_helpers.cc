@@ -30,7 +30,6 @@
 #include "chrome/browser/dips/dips_service.h"
 #include "chrome/browser/external_protocol/external_protocol_observer.h"
 #include "chrome/browser/favicon/favicon_utils.h"
-#include "chrome/browser/feed/web_feed_tab_helper.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
 #include "chrome/browser/file_system_access/file_system_access_tab_helper.h"
@@ -47,7 +46,8 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/optimization_guide/optimization_guide_web_contents_observer.h"
-#include "chrome/browser/optimization_guide/page_content_annotations_service_factory.h"
+#include "chrome/browser/page_content_annotations/page_content_annotations_service_factory.h"
+#include "chrome/browser/page_content_annotations/page_content_annotations_web_contents_observer.h"
 #include "chrome/browser/page_info/about_this_site_tab_helper.h"
 #include "chrome/browser/page_info/page_info_features.h"
 #include "chrome/browser/page_load_metrics/page_load_metrics_initialize.h"
@@ -67,7 +67,6 @@
 #include "chrome/browser/safe_browsing/tailored_security/tailored_security_service_factory.h"
 #include "chrome/browser/safe_browsing/tailored_security/tailored_security_url_observer.h"
 #include "chrome/browser/safe_browsing/trigger_creator.h"
-#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/sessions/session_tab_helper_factory.h"
 #include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
 #include "chrome/browser/ssl/connection_help_tab_helper.h"
@@ -81,12 +80,14 @@
 #include "chrome/browser/sync/sessions/sync_sessions_web_contents_router_factory.h"
 #include "chrome/browser/tab_contents/navigation_metrics_recorder.h"
 #include "chrome/browser/tpcd/heuristics/opener_heuristic_tab_helper.h"
+#include "chrome/browser/tpcd/heuristics/redirect_heuristic_tab_helper.h"
 #include "chrome/browser/tpcd/http_error_observer/http_error_tab_helper.h"
 #include "chrome/browser/tpcd/metadata/devtools_observer.h"
 #include "chrome/browser/tpcd/support/validity_service.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
-#include "chrome/browser/ui/autofill/chrome_autofill_client.h"
+#include "chrome/browser/ui/autofill/autofill_client_provider.h"
+#include "chrome/browser/ui/autofill/autofill_client_provider_factory.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/focus_tab_after_navigation_helper.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
@@ -126,7 +127,6 @@
 #include "components/download/content/factory/navigation_monitor_factory.h"
 #include "components/download/content/public/download_navigation_observer.h"
 #include "components/feed/buildflags.h"
-#include "components/feed/feed_feature_list.h"
 #include "components/history/content/browser/web_contents_top_sites_observer.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -135,7 +135,6 @@
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/offline_pages/buildflags/buildflags.h"
-#include "components/optimization_guide/content/browser/page_content_annotations_web_contents_observer.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/page_info/core/features.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -174,12 +173,12 @@
 #include "chrome/browser/android/policy/policy_auditor_bridge.h"
 #include "chrome/browser/banners/android/chrome_app_banner_manager_android.h"
 #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+#include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
 #include "chrome/browser/fast_checkout/fast_checkout_tab_helper.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/plugins/plugin_observer_android.h"
 #include "chrome/browser/ui/android/context_menu_helper.h"
 #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_android.h"
-#include "components/facilitated_payments/content/browser/content_facilitated_payments_driver_factory.h"
 #include "components/facilitated_payments/core/features/features.h"
 #include "components/webapps/browser/android/app_banner_manager_android.h"
 #include "content/public/common/content_features.h"
@@ -363,13 +362,17 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
                                                    optimization_guide_decider);
     }
   }
-  autofill::ChromeAutofillClient::CreateForWebContents(web_contents);
+  autofill::AutofillClientProvider& autofill_client_provider =
+      autofill::AutofillClientProviderFactory::GetForProfile(profile);
+  autofill_client_provider.CreateClientForWebContents(web_contents);
   if (breadcrumbs::IsEnabled(g_browser_process->local_state())) {
     BreadcrumbManagerTabHelper::CreateForWebContents(web_contents);
   }
   chrome::ChainedBackNavigationTracker::CreateForWebContents(web_contents);
   chrome_browser_net::NetErrorTabHelper::CreateForWebContents(web_contents);
-  ChromePasswordManagerClient::CreateForWebContents(web_contents);
+  if (!autofill_client_provider.uses_platform_autofill()) {
+    ChromePasswordManagerClient::CreateForWebContents(web_contents);
+  }
   ChromePasswordReuseDetectionManagerClient::CreateForWebContents(web_contents);
   CreateSubresourceFilterWebContentsHelper(web_contents);
 #if BUILDFLAG(ENABLE_RLZ)
@@ -419,16 +422,12 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   if (optimization_guide::features::IsOptimizationHintsEnabled()) {
     OptimizationGuideWebContentsObserver::CreateForWebContents(web_contents);
   }
-  optimization_guide::PageContentAnnotationsService*
+  page_content_annotations::PageContentAnnotationsService*
       page_content_annotations_service =
           PageContentAnnotationsServiceFactory::GetForProfile(profile);
   if (page_content_annotations_service) {
-    optimization_guide::PageContentAnnotationsWebContentsObserver::
-        CreateForWebContents(
-            web_contents, page_content_annotations_service,
-            TemplateURLServiceFactory::GetForProfile(profile),
-            prerender::NoStatePrefetchManagerFactory::GetForBrowserContext(
-                profile));
+    page_content_annotations::PageContentAnnotationsWebContentsObserver::
+        CreateForWebContents(web_contents);
 
 #if BUILDFLAG(IS_ANDROID)
     // If enabled, save sensitivity data for each non-incognito non-custom
@@ -441,7 +440,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
         SensitivityPersistedTabDataAndroid::From(
             tab,
             base::BindOnce(
-                [](optimization_guide::PageContentAnnotationsService*
+                [](page_content_annotations::PageContentAnnotationsService*
                        page_content_annotations_service,
                    PersistedTabDataAndroid* persisted_tab_data) {
                   auto* sensitivity_persisted_tab_data_android =
@@ -475,6 +474,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   PrefsTabHelper::CreateForWebContents(web_contents);
   prerender::NoStatePrefetchTabHelper::CreateForWebContents(web_contents);
   RecentlyAudibleHelper::CreateForWebContents(web_contents);
+  RedirectHeuristicTabHelper::CreateForWebContents(web_contents);
 #if BUILDFLAG(IS_ANDROID)
   RequestDesktopSiteWebContentsObserverAndroid::CreateForWebContents(
       web_contents);
@@ -564,8 +564,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
           payments::facilitated::kEnablePixDetection)) {
     if (auto* optimization_guide_decider =
             OptimizationGuideKeyedServiceFactory::GetForProfile(profile)) {
-      payments::facilitated::ContentFacilitatedPaymentsDriverFactory::
-          CreateForWebContents(web_contents, optimization_guide_decider);
+      ChromeFacilitatedPaymentsClient::CreateForWebContents(
+          web_contents, optimization_guide_decider);
     }
   }
 #else  // BUILDFLAG(IS_ANDROID)
@@ -606,10 +606,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
         CreateForWebContents(web_contents);
   }
   MemorySaverChipTabHelper::CreateForWebContents(web_contents);
-  if (base::FeatureList::IsEnabled(
-          performance_manager::features::kMemoryUsageInHovercards)) {
-    TabResourceUsageTabHelper::CreateForWebContents(web_contents);
-  }
+  TabResourceUsageTabHelper::CreateForWebContents(web_contents);
   if (base::FeatureList::IsEnabled(features::kTabHoverCardImages) ||
       base::FeatureList::IsEnabled(features::kWebUITabStrip)) {
     ThumbnailTabHelper::CreateForWebContents(web_contents);
@@ -786,12 +783,6 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
     SupervisedUserNavigationObserver::CreateForWebContents(web_contents);
   }
 #endif
-
-#if BUILDFLAG(ENABLE_FEED_V2)
-  if (base::FeatureList::IsEnabled(feed::kWebUiFeed)) {
-    feed::WebFeedTabHelper::CreateForWebContents(web_contents);
-  }
-#endif  // BUILDFLAG(ENABLE_FEED_V2)
 
   // --- Section 4: The warning ---
 

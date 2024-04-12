@@ -44,6 +44,8 @@
 #include "chrome/browser/downgrade/user_data_downgrade.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
+#include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
+#include "chrome/browser/file_system_access/file_system_access_permission_context_factory.h"
 #include "chrome/browser/heavy_ad_intervention/heavy_ad_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/web_history_service_factory.h"
@@ -77,8 +79,8 @@
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
-#include "chrome/browser/web_data_service_factory.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
+#include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/url_constants.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
@@ -715,6 +717,16 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
 
     browsing_data::RemoveSiteSettingsData(delete_begin, delete_end,
                                           host_content_settings_map_);
+
+#if !BUILDFLAG(IS_ANDROID)
+    // The active permission does not have timestamps, so the all active grants
+    // will be revoked regardless of the time range because all the are expected
+    // to be recent.
+    if (auto* permission_context =
+            FileSystemAccessPermissionContextFactory::GetForProfile(profile_)) {
+      permission_context->RevokeAllActiveGrants();
+    }
+#endif
 
     auto* handler_registry =
         ProtocolHandlerRegistryFactory::GetForBrowserContext(profile_);
@@ -1455,8 +1467,6 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "Synchronous";
     case TracingDataType::kHistory:
       return "History";
-    case TracingDataType::kHostNameResolution:
-      return "HostNameResolution";
     case TracingDataType::kNaclCache:
       return "NaclCache";
     case TracingDataType::kPnaclCache:
@@ -1465,8 +1475,6 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "AutofillData";
     case TracingDataType::kAutofillOrigins:
       return "AutofillOrigins";
-    case TracingDataType::kPluginData:
-      return "PluginData";
     case TracingDataType::kDomainReliability:
       return "DomainReliability";
     case TracingDataType::kWebrtcLogs:
@@ -1485,20 +1493,12 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "DisableAutoSigninForAccountPasswords";
     case TracingDataType::kPasswordsStatistics:
       return "PasswordsStatistics";
-    case TracingDataType::kKeywordsModel:
-      return "KeywordsModel";
     case TracingDataType::kReportingCache:
       return "ReportingCache";
     case TracingDataType::kNetworkErrorLogging:
       return "NetworkErrorLogging";
-    case TracingDataType::kFlashDeauthorization:
-      return "FlashDeauthorization";
     case TracingDataType::kOfflinePages:
       return "OfflinePages";
-    case TracingDataType::kExploreSites:
-      return "ExploreSites";
-    case TracingDataType::kLegacyStrikes:
-      return "LegacyStrikes";
     case TracingDataType::kWebrtcEventLogs:
       return "WebrtcEventLogs";
     case TracingDataType::kCdmLicenses:
@@ -1507,20 +1507,12 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "HostCache";
     case TracingDataType::kTpmAttestationKeys:
       return "TpmAttestationKeys";
-    case TracingDataType::kStrikes:
-      return "Strikes";
-    case TracingDataType::kCompromisedCredentials:
-      return "CompromisedCredentials";
     case TracingDataType::kUserDataSnapshot:
       return "UserDataSnapshot";
-    case TracingDataType::kMediaFeeds:
-      return "MediaFeeds";
     case TracingDataType::kAccountPasswords:
       return "AccountPasswords";
     case TracingDataType::kAccountPasswordsSynced:
       return "AccountPasswordsSynced";
-    case TracingDataType::kAccountCompromisedCredentials:
-      return "AccountCompromisedCredentials";
     case TracingDataType::kFaviconCacheExpiration:
       return "FaviconCacheExpiration";
     case TracingDataType::kSecurePaymentConfirmationCredentials:
