@@ -20,6 +20,7 @@
 #include "base/bits.h"
 #include "base/check.h"
 #include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/debug/alias.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
@@ -64,7 +65,12 @@ std::optional<gin::V8SnapshotFileType> g_snapshot_file_type;
 #endif
 
 bool GenerateEntropy(unsigned char* buffer, size_t amount) {
-  base::RandBytes(buffer, amount);
+  base::RandBytes(
+      // SAFETY: This depends on callers providing a valid pointer/size pair.
+      //
+      // TODO(crbug.com/338574383): The signature is fixed as it's a callback
+      // from v8, but maybe v8 can use a span.
+      UNSAFE_BUFFERS(base::span(buffer, amount)));
   return true;
 }
 
@@ -283,6 +289,12 @@ void SetFlags(IsolateHolder::ScriptMode mode,
     SetV8FlagsFormatted("--memory-reducer-gc-count=%i",
                         features::kV8MemoryReducerGCCount.Get());
   }
+  SetV8FlagsIfOverridden(features::kV8IdleGcOnContextDisposal,
+                         "--idle-gc-on-context-disposal",
+                         "--no-idle-gc-on-context-disposal");
+  SetV8FlagsIfOverridden(features::kV8GCOptimizeSweepForMutator,
+                         "--cppheap-optimize-sweep-for-mutator",
+                         "--no-cppheap-optimize-sweep-for-mutator");
   SetV8FlagsIfOverridden(features::kV8MinorMS, "--minor-ms", "--no-minor-ms");
   SetV8FlagsIfOverridden(features::kV8Sparkplug, "--sparkplug",
                          "--no-sparkplug");
@@ -386,14 +398,6 @@ void SetFlags(IsolateHolder::ScriptMode mode,
                          "--no-intel-jcc-erratum-mitigation");
 
   // JavaScript language features.
-  if (base::FeatureList::IsEnabled(features::kJavaScriptRabGsab)) {
-    SetV8Flags("--harmony-rab-gsab");
-  } else {
-    SetV8Flags("--no-harmony-rab-gsab");
-  }
-  SetV8FlagsIfOverridden(features::kJavaScriptArrayBufferTransfer,
-                         "--harmony-rab-gsab-transfer",
-                         "--no-harmony-rab-gsab-transfer");
   SetV8FlagsIfOverridden(features::kJavaScriptIteratorHelpers,
                          "--harmony-iterator-helpers",
                          "--no-harmony-iterator-helpers");
@@ -437,6 +441,8 @@ void SetFlags(IsolateHolder::ScriptMode mode,
   SetV8FlagsIfOverridden(features::kWebAssemblyInlining,
                          "--experimental-wasm-inlining",
                          "--no-experimental-wasm-inlining");
+  SetV8FlagsIfOverridden(features::kWebAssemblyLiftoffCodeFlushing,
+                         "--flush-liftoff-code", "--no-flush-liftoff-code");
   SetV8FlagsIfOverridden(features::kWebAssemblyGenericWrapper,
                          "--wasm-to-js-generic-wrapper",
                          "--no-wasm-to-js-generic-wrapper");
@@ -579,7 +585,7 @@ void V8Initializer::GetV8ExternalSnapshotData(const char** snapshot_data_out,
 // static
 void V8Initializer::LoadV8Snapshot(V8SnapshotFileType snapshot_file_type) {
   if (g_mapped_snapshot) {
-    // TODO(crbug.com/802962): Confirm not loading different type of snapshot
+    // TODO(crbug.com/40558459): Confirm not loading different type of snapshot
     // files in a process.
     return;
   }

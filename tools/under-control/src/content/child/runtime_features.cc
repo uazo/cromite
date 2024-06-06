@@ -156,7 +156,7 @@ void SetRuntimeFeatureFromChromiumFeature(const base::Feature& chromium_feature,
   using FeatureList = base::FeatureList;
   const bool feature_enabled = FeatureList::IsEnabled(chromium_feature);
   const bool is_overridden =
-      FeatureList::GetInstance()->IsFeatureOverridden(chromium_feature.name);
+      FeatureList::GetStateIfOverridden(chromium_feature).has_value();
   switch (option) {
     case kSetOnlyIfOverridden:
       if (is_overridden) {
@@ -194,8 +194,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kUseAXPositionForDocumentMarkers)},
           {wf::EnableAOMAriaRelationshipProperties,
            raw_ref(features::kEnableAriaElementReflection)},
-          {wf::EnableAutoplayIgnoresWebAudio,
-           raw_ref(media::kAutoplayIgnoreWebAudio)},
           {wf::EnableBackgroundFetch, raw_ref(features::kBackgroundFetch)},
           {wf::EnableBoundaryEventDispatchTracksNodeRemoval,
            raw_ref(blink::features::kBoundaryEventDispatchTracksNodeRemoval)},
@@ -205,8 +203,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kBrowserVerifiedUserActivationMouse)},
           {wf::EnableCompositeBGColorAnimation,
            raw_ref(features::kCompositeBGColorAnimation)},
-          {wf::EnableConsolidatedMovementXY,
-           raw_ref(features::kConsolidatedMovementXY)},
           {wf::EnableCooperativeScheduling,
            raw_ref(features::kCooperativeScheduling)},
           {wf::EnableDigitalGoods, raw_ref(features::kDigitalGoodsApi),
@@ -230,22 +226,21 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
           {wf::EnableSharedStorageAPI,
-           raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
-           kSetOnlyIfOverridden},
+           raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
           {wf::EnableSharedStorageAPIM118,
            raw_ref(blink::features::kSharedStorageAPIM118), kDefault},
           {wf::EnableSharedStorageAPIM125,
            raw_ref(blink::features::kSharedStorageAPIM125), kDefault},
           {wf::EnableFedCmMultipleIdentityProviders,
-           raw_ref(features::kFedCmMultipleIdentityProviders), kDefault},
+           raw_ref(features::kFedCmMultipleIdentityProviders),
+           kSetOnlyIfOverridden},
           {wf::EnableFedCmSelectiveDisclosure,
            raw_ref(features::kFedCmSelectiveDisclosure), kDefault},
           {wf::EnableFencedFrames,
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
           {wf::EnableFencedFrames,
-           raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
-           kSetOnlyIfOverridden},
+           raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
           {wf::EnableForcedColors, raw_ref(features::kForcedColors)},
           {wf::EnableFractionalScrollOffsets,
            raw_ref(features::kFractionalScrollOffsets)},
@@ -296,8 +291,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kTouchDragAndContextMenu)},
           {wf::EnableUserActivationSameOriginVisibility,
            raw_ref(features::kUserActivationSameOriginVisibility)},
-          {wf::EnableVideoPlaybackQuality,
-           raw_ref(features::kVideoPlaybackQuality)},
           {wf::EnableWebBluetooth, raw_ref(features::kWebBluetooth),
            kSetOnlyIfOverridden},
           {wf::EnableWebBluetoothGetDevices,
@@ -348,8 +341,9 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
         *mapping.chromium_feature, mapping.option, mapping.feature_enabler);
   }
 
-  // TODO(crbug/832393): Cleanup the inconsistency between custom WRF enabler
-  // function and using feature string name with EnableFeatureFromString.
+  // TODO(crbug.com/40571563): Cleanup the inconsistency between custom WRF
+  // enabler function and using feature string name with
+  // EnableFeatureFromString.
   const RuntimeFeatureToChromiumFeatureMap<const char*>
       runtimeFeatureNameToChromiumFeatureMapping[] = {
           {"AllowContentInitiatedDataUrlNavigations",
@@ -359,14 +353,12 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
           {"AllowURNsInIframes",
-           raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
-           kSetOnlyIfOverridden},
+           raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
           {"AttributionReporting",
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
           {"AttributionReporting",
-           raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
-           kSetOnlyIfOverridden},
+           raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
           {"AttributionReportingCrossAppWeb",
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
@@ -388,7 +380,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            kSetOnlyIfOverridden},
           {"DocumentPolicyIncludeJSCallStacksInCrashReports",
            raw_ref(blink::features::
-                       kDocumentPolicyIncludeJSCallStacksInCrashReports)},
+                       kDocumentPolicyIncludeJSCallStacksInCrashReports),
+           kSetOnlyIfOverridden},
           {"FencedFramesLocalUnpartitionedDataAccess",
            raw_ref(blink::features::kFencedFramesLocalUnpartitionedDataAccess)},
           {"Fledge", raw_ref(blink::features::kFledge), kSetOnlyIfOverridden},
@@ -409,14 +402,12 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {"SerialPortConnected", raw_ref(features::kSerialPortConnected)},
           {"TopicsAPI", raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
-          {"TopicsAPI", raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
-           kSetOnlyIfOverridden},
+          {"TopicsAPI", raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
           {"TopicsDocumentAPI",
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
           {"TopicsDocumentAPI",
-           raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
-           kSetOnlyIfOverridden},
+           raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
           {"TouchTextEditingRedesign",
            raw_ref(features::kTouchTextEditingRedesign)},
           {"TrustedTypesFromLiteral",
@@ -427,8 +418,7 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kMediaStreamTrackTransfer)},
           {"PrivateNetworkAccessPermissionPrompt",
            raw_ref(network::features::kPrivateNetworkAccessPermissionPrompt),
-           kSetOnlyIfOverridden},
-          {"PermissionElement", raw_ref(features::kPermissionElement)}};
+           kSetOnlyIfOverridden}};
   for (const auto& mapping : runtimeFeatureNameToChromiumFeatureMapping) {
     SetRuntimeFeatureFromChromiumFeature(
         *mapping.chromium_feature, mapping.option, [&mapping](bool enabled) {
@@ -731,6 +721,16 @@ void ResolveInvalidConfigurations() {
                 kAlwaysAllowFledgeDeprecatedRenderURLReplacements)) {
       WebRuntimeFeatures::EnableFledgeDeprecatedRenderURLReplacements(false);
     }
+  }
+
+  // PermissionElement cannot be enabled without the support of the
+  // browser process.
+  if (!base::FeatureList::IsEnabled(blink::features::kPermissionElement)) {
+    LOG_IF(WARNING, WebRuntimeFeatures::IsPermissionElementEnabled())
+        << "PermissionElement cannot be enabled in this configuration. Use --"
+        << switches::kEnableFeatures << "="
+        << blink::features::kPermissionElement.name << " instead.";
+    WebRuntimeFeatures::EnablePermissionElement(false);
   }
 }
 

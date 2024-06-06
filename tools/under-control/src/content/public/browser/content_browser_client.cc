@@ -9,11 +9,13 @@
 #include <utility>
 
 #include "base/check.h"
+#include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool/thread_pool_instance.h"
 #include "base/values.h"
@@ -583,7 +585,8 @@ bool ContentBrowserClient::IsSharedStorageAllowed(
     content::RenderFrameHost* rfh,
     const url::Origin& top_frame_origin,
     const url::Origin& accessing_origin,
-    std::string* out_debug_message) {
+    std::string* out_debug_message,
+    bool* out_block_is_site_setting_specific) {
   return false;
 }
 
@@ -591,14 +594,16 @@ bool ContentBrowserClient::IsSharedStorageSelectURLAllowed(
     content::BrowserContext* browser_context,
     const url::Origin& top_frame_origin,
     const url::Origin& accessing_origin,
-    std::string* out_debug_message) {
+    std::string* out_debug_message,
+    bool* out_block_is_site_setting_specific) {
   return false;
 }
 
 bool ContentBrowserClient::IsPrivateAggregationAllowed(
     content::BrowserContext* browser_context,
     const url::Origin& top_frame_origin,
-    const url::Origin& reporting_origin) {
+    const url::Origin& reporting_origin,
+    bool* out_block_is_site_setting_specific) {
   return true;
 }
 
@@ -943,6 +948,11 @@ std::wstring ContentBrowserClient::GetAppContainerSidForSandboxType(
       L"924012148-129201922");
 }
 
+std::string ContentBrowserClient::GetAppContainerId() {
+  return base::WideToUTF8(
+      base::CommandLine::ForCurrentProcess()->GetProgram().value());
+}
+
 bool ContentBrowserClient::IsRendererAppContainerDisabled() {
   return false;
 }
@@ -959,7 +969,7 @@ bool ContentBrowserClient::IsRendererCodeIntegrityEnabled() {
 }
 
 bool ContentBrowserClient::ShouldEnableAudioProcessHighPriority() {
-  // TODO(crbug.com/1374069): Delete this method when the
+  // TODO(crbug.com/40242320): Delete this method when the
   // kAudioProcessHighPriorityEnabled enterprise policy is deprecated.
   return false;
 }
@@ -1462,6 +1472,10 @@ bool ContentBrowserClient::ShouldServiceWorkerInheritPolicyContainerFromCreator(
   return url.SchemeIsLocal();
 }
 
+void ContentBrowserClient::GrantAdditionalRequestPrivilegesToWorkerProcess(
+    int child_id,
+    const GURL& script_url) {}
+
 ContentBrowserClient::PrivateNetworkRequestPolicyOverride
 ContentBrowserClient::ShouldOverridePrivateNetworkRequestPolicy(
     BrowserContext* browser_context,
@@ -1511,6 +1525,7 @@ ContentBrowserClient::CreateIdentityRequestDialogController(
 void ContentBrowserClient::ShowDigitalIdentityInterstitialIfNeeded(
     WebContents& web_contents,
     const url::Origin& origin,
+    bool is_only_requesting_age,
     DigitalIdentityInterstitialCallback callback) {
   std::move(callback).Run(
       DigitalIdentityProvider::RequestStatusForMetrics::kErrorOther);

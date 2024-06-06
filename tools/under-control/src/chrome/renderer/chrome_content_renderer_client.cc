@@ -560,14 +560,13 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   // This doesn't work in single-process mode.
   if (!base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kSingleProcess)) {
-    using HeapProfilerController = heap_profiling::HeapProfilerController;
+    const auto* heap_profiler_controller =
+        heap_profiling::HeapProfilerController::GetInstance();
     // The HeapProfilerController should have been created in
     // ChromeMainDelegate::PostEarlyInitialization.
-    DCHECK_NE(HeapProfilerController::GetProfilingEnabled(),
-              HeapProfilerController::ProfilingEnabled::kNoController);
+    CHECK(heap_profiler_controller);
     if (ThreadProfiler::ShouldCollectProfilesForChildProcess() ||
-        HeapProfilerController::GetProfilingEnabled() ==
-            HeapProfilerController::ProfilingEnabled::kEnabled) {
+        heap_profiler_controller->IsEnabled()) {
       ThreadProfiler::SetMainThreadTaskRunner(
           base::SingleThreadTaskRunner::GetCurrentDefault());
       mojo::PendingRemote<metrics::mojom::CallStackProfileCollector> collector;
@@ -1218,7 +1217,7 @@ GURL ChromeContentRendererClient::GetNaClContentHandlerURL(
 void ChromeContentRendererClient::GetInterface(
     const std::string& interface_name,
     mojo::ScopedMessagePipeHandle interface_pipe) {
-  // TODO(crbug.com/977637): Get rid of the use of this implementation of
+  // TODO(crbug.com/40633267): Get rid of the use of this implementation of
   // |service_manager::LocalInterfaceProvider|. This was done only to avoid
   // churning spellcheck code while eliminting the "chrome" and
   // "chrome_renderer" services. Spellcheck is (and should remain) the only
@@ -1827,7 +1826,7 @@ void ChromeContentRendererClient::AppendContentSecurityPolicy(
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #if BUILDFLAG(ENABLE_PDF)
   // Don't apply default CSP to PDF renderers.
-  // TODO(crbug.com/1252096): Lock down the CSP once style and script are no
+  // TODO(crbug.com/40792950): Lock down the CSP once style and script are no
   // longer injected inline by `pdf::PluginResponseWriter`. That class may be a
   // better place to define such CSP, or we may continue doing so here.
   if (pdf::IsPdfRenderer())

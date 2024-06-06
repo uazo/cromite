@@ -607,7 +607,7 @@ NetworkContext::NetworkContext(
       app_status_listeners_.push_back(
           std::make_unique<NetworkContextApplicationStatusListener>());
 #endif  // BUILDFLAG(IS_ANDROID)
-      // TODO(crbug.com/1413922): Set `file_operations_factory` to support
+      // TODO(crbug.com/40255884): Set `file_operations_factory` to support
       // sandboxed network service on Android.
       shared_dictionary_manager_ = SharedDictionaryManager::CreateOnDisk(
           params_->file_paths->shared_dictionary_directory->path().Append(
@@ -860,7 +860,7 @@ void NetworkContext::CreateURLLoaderFactory(
 
 void NetworkContext::CreateURLLoaderFactoryForCertNetFetcher(
     mojo::PendingReceiver<mojom::URLLoaderFactory> factory_receiver) {
-  // TODO(crbug.com/1087790): investigate changing these params.
+  // TODO(crbug.com/40695068): investigate changing these params.
   auto url_loader_factory_params = mojom::URLLoaderFactoryParams::New();
   url_loader_factory_params->is_trusted = true;
   url_loader_factory_params->process_id = mojom::kBrowserProcessId;
@@ -1569,7 +1569,7 @@ int NetworkContext::CheckCTRequirementsForSignedExchange(
       // For old certificates (issued before 2018-05-01),
       // CheckCTRequirements() may return CT_NOT_REQUIRED, so we check the
       // compliance status here.
-      // TODO(https://crbug.com/851778): Remove this condition once we require
+      // TODO(crbug.com/40580363): Remove this condition once we require
       // signing certificates to have CanSignHttpExchanges extension, because
       // such certificates should be naturally after 2018-05-01.
       if (cert_verify_result.policy_compliance ==
@@ -1794,7 +1794,7 @@ void NetworkContext::CreateHostResolver(
     // with the specified configuration overrides. Because we are using a non-
     // standard resolver, disable the cache.
     //
-    // TODO(crbug.com/846423): Consider allowing per-resolve overrides, so the
+    // TODO(crbug.com/40577881): Consider allowing per-resolve overrides, so the
     // same net::HostResolver with the same scheduler and cache can be used with
     // different overrides.  But since this is only used for special cases for
     // now, much easier to create entirely separate net::HostResolver instances.
@@ -2224,7 +2224,7 @@ void NetworkContext::LookupProxyAuthCredentials(
       url_request_context_->http_transaction_factory()
           ->GetSession()
           ->http_auth_cache();
-  // TODO(https://crbug.com/1103768): Mapping proxy addresses to URLs is a
+  // TODO(crbug.com/40704785): Mapping proxy addresses to URLs is a
   // lossy conversion, shouldn't do this.
   const char* scheme =
       proxy_server.is_secure_http_like() ? "https://" : "http://";
@@ -2257,6 +2257,16 @@ NetworkServiceMemoryCache* NetworkContext::GetMemoryCache() {
 
 size_t NetworkContext::NumOpenWebTransports() const {
   return base::ranges::count(web_transports_, false, &WebTransport::torn_down);
+}
+
+bool NetworkContext::AllURLLoaderFactoriesAreBoundToNetworkForTesting(
+    net::handles::NetworkHandle target_network) const {
+  for (const auto& factory : url_loader_factories_) {
+    if (factory->GetBoundNetworkForTesting() != target_network) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void NetworkContext::OnHttpAuthDynamicParamsChanged(
@@ -2328,7 +2338,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
     DCHECK(params_->cert_verifier_params);
     // base::Unretained() is safe below because |this| will own
     // |cert_verifier|.
-    // TODO(https://crbug.com/1085233): this cert verifier should deal with
+    // TODO(crbug.com/40693524): this cert verifier should deal with
     // disconnections if the CertVerifierService is run outside of the browser
     // process.
     cert_verifier = std::make_unique<cert_verifier::MojoCertVerifier>(
@@ -2347,7 +2357,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
             std::move(cert_verifier)));
 
 #if BUILDFLAG(IS_CHROMEOS)
-    // TODO(https://crbug.com/1477317): The TrustAnchorUsed callback should
+    // TODO(crbug.com/40928765): The TrustAnchorUsed callback should
     // work on all platforms. (Also consider whether this wrapper is the best
     // way to handle this or if it should be refactored.)
     cert_verifier_with_trust_anchors_ =
@@ -2709,8 +2719,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
 
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
   if (params_->device_bound_sessions_enabled) {
-    builder.set_device_bound_session_service(
-        net::DeviceBoundSessionService::Create());
+    builder.set_has_device_bound_session_service(true);
   }
 #endif
 
@@ -3078,9 +3087,7 @@ void NetworkContext::RevokeNetworkForNonces(
     network_revocation_nonces_.insert(nonce);
     const std::set<GURL>& exemptions = network_revocation_exemptions_[nonce];
     for (const auto& factory : url_loader_factories_) {
-      for (const auto& loader : factory->url_loaders()) {
-        loader->CancelRequestIfNonceMatchesAndUrlNotExempted(nonce, exemptions);
-      }
+      factory->CancelRequestsIfNonceMatchesAndUrlNotExempted(nonce, exemptions);
     }
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
     if (websocket_factory_) {
@@ -3088,7 +3095,10 @@ void NetworkContext::RevokeNetworkForNonces(
     }
 #endif  // BUILDFLAG(ENABLE_WEBSOCKETS)
   }
-  std::move(callback).Run();
+
+  if (callback) {
+    std::move(callback).Run();
+  }
 }
 
 void NetworkContext::ExemptUrlFromNetworkRevocationForNonce(

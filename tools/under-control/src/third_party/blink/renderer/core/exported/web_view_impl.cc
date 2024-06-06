@@ -614,7 +614,7 @@ WebViewImpl::WebViewImpl(
   SetVisibilityState(visibility, /*is_initial_state=*/true);
   page_->SetIsPrerendering(is_prerendering);
 
-  // TODO(crbug.com/1498140): Remove the in_inside_portal parameter.
+  // TODO(crbug.com/40287334): Remove the is_inside_portal parameter.
 
   if (fenced_frame_mode && features::IsFencedFramesEnabled()) {
     page_->SetIsMainFrameFencedFrameRoot();
@@ -1642,9 +1642,6 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
 
   settings->SetSelectionIncludesAltImageText(true);
 
-  RuntimeEnabledFeatures::SetFakeNoAllocDirectCallForTestingEnabled(
-      prefs.fake_no_alloc_direct_call_for_testing_enabled);
-
   settings->SetV8CacheOptions(prefs.v8_cache_options);
 
   settings->SetImageAnimationPolicy(prefs.animation_policy);
@@ -1792,8 +1789,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
 
   settings->SetLazyLoadEnabled(prefs.lazy_load_enabled);
   settings->SetInForcedColors(prefs.in_forced_colors);
-  settings->SetBrowserPreferredColorScheme(
-      prefs.browser_preferred_color_scheme);
+  settings->SetPreferredRootScrollbarColorScheme(
+      prefs.preferred_root_scrollbar_color_scheme);
   settings->SetPreferredColorScheme(prefs.preferred_color_scheme);
   settings->SetPreferredContrast(prefs.preferred_contrast);
 
@@ -2577,8 +2574,12 @@ void WebViewImpl::SetPageLifecycleStateInternal(
 
   if (RuntimeEnabledFeatures::PageRevealEventEnabled()) {
     if (restoring_from_bfcache) {
-      if (auto* main_frame = DynamicTo<LocalFrame>(GetPage()->MainFrame())) {
-        main_frame->GetDocument()->EnqueuePageRevealEvent();
+      for (Frame* frame = GetPage()->MainFrame(); frame;
+           frame = frame->Tree().TraverseNext()) {
+        if (auto* local_frame = DynamicTo<LocalFrame>(frame)) {
+          CHECK(local_frame->GetDocument());
+          local_frame->GetDocument()->EnqueuePageRevealEvent();
+        }
       }
     }
   }
