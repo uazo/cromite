@@ -23,6 +23,7 @@
 #include "chrome/browser/media/media_engagement_score_details.mojom.h"
 #include "chrome/browser/model_execution/model_manager_impl.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor.h"
+#include "chrome/browser/on_device_translation/translation_manager_impl.h"
 #include "chrome/browser/optimization_guide/optimization_guide_internals_ui.h"
 #include "chrome/browser/password_manager/chrome_password_manager_client.h"
 #include "chrome/browser/predictors/lcp_critical_path_predictor/lcp_critical_path_predictor_host.h"
@@ -103,9 +104,11 @@
 #include "services/image_annotation/public/mojom/image_annotation.mojom.h"
 #include "services/screen_ai/buildflags/buildflags.h"
 #include "third_party/blink/public/common/features.h"
+#include "third_party/blink/public/common/features_generated.h"
 #include "third_party/blink/public/mojom/credentialmanagement/credential_manager.mojom.h"
 #include "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom.h"
 #include "third_party/blink/public/mojom/loader/navigation_predictor.mojom.h"
+#include "third_party/blink/public/mojom/on_device_translation/translation_manager.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_credential.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
 #include "third_party/blink/public/mojom/prerender/prerender.mojom.h"
@@ -134,8 +137,7 @@
 #include "chrome/browser/ui/webui/connectors_internals/connectors_internals_ui.h"
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/ui/webui/app_settings/web_app_settings_ui.h"
 #include "ui/webui/resources/cr_components/app_management/app_management.mojom.h"
 #endif
@@ -175,14 +177,14 @@
 #if !defined(OFFICIAL_BUILD)
 #include "chrome/browser/ui/webui/new_tab_page/foo/foo.mojom.h"  // nogncheck crbug.com/1125897
 #endif
+#include "chrome/browser/ui/lens/lens_untrusted_ui.h"
+#include "chrome/browser/ui/lens/search_bubble_ui.h"
 #include "chrome/browser/ui/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/webui/commerce/product_specifications_ui.h"
 #include "chrome/browser/ui/webui/commerce/shopping_insights_side_panel_ui.h"
 #include "chrome/browser/ui/webui/hats/hats_ui.h"
 #include "chrome/browser/ui/webui/history/history_ui.h"
 #include "chrome/browser/ui/webui/internals/user_education/user_education_internals.mojom.h"
-#include "chrome/browser/ui/webui/lens/lens_untrusted_ui.h"
-#include "chrome/browser/ui/webui/lens/search_bubble_ui.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 #include "chrome/browser/ui/webui/new_tab_page_third_party/new_tab_page_third_party_ui.h"
@@ -359,6 +361,7 @@
 #include "chrome/browser/ui/webui/ash/set_time_ui.h"
 #include "chrome/browser/ui/webui/ash/settings/os_settings_ui.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/apps/mojom/app_notification_handler.mojom.h"
+#include "chrome/browser/ui/webui/ash/settings/pages/apps/mojom/app_parental_controls_handler.mojom.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/device/display_settings/display_settings_provider.mojom.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/device/input_device_settings/input_device_settings_provider.mojom.h"
 #include "chrome/browser/ui/webui/ash/settings/pages/files/mojom/google_drive_handler.mojom.h"
@@ -382,6 +385,7 @@
 #include "chromeos/ash/services/cellular_setup/public/mojom/esim_manager.mojom.h"
 #include "chromeos/ash/services/connectivity/public/mojom/passpoint.mojom.h"
 #include "chromeos/ash/services/hotspot_config/public/mojom/cros_hotspot_config.mojom.h"
+#include "chromeos/ash/services/ime/public/mojom/input_method_user_data.mojom.h"
 #include "chromeos/ash/services/multidevice_setup/multidevice_setup_service.h"
 #include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
 #include "chromeos/ash/services/nearby/public/mojom/nearby_share_settings.mojom.h"  // nogncheck crbug.com/1125897
@@ -1084,6 +1088,11 @@ void PopulateChromeFrameBinders(
   map->Add<blink::mojom::WebPrintingService>(
       base::BindRepeating(&printing::CreateWebPrintingServiceForFrame));
 #endif
+
+  if (base::FeatureList::IsEnabled(blink::features::kEnableTranslationAPI)) {
+    map->Add<blink::mojom::TranslationManager>(
+        base::BindRepeating(&TranslationManagerImpl::Create));
+  }
 }
 
 void PopulateChromeWebUIFrameBinders(
@@ -1139,8 +1148,7 @@ void PopulateChromeWebUIFrameBinders(
                                          policy::DlpInternalsUI>(map);
 #endif
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_FUCHSIA)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
   RegisterWebUIControllerInterfaceBinder<
       app_management::mojom::PageHandlerFactory, WebAppSettingsUI>(map);
 #endif
@@ -1163,6 +1171,9 @@ void PopulateChromeWebUIFrameBinders(
   if (lens::features::IsLensOverlayEnabled()) {
     RegisterWebUIControllerInterfaceBinder<lens::mojom::LensPageHandlerFactory,
                                            lens::LensUntrustedUI>(map);
+  }
+
+  if (lens::features::IsLensOverlaySearchBubbleEnabled()) {
     RegisterWebUIControllerInterfaceBinder<
         lens::mojom::SearchBubblePageHandlerFactory, lens::SearchBubbleUI>(map);
   }
@@ -1185,6 +1196,7 @@ void PopulateChromeWebUIFrameBinders(
       ash::EmojiUI, ash::RemoteMaintenanceCurtainUI,
       ash::app_install::AppInstallDialogUI,
       ash::printing::print_preview::PrintPreviewCrosUI,
+      ash::extended_updates::ExtendedUpdatesUI,
 #endif
       NewTabPageUI, OmniboxPopupUI, BookmarksSidePanelUI, CustomizeChromeUI,
       InternalsUI, ReadingListUI, TabSearchUI, WebuiGalleryUI,
@@ -1270,7 +1282,7 @@ void PopulateChromeWebUIFrameBinders(
       map);
 #endif  // !defined(OFFICIAL_BUILD)
 
-  if (IsCartModuleEnabled() && customize_chrome::IsSidePanelEnabled()) {
+  if (IsCartModuleEnabled()) {
     RegisterWebUIControllerInterfaceBinder<chrome_cart::mojom::CartHandler,
                                            NewTabPageUI, CustomizeChromeUI>(
         map);
@@ -1340,7 +1352,7 @@ void PopulateChromeWebUIFrameBinders(
   RegisterWebUIControllerInterfaceBinder<
       shopping_service::mojom::ShoppingServiceHandlerFactory,
       BookmarksSidePanelUI, commerce::ProductSpecificationsUI,
-      ShoppingInsightsSidePanelUI>(map);
+      ShoppingInsightsSidePanelUI, HistoryUI>(map);
 
   if (base::FeatureList::IsEnabled(
           performance_manager::features::kPerformanceControlsSidePanel)) {
@@ -1349,19 +1361,23 @@ void PopulateChromeWebUIFrameBinders(
         PerformanceSidePanelUI>(map);
   }
 
-  if (customize_chrome::IsSidePanelEnabled()) {
-    RegisterWebUIControllerInterfaceBinder<
-        side_panel::mojom::CustomizeChromePageHandlerFactory,
-        CustomizeChromeUI>(map);
+  RegisterWebUIControllerInterfaceBinder<
+      side_panel::mojom::CustomizeChromePageHandlerFactory, CustomizeChromeUI>(
+      map);
 
-    if (base::FeatureList::IsEnabled(
-            ntp_features::kCustomizeChromeWallpaperSearch) &&
-        base::FeatureList::IsEnabled(
-            optimization_guide::features::kOptimizationGuideModelExecution)) {
-      RegisterWebUIControllerInterfaceBinder<
-          side_panel::customize_chrome::mojom::WallpaperSearchHandlerFactory,
-          CustomizeChromeUI>(map);
-    }
+  if (base::FeatureList::IsEnabled(
+          ntp_features::kCustomizeChromeWallpaperSearch) &&
+      base::FeatureList::IsEnabled(
+          optimization_guide::features::kOptimizationGuideModelExecution)) {
+    RegisterWebUIControllerInterfaceBinder<
+        side_panel::customize_chrome::mojom::WallpaperSearchHandlerFactory,
+        CustomizeChromeUI>(map);
+  }
+
+  if (features::IsToolbarPinningEnabled()) {
+    RegisterWebUIControllerInterfaceBinder<
+        side_panel::customize_chrome::mojom::CustomizeToolbarHandlerFactory,
+        CustomizeChromeUI>(map);
   }
 
   if (user_notes::IsUserNotesEnabled()) {
@@ -1430,6 +1446,10 @@ void PopulateChromeWebUIFrameBinders(
 
   RegisterWebUIControllerInterfaceBinder<
       ash::settings::app_permission::mojom::AppPermissionsHandler,
+      ash::settings::OSSettingsUI>(map);
+
+  RegisterWebUIControllerInterfaceBinder<
+      ash::settings::app_parental_controls::mojom::AppParentalControlsHandler,
       ash::settings::OSSettingsUI>(map);
 
   RegisterWebUIControllerInterfaceBinder<
@@ -1673,6 +1693,13 @@ void PopulateChromeWebUIFrameBinders(
   if (ash::features::IsHotspotEnabled()) {
     RegisterWebUIControllerInterfaceBinder<
         ash::hotspot_config::mojom::CrosHotspotConfig,
+        ash::settings::OSSettingsUI>(map);
+  }
+
+  if (base::FeatureList::IsEnabled(
+          ash::features::kSystemJapanesePhysicalTyping)) {
+    RegisterWebUIControllerInterfaceBinder<
+        ash::ime::mojom::InputMethodUserDataService,
         ash::settings::OSSettingsUI>(map);
   }
 

@@ -58,6 +58,7 @@
 #include "chrome/browser/predictors/loading_predictor_tab_helper.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_tab_helper.h"
+#include "chrome/browser/privacy_sandbox/tracking_protection_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_key.h"
 #include "chrome/browser/resource_coordinator/tab_helper.h"
@@ -130,6 +131,8 @@
 #include "components/download/content/factory/navigation_monitor_factory.h"
 #include "components/download/content/public/download_navigation_observer.h"
 #include "components/feed/buildflags.h"
+#include "components/fingerprinting_protection_filter/browser/fingerprinting_protection_filter_features.h"
+#include "components/fingerprinting_protection_filter/browser/fingerprinting_protection_web_contents_helper.h"
 #include "components/history/content/browser/web_contents_top_sites_observer.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -221,6 +224,7 @@
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/boot_times_recorder_tab_helper.h"
+#include "chrome/browser/ash/growth/campaigns_manager_session_tab_helper.h"
 #include "chrome/browser/ui/ash/google_one_offer_iph_tab_helper.h"
 #endif
 
@@ -233,10 +237,11 @@
 #include "chrome/browser/chromeos/cros_apps/cros_apps_tab_helper.h"
 #include "chrome/browser/chromeos/mahi/mahi_tab_helper.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_tab_helper.h"
+#include "chrome/browser/chromeos/printing/print_preview/printing_init_cros.h"
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_FUCHSIA)
+    BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ui/blocked_content/framebust_block_tab_helper.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/hats/hats_helper.h"
@@ -307,6 +312,9 @@ const char kTabContentsAttachedTabHelpersUserDataKey[] =
 }  // namespace
 
 // static
+// WARNING: Do not use this class for desktop chrome. Use TabFeatures instead.
+// See
+// https://chromium.googlesource.com/chromium/src/+/main/docs/chrome_browser_design_principles.md
 void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   // If already adopted, nothing to be done.
   base::SupportsUserData::Data* adoption_tag =
@@ -396,6 +404,13 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   FileSystemAccessPermissionRequestManager::CreateForWebContents(web_contents);
   FileSystemAccessTabHelper::CreateForWebContents(web_contents);
   FindBarState::ConfigureWebContents(web_contents);
+  if (base::FeatureList::IsEnabled(fingerprinting_protection_filter::features::
+                                       kEnableFingerprintingProtectionFilter)) {
+    fingerprinting_protection_filter::
+        FingerprintingProtectionWebContentsHelper::CreateForWebContents(
+            web_contents, profile->GetPrefs(),
+            TrackingProtectionSettingsFactory::GetForProfile(profile));
+  }
   download::DownloadNavigationObserver::CreateForWebContents(
       web_contents,
       download::NavigationMonitorFactory::GetForKey(profile->GetProfileKey()));
@@ -534,11 +549,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   v8_compile_hints::V8CompileHintsTabHelper::MaybeCreateForWebContents(
       web_contents);
   vr::VrTabHelper::CreateForWebContents(web_contents);
-  if (base::FeatureList::IsEnabled(permissions::features::kOneTimePermission) ||
-      base::FeatureList::IsEnabled(
-          features::kFileSystemAccessPersistentPermissions)) {
-    OneTimePermissionsTrackerHelper::CreateForWebContents(web_contents);
-  }
+  OneTimePermissionsTrackerHelper::CreateForWebContents(web_contents);
 
   // NO! Do not just add your tab helper here. This is a large alphabetized
   // block; please insert your tab helper above in alphabetical order.
@@ -660,6 +671,10 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
 
 #if BUILDFLAG(IS_CHROMEOS_ASH)
   GoogleOneOfferIphTabHelper::CreateForWebContents(web_contents);
+  // Do not create for Incognito mode.
+  if (!profile->IsOffTheRecord()) {
+    CampaignsManagerSessionTabHelper::CreateForWebContents(web_contents);
+  }
   ash::BootTimesRecorderTabHelper::MaybeCreateForWebContents(web_contents);
 #endif
 
@@ -678,7 +693,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   webapps::PreRedirectionURLObserver::CreateForWebContents(web_contents);
 #endif
 
-// TODO(crbug.com/1052397): Revisit the macro expression once build flag switch
+// TODO(crbug.com/40118868): Revisit the macro expression once build flag switch
 // of lacros-chrome is complete.
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
     (BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS_LACROS))
@@ -731,9 +746,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
 #endif
 
 #if !BUILDFLAG(IS_ANDROID)
-  if (customize_chrome::IsSidePanelEnabled()) {
-    CustomizeChromeTabHelper::CreateForWebContents(web_contents);
-  }
+  CustomizeChromeTabHelper::CreateForWebContents(web_contents);
 #endif
 
   // --- Section 3: Feature tab helpers behind BUILDFLAGs ---
@@ -781,7 +794,15 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   PluginObserver::CreateForWebContents(web_contents);
 #endif
 
-#if BUILDFLAG(ENABLE_PRINTING)
+// Only enable ChromeOS print preview if `kPrintPreviewCrosPrimary` is enabled
+// and is a ChromeOS build. Otherwise instantiate browser print preview.
+#if BUILDFLAG(ENABLE_PRINTING) && BUILDFLAG(IS_CHROMEOS)
+  if (base::FeatureList::IsEnabled(::features::kPrintPreviewCrosPrimary)) {
+    chromeos::printing::InitializePrintingForWebContents(web_contents);
+  } else {
+    printing::InitializePrintingForWebContents(web_contents);
+  }
+#elif BUILDFLAG(ENABLE_PRINTING)
   printing::InitializePrintingForWebContents(web_contents);
 #endif
 
