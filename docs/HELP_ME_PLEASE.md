@@ -14,13 +14,6 @@ So if you want to help me, this is a list of things to do: I think it is all som
 
 ### To get better organised:
 
-#### Chromium closes some issues.
-
-This is not good for me, as I do not have the time to understand whether a new feature should be activated or not.
-[Here](https://groups.google.com/a/chromium.org/g/chromium-dev/c/FqgqyT422Sk) I am asking for information: at the time of writing, no reply. For me it is useful because I learn from other people's code and above all I understand what is called 'conventions' in techno-speak. Chromium is full of conventions, like all software.
-
-I need something that, starting with the bugid number, scans the chromium git log and gives me a list of related commits.
-
 #### Chrome and its flags
 
 Chromium is full of flags, some that improve it and some that are harmful to Cromite users. it is not easy to keep up with them all.
