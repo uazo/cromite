@@ -19,7 +19,6 @@
 #include "build/chromeos_buildflags.h"
 #include "cc/base/features.h"
 #include "components/attribution_reporting/features.h"
-#include "components/ml/webnn/features.mojom-features.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/common/content_switches_internal.h"
 #include "content/common/features.h"
@@ -34,6 +33,7 @@
 #include "media/base/media_switches.h"
 #include "services/device/public/cpp/device_features.h"
 #include "services/network/public/cpp/features.h"
+#include "services/webnn/public/mojom/features.mojom-features.h"
 #include "third_party/blink/public/common/buildflags.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
@@ -256,9 +256,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
 #if BUILDFLAG(IS_CHROMEOS)
           {wf::EnableLockedMode, raw_ref(blink::features::kLockedMode)},
 #endif
-          {wf::EnableMachineLearningModelLoader,
-           raw_ref(features::kEnableMachineLearningModelLoaderWebPlatformApi),
-           kSetOnlyIfOverridden},
           {wf::EnableMediaCastOverlayButton,
            raw_ref(media::kMediaCastOverlayButton)},
           {wf::EnableMediaEngagementBypassAutoplayPolicies,
@@ -305,9 +302,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableWebIdentityDigitalCredentials,
            raw_ref(features::kWebIdentityDigitalCredentials),
            kSetOnlyIfOverridden},
-          {wf::EnableMachineLearningNeuralNetwork,
-           raw_ref(webnn::mojom::features::kWebMachineLearningNeuralNetwork),
-           kDefault},
           {wf::EnableWebOTP, raw_ref(features::kWebOTP), kSetOnlyIfOverridden},
           {wf::EnableWebOTPAssertionFeaturePolicy,
            raw_ref(features::kWebOTPAssertionFeaturePolicy),
@@ -335,6 +329,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kRemoveMobileViewportDoubleTap)},
           {wf::EnableServiceWorkerStaticRouter,
            raw_ref(features::kServiceWorkerStaticRouter)},
+          {wf::EnablePermissions, raw_ref(features::kWebPermissionsApi),
+           kSetOnlyIfOverridden},
       };
   for (const auto& mapping : blinkFeatureToBaseFeatureMapping) {
     SetRuntimeFeatureFromChromiumFeature(
@@ -362,8 +358,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {"AttributionReportingCrossAppWeb",
            raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
-          {"AttributionReportingCrossAppWeb",
-           raw_ref(features::kAttributionReportingCrossAppWebOverride)},
           {"AndroidDownloadableFontsMatching",
            raw_ref(features::kAndroidDownloadableFontsMatching)},
 #if BUILDFLAG(IS_ANDROID)
@@ -384,7 +378,7 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            kSetOnlyIfOverridden},
           {"FencedFramesLocalUnpartitionedDataAccess",
            raw_ref(blink::features::kFencedFramesLocalUnpartitionedDataAccess)},
-          {"Fledge", raw_ref(blink::features::kFledge), kSetOnlyIfOverridden},
+          {"Fledge", raw_ref(blink::features::kFledge)},
           {"Fledge", raw_ref(features::kPrivacySandboxAdsAPIsOverride),
            kSetOnlyIfOverridden},
           {"Fledge", raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
@@ -394,6 +388,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {"FontSrcLocalMatching", raw_ref(features::kFontSrcLocalMatching)},
           {"LegacyWindowsDWriteFontFallback",
            raw_ref(features::kLegacyWindowsDWriteFontFallback)},
+          {"MachineLearningNeuralNetwork",
+           raw_ref(webnn::mojom::features::kWebMachineLearningNeuralNetwork)},
           {"OriginIsolationHeader", raw_ref(features::kOriginIsolationHeader)},
           {"ReduceAcceptLanguage",
            raw_ref(network::features::kReduceAcceptLanguage)},
@@ -449,7 +445,6 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
   using wrf = WebRuntimeFeatures;
   const SwitchToFeatureMap switchToFeatureMapping[] = {
       // Stable Features
-      {wrf::EnablePermissions, switches::kDisablePermissionsAPI, false},
       {wrf::EnablePresentation, switches::kDisablePresentationAPI, false},
       {wrf::EnableRemotePlayback, switches::kDisableRemotePlaybackAPI, false},
       {wrf::EnableTimerThrottlingForBackgroundTabs,
@@ -478,6 +473,8 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
        blink::switches::kKeyboardFocusableScrollersEnabled, true},
       {wrf::EnableKeyboardFocusableScrollers,
        blink::switches::kKeyboardFocusableScrollersOptOut, false},
+      {wrf::EnableStandardizedBrowserZoom,
+       blink::switches::kDisableStandardizedBrowserZoom, false},
       {wrf::EnableCSSCustomStateDeprecatedSyntax,
        blink::switches::kCSSCustomStateDeprecatedSyntaxEnabled, true},
       {wrf::EnableTextFragmentIdentifiers,

@@ -133,7 +133,7 @@
 #include "components/download/content/public/download_navigation_observer.h"
 #include "components/enterprise/buildflags/buildflags.h"
 #include "components/feed/buildflags.h"
-#include "components/fingerprinting_protection_filter/browser/fingerprinting_protection_filter_features.h"
+#include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
 #include "components/history/content/browser/web_contents_top_sites_observer.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -155,7 +155,6 @@
 #include "components/safe_browsing/content/browser/safe_browsing_tab_observer.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/search/ntp_features.h"
-#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/site_engagement/content/site_engagement_helper.h"
 #include "components/site_engagement/content/site_engagement_service.h"
 #include "components/tracing/common/tracing_switches.h"
@@ -180,6 +179,7 @@
 #include "chrome/browser/android/policy/policy_auditor_bridge.h"
 #include "chrome/browser/banners/android/chrome_app_banner_manager_android.h"
 #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
+#include "chrome/browser/dips/dips_navigation_flow_detector.h"
 #include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
 #include "chrome/browser/fast_checkout/fast_checkout_tab_helper.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
@@ -204,8 +204,6 @@
 #include "chrome/browser/ui/search_engine_choice/search_engine_choice_tab_helper.h"
 #include "chrome/browser/ui/views/side_panel/companion/companion_tab_helper.h"
 #include "chrome/browser/ui/views/side_panel/companion/exps_registration_success_observer.h"
-#include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_tab_helper.h"
-#include "chrome/browser/ui/views/side_panel/customize_chrome/customize_chrome_utils.h"
 #include "chrome/browser/ui/views/side_panel/history_clusters/history_clusters_tab_helper.h"
 #include "chrome/browser/ui/views/side_panel/read_anything/read_anything_tab_helper.h"
 #include "chrome/browser/ui/sync/browser_synced_tab_delegate.h"
@@ -584,6 +582,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   // --- Section 2: Platform-specific tab helpers ---
 
 #if BUILDFLAG(IS_ANDROID)
+  DipsNavigationFlowDetector::MaybeCreateForWebContents(web_contents);
   webapps::MLInstallabilityPromoter::CreateForWebContents(web_contents);
   {
     // Remove after fixing https://crbug/905919
@@ -641,8 +640,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
     PrivacySandboxPromptHelper::CreateForWebContents(web_contents);
   }
 
-  if (search_engines::IsChoiceScreenFlagEnabled(
-          search_engines::ChoicePromo::kDialog)) {
+  if (SearchEngineChoiceTabHelper::IsHelperNeeded()) {
     SearchEngineChoiceTabHelper::CreateForWebContents(web_contents);
   }
 
@@ -765,10 +763,6 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   if (IsSideSearchEnabled(profile)) {
     SideSearchTabContentsHelper::CreateForWebContents(web_contents);
   }
-#endif
-
-#if !BUILDFLAG(IS_ANDROID)
-  CustomizeChromeTabHelper::CreateForWebContents(web_contents);
 #endif
 
   // --- Section 3: Feature tab helpers behind BUILDFLAGs ---

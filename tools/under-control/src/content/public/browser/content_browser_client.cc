@@ -20,7 +20,7 @@
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "build/chromeos_buildflags.h"
-#include "content/browser/ai/mock_ai_manager_impl.h"
+#include "content/browser/ai/echo_ai_manager_impl.h"
 #include "content/public/browser/anchor_element_preconnect_delegate.h"
 #include "content/public/browser/authenticator_request_client_delegate.h"
 #include "content/public/browser/browser_context.h"
@@ -125,6 +125,8 @@ bool ContentBrowserClient::IsShuttingDown() {
   return false;
 }
 
+void ContentBrowserClient::ThreadPoolWillTerminate() {}
+
 bool ContentBrowserClient::AllowGpuLaunchRetryOnIOThread() {
   return true;
 }
@@ -165,10 +167,11 @@ bool ContentBrowserClient::ShouldAllowProcessPerSiteForMultipleMainFrames(
   return true;
 }
 
-bool ContentBrowserClient::ShouldUseSpareRenderProcessHost(
+std::optional<ContentBrowserClient::SpareProcessRefusedByEmbedderReason>
+ContentBrowserClient::ShouldUseSpareRenderProcessHost(
     BrowserContext* browser_context,
     const GURL& site_url) {
-  return true;
+  return std::nullopt;
 }
 
 bool ContentBrowserClient::DoesSiteRequireDedicatedProcess(
@@ -176,6 +179,14 @@ bool ContentBrowserClient::DoesSiteRequireDedicatedProcess(
     const GURL& effective_site_url) {
   DCHECK(browser_context);
   return false;
+}
+
+bool ContentBrowserClient::ShouldAllowCrossProcessSandboxedFrameForPrecursor(
+    BrowserContext* browser_context,
+    const GURL& precursor,
+    const GURL& url) {
+  DCHECK(browser_context);
+  return true;
 }
 
 bool ContentBrowserClient::ShouldLockProcessToSite(
@@ -674,6 +685,7 @@ bool ContentBrowserClient::ShouldDenyRequestOnCertificateError(
 
 base::OnceClosure ContentBrowserClient::SelectClientCertificate(
     BrowserContext* browser_context,
+    int process_id,
     WebContents* web_contents,
     net::SSLCertRequestInfo* cert_request_info,
     net::ClientCertIdentityList client_certs,
@@ -958,7 +970,8 @@ std::wstring ContentBrowserClient::GetAppContainerSidForSandboxType(
       L"924012148-129201922");
 }
 
-bool ContentBrowserClient::IsRendererAppContainerDisabled() {
+bool ContentBrowserClient::IsAppContainerDisabled(
+    sandbox::mojom::Sandbox sandbox_type) {
   return false;
 }
 
@@ -970,6 +983,10 @@ std::wstring ContentBrowserClient::GetLPACCapabilityNameForNetworkService() {
 }
 
 bool ContentBrowserClient::IsRendererCodeIntegrityEnabled() {
+  return false;
+}
+
+bool ContentBrowserClient::IsPdfFontProxyEnabled() {
   return false;
 }
 
@@ -1095,6 +1112,7 @@ ContentBrowserClient::WillCreateURLLoaderRequestInterceptors(
     content::NavigationUIData* navigation_ui_data,
     int frame_tree_node_id,
     int64_t navigation_id,
+    bool force_no_https_upgrade,
     scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner) {
   return std::vector<std::unique_ptr<URLLoaderRequestInterceptor>>();
 }
@@ -1526,17 +1544,6 @@ ContentBrowserClient::CreateIdentityRequestDialogController(
   return std::make_unique<IdentityRequestDialogController>();
 }
 
-ContentBrowserClient::DigitalIdentityInterstitialAbortCallback
-ContentBrowserClient::ShowDigitalIdentityInterstitialIfNeeded(
-    WebContents& web_contents,
-    const url::Origin& origin,
-    bool is_only_requesting_age,
-    DigitalIdentityInterstitialCallback callback) {
-  std::move(callback).Run(
-      DigitalIdentityProvider::RequestStatusForMetrics::kErrorOther);
-  return base::OnceClosure();
-}
-
 std::unique_ptr<DigitalIdentityProvider>
 ContentBrowserClient::CreateDigitalIdentityProvider() {
   return nullptr;
@@ -1743,9 +1750,9 @@ bool ContentBrowserClient::ShouldSuppressAXLoadComplete(RenderFrameHost* rfh) {
 }
 
 void ContentBrowserClient::BindAIManager(
-    RenderFrameHost* rfh,
+    BrowserContext* browser_context,
     mojo::PendingReceiver<blink::mojom::AIManager> receiver) {
-  MockAIManagerImpl::Create(rfh, std::move(receiver));
+  EchoAIManagerImpl::Create(browser_context, std::move(receiver));
 }
 
 #if !BUILDFLAG(IS_ANDROID)

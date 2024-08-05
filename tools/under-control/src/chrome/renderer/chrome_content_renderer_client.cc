@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -14,7 +15,6 @@
 #include "base/debug/crash_logging.h"
 #include "base/functional/bind.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/no_destructor.h"
 #include "base/notreached.h"
@@ -108,8 +108,8 @@
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/renderer/threat_dom_details.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
-#include "components/subresource_filter/content/renderer/safe_browsing_unverified_ruleset_dealer.h"
 #include "components/subresource_filter/content/renderer/subresource_filter_agent.h"
+#include "components/subresource_filter/content/renderer/unverified_ruleset_dealer.h"
 #include "components/subresource_filter/core/common/common_features.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "components/variations/variations_switches.h"
@@ -126,7 +126,6 @@
 #include "content/public/renderer/render_frame_visitor.h"
 #include "extensions/buildflags/buildflags.h"
 #include "extensions/renderer/extensions_renderer_api_provider.h"
-#include "extensions/renderer/worker_script_context_set.h"
 #include "ipc/ipc_sync_channel.h"
 #include "media/base/media_switches.h"
 #include "media/media_buildflags.h"
@@ -456,8 +455,8 @@ void ChromeContentRendererClient::RenderThreadStarted() {
     InitSpellCheck();
 #endif
 
-  subresource_filter_ruleset_dealer_ = std::make_unique<
-      subresource_filter::SafeBrowsingUnverifiedRulesetDealer>();
+  subresource_filter_ruleset_dealer_ =
+      std::make_unique<subresource_filter::UnverifiedRulesetDealer>();
 
   phishing_model_setter_ =
       std::make_unique<safe_browsing::PhishingModelSetterImpl>();
@@ -725,7 +724,7 @@ void ChromeContentRendererClient::RenderFrameCreated(
 
   // Owned by |render_frame|.
   new page_load_metrics::MetricsRenderFrameObserver(render_frame);
-  // There is no render thread, thus no SafeBrowsingUnverifiedRulesetDealer in
+  // There is no render thread, thus no UnverifiedRulesetDealer in
   // ChromeRenderViewTests.
   if (subresource_filter_ruleset_dealer_) {
     auto* subresource_filter_agent =
@@ -1412,17 +1411,8 @@ bool ChromeContentRendererClient::AllowPopup() {
 bool ChromeContentRendererClient::ShouldNotifyServiceWorkerOnWebSocketActivity(
     v8::Local<v8::Context> context) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  extensions::ScriptContext* script_context =
-      ChromeExtensionsRendererClient::GetInstance()
-          ->extension_dispatcher()
-          ->GetWorkerScriptContextSet()
-          ->GetContextByV8Context(context);
-  // Only notify on web socket activity if the service worker is the background
-  // service worker for an extension.
-  return script_context &&
-         ChromeExtensionsRendererClient::GetInstance()
-             ->ExtensionAPIEnabledForServiceWorkerScript(
-                 script_context->service_worker_scope(), script_context->url());
+  return extensions::Dispatcher::ShouldNotifyServiceWorkerOnWebSocketActivity(
+      context);
 #else
   return false;
 #endif
@@ -1445,7 +1435,8 @@ ChromeContentRendererClient::GetProtocolHandlerSecurityLevel(
 void ChromeContentRendererClient::WillSendRequest(
     WebLocalFrame* frame,
     ui::PageTransition transition_type,
-    const blink::WebURL& url,
+    const blink::WebURL& upstream_url,
+    const blink::WebURL& target_url,
     const net::SiteForCookies& site_for_cookies,
     const url::Origin* initiator_origin,
     GURL* new_url) {
@@ -1453,22 +1444,24 @@ void ChromeContentRendererClient::WillSendRequest(
   // Check whether the request should be allowed. If not allowed, we reset the
   // URL to something invalid to prevent the request and cause an error.
   ChromeExtensionsRendererClient::GetInstance()->WillSendRequest(
-      frame, transition_type, url, site_for_cookies, initiator_origin, new_url);
+      frame, transition_type, upstream_url, target_url, site_for_cookies,
+      initiator_origin, new_url);
   if (!new_url->is_empty())
     return;
 #endif
 
-  if (!url.ProtocolIs(chrome::kChromeSearchScheme))
+  if (!target_url.ProtocolIs(chrome::kChromeSearchScheme)) {
     return;
+  }
 
 #if !BUILDFLAG(IS_ANDROID)
   SearchBox* search_box =
       SearchBox::Get(content::RenderFrame::FromWebFrame(frame->LocalRoot()));
   if (search_box) {
     // Note: this GURL copy could be avoided if host() were added to WebURL.
-    GURL gurl(url);
+    GURL gurl(target_url);
     if (gurl.host_piece() == chrome::kChromeUIFaviconHost)
-      search_box->GenerateImageURLFromTransientURL(url, new_url);
+      search_box->GenerateImageURLFromTransientURL(target_url, new_url);
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 }
@@ -1484,6 +1477,14 @@ uint64_t ChromeContentRendererClient::VisitedLinkHash(
       canonical_url);
 }
 
+uint64_t ChromeContentRendererClient::PartitionedVisitedLinkFingerprint(
+    std::string_view canonical_link_url,
+    const net::SchemefulSite& top_level_site,
+    const url::Origin& frame_origin) {
+  return chrome_observer_->visited_link_reader()->ComputePartitionedFingerprint(
+      canonical_link_url, top_level_site, frame_origin);
+}
+
 bool ChromeContentRendererClient::IsLinkVisited(uint64_t link_hash) {
   return chrome_observer_->visited_link_reader()->IsVisited(link_hash);
 }
@@ -1491,6 +1492,8 @@ bool ChromeContentRendererClient::IsLinkVisited(uint64_t link_hash) {
 void ChromeContentRendererClient::AddOrUpdateVisitedLinkSalt(
     const url::Origin& origin,
     uint64_t salt) {
+  base::UmaHistogramBoolean(
+      "Blink.History.VisitedLinks.IsSaltFromNavigationThrottle", true);
   return chrome_observer_->visited_link_reader()->AddOrUpdateSalt(origin, salt);
 }
 
@@ -1681,10 +1684,7 @@ void ChromeContentRendererClient::
       blink::WebRuntimeFeatures::EnableWebUSBOnServiceWorkers(true);
     }
 #if !BUILDFLAG(IS_ANDROID)
-    if (base::FeatureList::IsEnabled(
-            features::kEnableWebHidOnExtensionServiceWorker)) {
-      blink::WebRuntimeFeatures::EnableWebHIDOnServiceWorkers(true);
-    }
+    blink::WebRuntimeFeatures::EnableWebHIDOnServiceWorkers(true);
 #endif  // !BUILDFLAG(IS_ANDROID)
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -1791,20 +1791,23 @@ blink::WebFrame* ChromeContentRendererClient::FindFrame(
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 }
 
-bool ChromeContentRendererClient::IsSafeRedirectTarget(const GURL& from_url,
-                                                       const GURL& to_url) {
+bool ChromeContentRendererClient::IsSafeRedirectTarget(const GURL& upstream_url,
+                                                       const GURL& target_url) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  if (to_url.SchemeIs(extensions::kExtensionScheme)) {
+  if (target_url.SchemeIs(extensions::kExtensionScheme)) {
     const extensions::Extension* extension =
-        extensions::RendererExtensionRegistry::Get()->GetByID(to_url.host());
-    if (!extension)
+        extensions::RendererExtensionRegistry::Get()->GetByID(
+            target_url.host());
+    if (!extension) {
       return false;
+    }
     // TODO(solomonkinard): Use initiator_origin and add tests.
-    if (extensions::WebAccessibleResourcesInfo::IsResourceWebAccessible(
-            extension, to_url.path(), nullptr)) {
+    if (extensions::WebAccessibleResourcesInfo::IsResourceWebAccessibleRedirect(
+            extension, target_url, /*initiator_origin=*/std::nullopt,
+            upstream_url)) {
       return true;
     }
-    return extension->guid() == from_url.host();
+    return extension->guid() == upstream_url.host();
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
   return true;

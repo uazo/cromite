@@ -10,7 +10,6 @@
 #include "base/feature_list.h"
 #include "base/time/time.h"
 #include "components/attribution_reporting/features.h"
-#include "services/network/public/cpp/attribution_reporting_runtime_features.h"
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
@@ -18,7 +17,6 @@
 #include "third_party/blink/public/common/origin_trials/trial_token.h"
 #include "third_party/blink/public/common/origin_trials/trial_token_result.h"
 #include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
-#include "third_party/blink/public/mojom/frame/frame.mojom-blink.h"
 #include "third_party/blink/public/mojom/origin_trial_feature/origin_trial_feature.mojom-shared.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/public/platform/web_security_origin.h"
@@ -28,7 +26,6 @@
 #include "third_party/blink/renderer/bindings/core/v8/worker_or_worklet_script_controller.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-#include "third_party/blink/renderer/core/frame/attribution_src_loader.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
@@ -446,24 +443,6 @@ bool OriginTrialContext::InstallSettingFeature(
       if (document.GetSettings())
         document.GetSettings()->SetForceDarkModeEnabled(true);
       return true;
-    case mojom::blink::OriginTrialFeature::kAttributionReportingCrossAppWeb:
-      static_assert(
-          network::AttributionReportingRuntimeFeature::kMaxValue ==
-              network::AttributionReportingRuntimeFeature::kCrossAppWeb,
-          "Any new attribution reporting runtime features with an associated "
-          "origin trial feature need to be able to update the browser when the "
-          "OT feature is installed. If your new runtime feature also has an OT "
-          "feature, please add a switch case for the new feature.");
-      // Tell the browser about this change, but return false so the feature can
-      // still be installed using the default method.
-      document.GetFrame()
-          ->GetLocalFrameHostRemote()
-          .SetAttributionReportingRuntimeFeatures(
-              document.GetFrame()
-                  ->GetAttributionSrcLoader()
-                  ->GetRuntimeFeatures());
-      return false;
-
     default:
       return false;
   }
@@ -515,9 +494,6 @@ void OriginTrialContext::AddForceEnabledTrials(
 }
 
 bool OriginTrialContext::CanEnableTrialFromName(const StringView& trial_name) {
-  if (trial_name == "PrivacySandboxAdsAPIs")
-    return base::FeatureList::IsEnabled(features::kPrivacySandboxAdsAPIs);
-
   if (trial_name == "FledgeBiddingAndAuctionServer") {
     return base::FeatureList::IsEnabled(features::kInterestGroupStorage) &&
            base::FeatureList::IsEnabled(
@@ -548,13 +524,6 @@ bool OriginTrialContext::CanEnableTrialFromName(const StringView& trial_name) {
         network::features::kCompressionDictionaryTransportBackend);
   }
 
-  if (trial_name == "AttributionReportingCrossAppWeb") {
-    return base::FeatureList::IsEnabled(
-               attribution_reporting::features::kConversionMeasurement) &&
-           base::FeatureList::IsEnabled(
-               network::features::kAttributionReportingCrossAppWeb);
-  }
-
   if (trial_name == "SoftNavigationHeuristics") {
     return base::FeatureList::IsEnabled(features::kSoftNavigationDetection);
   }
@@ -571,42 +540,6 @@ bool OriginTrialContext::CanEnableTrialFromName(const StringView& trial_name) {
   return true;
 }
 
-Vector<mojom::blink::OriginTrialFeature>
-OriginTrialContext::RestrictedFeaturesForTrial(const String& trial_name) {
-  if (trial_name == "PrivacySandboxAdsAPIs") {
-    Vector<mojom::blink::OriginTrialFeature> restricted;
-    if (!base::FeatureList::IsEnabled(features::kInterestGroupStorage)) {
-      restricted.push_back(mojom::blink::OriginTrialFeature::kFledge);
-    }
-    if (!base::FeatureList::IsEnabled(features::kBrowsingTopics)) {
-      restricted.push_back(mojom::blink::OriginTrialFeature::kTopicsAPI);
-    }
-    if (!base::FeatureList::IsEnabled(features::kBrowsingTopics) ||
-        !base::FeatureList::IsEnabled(features::kBrowsingTopicsDocumentAPI)) {
-      restricted.push_back(
-          mojom::blink::OriginTrialFeature::kTopicsDocumentAPI);
-    }
-    if (!base::FeatureList::IsEnabled(
-            attribution_reporting::features::kConversionMeasurement)) {
-      restricted.push_back(
-          mojom::blink::OriginTrialFeature::kAttributionReporting);
-    }
-    if (!base::FeatureList::IsEnabled(features::kFencedFrames)) {
-      restricted.push_back(mojom::blink::OriginTrialFeature::kFencedFrames);
-    }
-    if (!base::FeatureList::IsEnabled(features::kSharedStorageAPI)) {
-      restricted.push_back(mojom::blink::OriginTrialFeature::kSharedStorageAPI);
-    }
-    if (!base::FeatureList::IsEnabled(features::kFencedFramesAPIChanges)) {
-      restricted.push_back(
-          mojom::blink::OriginTrialFeature::kFencedFramesAPIChanges);
-    }
-    return restricted;
-  }
-
-  return {};
-}
-
 OriginTrialFeaturesEnabled OriginTrialContext::EnableTrialFromName(
     const String& trial_name,
     base::Time expiry_time) {
@@ -619,22 +552,12 @@ OriginTrialFeaturesEnabled OriginTrialContext::EnableTrialFromName(
     return result;
   }
 
-  Vector<mojom::blink::OriginTrialFeature> restricted =
-      RestrictedFeaturesForTrial(trial_name);
-
   bool did_enable_feature = false;
   for (mojom::blink::OriginTrialFeature feature :
        origin_trials::FeaturesForTrial(trial_name.Utf8())) {
     if (!origin_trials::FeatureEnabledForOS(feature)) {
       DVLOG(1) << "EnableTrialFromName: feature " << static_cast<int>(feature)
                << " is disabled on current OS.";
-      continue;
-    }
-
-    if (restricted.Contains(feature)) {
-      DVLOG(1) << "EnableTrialFromName: feature " << static_cast<int>(feature)
-               << " is restricted from being enabled via the trial: "
-               << trial_name << ".";
       continue;
     }
 
