@@ -12,6 +12,8 @@
 #include <vector>
 
 #include "base/barrier_closure.h"
+#include "base/containers/flat_set.h"
+#include "base/containers/to_vector.h"
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
@@ -21,6 +23,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/not_fatal_until.h"
+#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
@@ -74,6 +77,7 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/share/share_history.h"
 #include "chrome/browser/share/share_ranking.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_factory.h"
 #include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "chrome/browser/sync/sync_service_factory.h"
@@ -93,6 +97,7 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
+#include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_pattern.h"
@@ -114,6 +119,7 @@
 #include "components/open_from_clipboard/clipboard_recent_content.h"
 #include "components/password_manager/core/browser/features/password_features.h"
 #include "components/password_manager/core/browser/features/password_manager_features_util.h"
+#include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/smart_bubble_stats_store.h"
 #include "components/payments/content/payment_manifest_web_data_service.h"
@@ -125,6 +131,12 @@
 #include "components/reading_list/core/reading_list_model.h"
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/search_engines/template_url_service.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/gaia_id_hash.h"
+#include "components/signin/public/identity_manager/account_info.h"
+#include "components/signin/public/identity_manager/accounts_in_cookie_jar_info.h"
+#include "components/signin/public/identity_manager/identity_manager.h"
+#include "components/signin/public/identity_manager/identity_utils.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
 #include "components/tpcd/metadata/browser/manager.h"
@@ -509,7 +521,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           CreateTaskCompletionClosure(TracingDataType::kAutofillOrigins));
 
       autofill::PersonalDataManager* data_manager =
-          autofill::PersonalDataManagerFactory::GetForProfile(profile_);
+          autofill::PersonalDataManagerFactory::GetForBrowserContext(profile_);
       if (data_manager)
         data_manager->Refresh();
     }
@@ -969,6 +981,12 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     browsing_data::RemoveFederatedSiteSettingsData(delete_begin_, delete_end_,
                                                    website_settings_filter,
                                                    host_content_settings_map_);
+
+    // Record that a password removal action happened for the profile store.
+    AddPasswordRemovalReason(
+        profile_->GetPrefs(), password_manager::IsAccountStore(false),
+        password_manager::metrics_util::PasswordManagerCredentialRemovalReason::
+            kClearBrowsingData);
   }
 
   if (remove_mask & constants::DATA_TYPE_ACCOUNT_PASSWORDS) {
@@ -993,6 +1011,12 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           CreateTaskCompletionClosure(TracingDataType::kAccountPasswords),
           std::move(sync_completion));
     }
+
+    // Record that a password removal action happened for the account store.
+    AddPasswordRemovalReason(
+        profile_->GetPrefs(), password_manager::IsAccountStore(true),
+        password_manager::metrics_util::PasswordManagerCredentialRemovalReason::
+            kClearBrowsingData);
   }
 
   CHECK(deferred_disable_passwords_auto_signin_cb_.is_null(),
@@ -1052,7 +1076,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           CreateTaskCompletionClosure(TracingDataType::kAutofillData));
 
       autofill::PersonalDataManager* data_manager =
-          autofill::PersonalDataManagerFactory::GetForProfile(profile_);
+          autofill::PersonalDataManagerFactory::GetForBrowserContext(profile_);
       if (data_manager)
         data_manager->Refresh();
     }
@@ -1427,6 +1451,29 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     NOTIMPLEMENTED();
 #endif  // BUILDFLAG(IS_ANDROID)
   }
+
+  //////////////////////////////////////////////////////////////////////////////
+  // DATA_TYPE_RELATED_WEBSITE_SETS_PERMISSIONS
+  if (remove_mask & content::BrowsingDataRemover::
+                        DATA_TYPE_RELATED_WEBSITE_SETS_PERMISSIONS) {
+    for (ContentSettingsType type_to_clear :
+         {ContentSettingsType::STORAGE_ACCESS,
+          ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS}) {
+      host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
+          type_to_clear, [&](const ContentSettingPatternSource& setting) {
+            return content_settings::IsGrantedByRelatedWebsiteSets(
+                       type_to_clear, setting.metadata) &&
+                   base::ranges::any_of(
+                       filter_builder->GetOrigins(),
+                       [&](const url::Origin& origin) -> bool {
+                         return setting.primary_pattern.Matches(
+                                    origin.GetURL()) ||
+                                setting.secondary_pattern.Matches(
+                                    origin.GetURL());
+                       });
+          });
+    }
+  }
 }
 
 void ChromeBrowsingDataRemoverDelegate::OnTaskStarted(
@@ -1490,13 +1537,20 @@ void ChromeBrowsingDataRemoverDelegate::OnTaskComplete(
   // are refreshed the next time, typically on the next browser restart.
   if (should_clear_sync_account_settings_) {
     should_clear_sync_account_settings_ = false;
-    syncer::SyncService* sync_service =
-        SyncServiceFactory::GetForProfile(profile_);
-    if (sync_service) {
-      sync_service->GetUserSettings()->KeepAccountSettingsPrefsOnlyForUsers({});
+    signin::IdentityManager* identity_manager =
+        IdentityManagerFactory::GetForProfile(profile_);
+    base::flat_set<std::string> gaia_ids =
+        signin::GetAllGaiaIdsForKeyedPreferences(
+            identity_manager,
+            signin::AccountsInCookieJarInfo() /* empty_cookies */);
+    if (syncer::SyncService* sync_service =
+            SyncServiceFactory::GetForProfile(profile_);
+        sync_service) {
+      sync_service->GetUserSettings()->KeepAccountSettingsPrefsOnlyForUsers(
+          base::ToVector(gaia_ids, &signin::GaiaIdHash::FromGaiaId));
     }
     password_manager::features_util::KeepAccountStorageSettingsOnlyForUsers(
-        profile_->GetPrefs(), {});
+        profile_->GetPrefs(), std::move(gaia_ids).extract());
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 

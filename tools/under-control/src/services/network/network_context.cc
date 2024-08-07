@@ -27,6 +27,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/not_fatal_until.h"
 #include "base/ranges/algorithm.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
@@ -73,7 +74,6 @@
 #include "net/cookies/cookie_setting_override.h"
 #include "net/dns/host_cache.h"
 #include "net/dns/mapped_host_resolver.h"
-#include "net/extras/shared_dictionary/shared_dictionary_isolation_key.h"
 #include "net/extras/sqlite/cookie_crypto_delegate.h"
 #include "net/extras/sqlite/sqlite_persistent_cookie_store.h"
 #include "net/first_party_sets/first_party_set_metadata.h"
@@ -89,6 +89,8 @@
 #include "net/net_buildflags.h"
 #include "net/proxy_resolution/configured_proxy_resolution_service.h"
 #include "net/proxy_resolution/proxy_config.h"
+#include "net/shared_dictionary/shared_dictionary_isolation_key.h"
+#include "net/storage_access_api/status.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/static_http_user_agent_settings.h"
 #include "net/url_request/url_request.h"
@@ -96,7 +98,6 @@
 #include "net/url_request/url_request_context_builder.h"
 #include "services/network/brokered_client_socket_factory.h"
 #include "services/network/cookie_manager.h"
-#include "services/network/cors/cors_url_loader_factory.h"
 #include "services/network/data_remover_util.h"
 #include "services/network/disk_cache/mojo_backend_file_operations_factory.h"
 #include "services/network/host_resolver.h"
@@ -109,11 +110,11 @@
 #include "services/network/is_browser_initiated.h"
 #include "services/network/net_log_exporter.h"
 #include "services/network/network_service.h"
-#include "services/network/network_service_memory_cache.h"
 #include "services/network/network_service_network_delegate.h"
 #include "services/network/network_service_proxy_delegate.h"
 #include "services/network/oblivious_http_request_handler.h"
 #include "services/network/prefetch_cache.h"
+#include "services/network/prefetch_matching_url_loader_factory.h"
 #include "services/network/prefetch_url_loader_client.h"
 #include "services/network/proxy_config_service_mojo.h"
 #include "services/network/proxy_lookup_request.h"
@@ -137,7 +138,6 @@
 #include "services/network/session_cleanup_cookie_store.h"
 #include "services/network/shared_dictionary/shared_dictionary_constants.h"
 #include "services/network/shared_dictionary/shared_dictionary_manager.h"
-#include "services/network/shared_dictionary/shared_dictionary_network_transaction_factory.h"
 #include "services/network/shared_dictionary/shared_dictionary_storage.h"
 #include "services/network/ssl_config_service_mojo.h"
 #include "services/network/throttling/network_conditions.h"
@@ -195,7 +195,7 @@
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
-#include "net/device_bound_sessions/device_bound_session_service.h"
+#include "net/device_bound_sessions/session_service.h"
 #endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 
 namespace network {
@@ -638,8 +638,12 @@ NetworkContext::NetworkContext(
       cors_preflight_controller_(network_service),
       http_auth_merged_preferences_(network_service),
       ohttp_handler_(this),
+      prefetch_enabled_(
+          base::FeatureList::IsEnabled(features::kNetworkContextPrefetch)),
       cors_non_wildcard_request_headers_support_(base::FeatureList::IsEnabled(
-          features::kCorsNonWildcardRequestHeadersSupport)) {
+          features::kCorsNonWildcardRequestHeadersSupport)),
+      prefetch_cache_(prefetch_enabled_ ? std::make_unique<PrefetchCache>()
+                                        : nullptr) {
 #if BUILDFLAG(IS_WIN) && DCHECK_IS_ON()
   if (params_->file_paths) {
     DCHECK(params_->win_permissions_set)
@@ -737,9 +741,6 @@ NetworkContext::NetworkContext(
 #endif
   resource_scheduler_ = std::make_unique<ResourceScheduler>();
 
-  if (base::FeatureList::IsEnabled(features::kNetworkServiceMemoryCache))
-    memory_cache_ = std::make_unique<NetworkServiceMemoryCache>(this);
-
   if (params_->http_auth_static_network_context_params) {
     http_auth_merged_preferences_.SetAllowDefaultCredentials(
         params_->http_auth_static_network_context_params
@@ -780,6 +781,10 @@ NetworkContext::NetworkContext(
         base::MakeRefCounted<MojoBackendFileOperationsFactory>(
             std::move(params_->http_cache_file_operations_factory));
   }
+
+  if (prefetch_enabled_) {
+    InitializePrefetchURLLoaderFactory();
+  }
 }
 
 NetworkContext::NetworkContext(
@@ -808,7 +813,11 @@ NetworkContext::NetworkContext(
                                           url_request_context)),
       cors_preflight_controller_(network_service),
       http_auth_merged_preferences_(network_service),
-      ohttp_handler_(this) {
+      ohttp_handler_(this),
+      prefetch_enabled_(
+          base::FeatureList::IsEnabled(features::kNetworkContextPrefetch)),
+      prefetch_cache_(prefetch_enabled_ ? std::make_unique<PrefetchCache>()
+                                        : nullptr) {
   // May be nullptr in tests.
   if (network_service_)
     network_service_->RegisterNetworkContext(this);
@@ -820,6 +829,10 @@ NetworkContext::NetworkContext(
   acam_preflight_spec_conformant_ = base::FeatureList::IsEnabled(
       network::features::
           kAccessControlAllowMethodsInCORSPreflightSpecConformant);
+
+  if (prefetch_enabled_) {
+    InitializePrefetchURLLoaderFactory();
+  }
 }
 
 NetworkContext::~NetworkContext() {
@@ -878,7 +891,7 @@ NetworkContext::~NetworkContext() {
 
   // Clear `url_loader_factories_` before deleting the contents, as it can
   // result in re-entrant calls to DestroyURLLoaderFactory().
-  std::set<std::unique_ptr<cors::CorsURLLoaderFactory>,
+  std::set<std::unique_ptr<PrefetchMatchingURLLoaderFactory>,
            base::UniquePtrComparator>
       url_loader_factories = std::move(url_loader_factories_);
 }
@@ -914,9 +927,11 @@ void NetworkContext::CreateURLLoaderFactory(
     mojo::PendingReceiver<mojom::URLLoaderFactory> receiver,
     mojom::URLLoaderFactoryParamsPtr params,
     scoped_refptr<ResourceSchedulerClient> resource_scheduler_client) {
-  url_loader_factories_.emplace(std::make_unique<cors::CorsURLLoaderFactory>(
-      this, std::move(params), std::move(resource_scheduler_client),
-      std::move(receiver), &cors_origin_access_list_));
+  url_loader_factories_.emplace(
+      std::make_unique<PrefetchMatchingURLLoaderFactory>(
+          this, std::move(params), std::move(resource_scheduler_client),
+          std::move(receiver), &cors_origin_access_list_,
+          prefetch_cache_.get()));
 }
 
 void NetworkContext::CreateURLLoaderFactoryForCertNetFetcher(
@@ -962,7 +977,7 @@ void NetworkContext::CreateURLLoaderFactory(
 void NetworkContext::ResetURLLoaderFactories() {
   // Move all factories to a temporary vector so ClearBindings() does not
   // invalidate the iterator if the factory gets deleted.
-  std::vector<cors::CorsURLLoaderFactory*> factories;
+  std::vector<PrefetchMatchingURLLoaderFactory*> factories;
   factories.reserve(url_loader_factories_.size());
   for (const auto& factory : url_loader_factories_)
     factories.push_back(factory.get());
@@ -1000,7 +1015,7 @@ void NetworkContext::OnRCMDisconnect(
     const network::RestrictedCookieManager* rcm) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = restricted_cookie_managers_.find(rcm);
-  DCHECK(it != restricted_cookie_managers_.end());
+  CHECK(it != restricted_cookie_managers_.end(), base::NotFatalUntil::M130);
   restricted_cookie_managers_.erase(it);
 }
 
@@ -1112,7 +1127,7 @@ void NetworkContext::SetBlockTrustTokens(bool block) {
 void NetworkContext::OnProxyLookupComplete(
     ProxyLookupRequest* proxy_lookup_request) {
   auto it = proxy_lookup_requests_.find(proxy_lookup_request);
-  DCHECK(it != proxy_lookup_requests_.end());
+  CHECK(it != proxy_lookup_requests_.end(), base::NotFatalUntil::M130);
   proxy_lookup_requests_.erase(it);
 }
 
@@ -1121,12 +1136,12 @@ void NetworkContext::DisableQuic() {
 }
 
 void NetworkContext::DestroyURLLoaderFactory(
-    cors::CorsURLLoaderFactory* url_loader_factory) {
+    PrefetchMatchingURLLoaderFactory* url_loader_factory) {
   if (is_destructing_) {
     return;
   }
   auto it = url_loader_factories_.find(url_loader_factory);
-  DCHECK(it != url_loader_factories_.end());
+  CHECK(it != url_loader_factories_.end(), base::NotFatalUntil::M130);
   url_loader_factories_.erase(it);
 }
 
@@ -1143,7 +1158,7 @@ void NetworkContext::LoaderCreated(uint32_t process_id) {
 
 void NetworkContext::LoaderDestroyed(uint32_t process_id) {
   auto it = loader_count_per_process_.find(process_id);
-  DCHECK(it != loader_count_per_process_.end());
+  CHECK(it != loader_count_per_process_.end(), base::NotFatalUntil::M130);
   it->second -= 1;
   if (it->second == 0)
     loader_count_per_process_.erase(it);
@@ -1245,10 +1260,6 @@ void NetworkContext::ClearHttpCache(base::Time start_time,
       url_request_context_, std::move(filter), start_time, end_time,
       base::BindOnce(&NetworkContext::OnHttpCacheCleared,
                      base::Unretained(this), std::move(callback))));
-
-  NetworkServiceMemoryCache* memory_cache = GetMemoryCache();
-  if (memory_cache)
-    memory_cache->Clear();
 }
 
 void NetworkContext::ComputeHttpCacheSize(
@@ -1391,12 +1402,38 @@ void NetworkContext::QueueReport(
     const GURL& url,
     const std::optional<base::UnguessableToken>& reporting_source,
     const net::NetworkAnonymizationKey& network_anonymization_key,
-    const std::optional<std::string>& user_agent,
     base::Value::Dict body) {
+  QueueReportInternal(type, group, url, reporting_source,
+                      network_anonymization_key, std::move(body),
+                      net::ReportingTargetType::kDeveloper);
+}
+
+void NetworkContext::QueueEnterpriseReport(const std::string& type,
+                                           const std::string& group,
+                                           const GURL& url,
+                                           base::Value::Dict body) {
+  // Enterprise reports don't use a |reporting_source| or
+  // |network_anonymization_key|. Enterprise endpoints are profile-bound and not
+  // document-bound like web developer endpoints.
+  QueueReportInternal(type, group, url, /*reporting_source=*/std::nullopt,
+                      net::NetworkAnonymizationKey(), std::move(body),
+                      net::ReportingTargetType::kEnterprise);
+}
+
+void NetworkContext::QueueReportInternal(
+    const std::string& type,
+    const std::string& group,
+    const GURL& url,
+    const std::optional<base::UnguessableToken>& reporting_source,
+    const net::NetworkAnonymizationKey& network_anonymization_key,
+    base::Value::Dict body,
+    net::ReportingTargetType target_type) {
 #if BUILDFLAG(ENABLE_REPORTING)
   // If |reporting_source| is provided, it must not be empty.
   DCHECK(!(reporting_source.has_value() && reporting_source->is_empty()));
-  if (require_network_anonymization_key_) {
+  // Enterprise reports have an empty |network_anonymization_key|.
+  if (target_type == net::ReportingTargetType::kDeveloper &&
+      require_network_anonymization_key_) {
     DCHECK(!network_anonymization_key.IsEmpty());
   }
 
@@ -1409,16 +1446,15 @@ void NetworkContext::QueueReport(
     return;
   }
 
-  std::string reported_user_agent = user_agent.value_or("");
-  if (reported_user_agent.empty() &&
-      request_context->http_user_agent_settings() != nullptr) {
+  std::string reported_user_agent = "";
+  if (request_context->http_user_agent_settings() != nullptr) {
     reported_user_agent =
         request_context->http_user_agent_settings()->GetUserAgent();
   }
 
-  reporting_service->QueueReport(url, reporting_source,
-                                 network_anonymization_key, reported_user_agent,
-                                 group, type, std::move(body), 0 /* depth */);
+  reporting_service->QueueReport(
+      url, reporting_source, network_anonymization_key, reported_user_agent,
+      group, type, std::move(body), 0 /* depth */, target_type);
 #endif  // BUILDFLAG(ENABLE_REPORTING)
 }
 
@@ -1597,8 +1633,7 @@ void NetworkContext::SetCTPolicy(mojom::CTPolicyPtr ct_policy) {
     return;
 
   require_ct_delegate_->UpdateCTPolicies(ct_policy->excluded_hosts,
-                                         ct_policy->excluded_spkis,
-                                         ct_policy->excluded_legacy_spkis);
+                                         ct_policy->excluded_spkis);
 }
 
 int NetworkContext::CheckCTRequirementsForSignedExchange(
@@ -1782,7 +1817,7 @@ void NetworkContext::CreateWebSocket(
     const GURL& url,
     const std::vector<std::string>& requested_protocols,
     const net::SiteForCookies& site_for_cookies,
-    bool has_storage_access,
+    net::StorageAccessApiStatus storage_access_api_status,
     const net::IsolationInfo& isolation_info,
     std::vector<mojom::HttpHeaderPtr> additional_headers,
     int32_t process_id,
@@ -1802,7 +1837,7 @@ void NetworkContext::CreateWebSocket(
   DCHECK_GE(process_id, 0);
 
   websocket_factory_->CreateWebSocket(
-      url, requested_protocols, site_for_cookies, has_storage_access,
+      url, requested_protocols, site_for_cookies, storage_access_api_status,
       isolation_info, std::move(additional_headers), process_id, origin,
       options,
       static_cast<net::NetworkTrafficAnnotationTag>(traffic_annotation),
@@ -1917,14 +1952,12 @@ void NetworkContext::VerifyCertForSignedExchange(
 void NetworkContext::NotifyExternalCacheHit(const GURL& url,
                                             const std::string& http_method,
                                             const net::NetworkIsolationKey& key,
-                                            bool is_subframe_document_resource,
                                             bool include_credentials) {
   net::HttpCache* cache =
       url_request_context_->http_transaction_factory()->GetCache();
   if (!cache)
     return;
-  cache->OnExternalCacheHit(url, http_method, key,
-                            is_subframe_document_resource, include_credentials);
+  cache->OnExternalCacheHit(url, http_method, key, include_credentials);
 }
 
 void NetworkContext::SetCorsOriginAccessListsForOrigin(
@@ -2310,10 +2343,6 @@ void NetworkContext::LookupProxyAuthCredentials(
 
 const net::HttpAuthPreferences* NetworkContext::GetHttpAuthPreferences() const {
   return &http_auth_merged_preferences_;
-}
-
-NetworkServiceMemoryCache* NetworkContext::GetMemoryCache() {
-  return memory_cache_.get();
 }
 
 size_t NetworkContext::NumOpenWebTransports() const {
@@ -2722,24 +2751,16 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
   builder.set_quic_context(std::move(quic_context));
 
   if (params_->shared_dictionary_enabled) {
-    CHECK(GetSharedDictionaryManager());
-    builder.SetCreateHttpTransactionFactoryCallback(base::BindOnce(
-        [](base::WeakPtr<NetworkContext> context,
-           net::HttpNetworkSession* session)
-            -> std::unique_ptr<net::HttpTransactionFactory> {
-          CHECK(context);
-          return std::make_unique<SharedDictionaryNetworkTransactionFactory>(
-              *context->GetSharedDictionaryManager(),
-              std::make_unique<ThrottlingNetworkTransactionFactory>(session));
-        },
-        weak_factory_.GetWeakPtr()));
-  } else {
-    builder.SetCreateHttpTransactionFactoryCallback(
-        base::BindOnce([](net::HttpNetworkSession* session)
-                           -> std::unique_ptr<net::HttpTransactionFactory> {
-          return std::make_unique<ThrottlingNetworkTransactionFactory>(session);
-        }));
+    builder.set_enable_shared_dictionary(true);
+    builder.set_enable_shared_zstd(
+        base::FeatureList::IsEnabled(network::features::kSharedZstd));
   }
+
+  builder.SetCreateHttpTransactionFactoryCallback(
+      base::BindOnce([](net::HttpNetworkSession* session)
+                         -> std::unique_ptr<net::HttpTransactionFactory> {
+        return std::make_unique<ThrottlingNetworkTransactionFactory>(session);
+      }));
 
   builder.set_host_mapping_rules(
       command_line->GetSwitchValueASCII(switches::kHostResolverRules));
@@ -2888,7 +2909,7 @@ void NetworkContext::OnHttpCacheCleared(ClearHttpCacheCallback callback,
 
 void NetworkContext::OnHostResolverShutdown(HostResolver* resolver) {
   auto found_resolver = host_resolvers_.find(resolver);
-  DCHECK(found_resolver != host_resolvers_.end());
+  CHECK(found_resolver != host_resolvers_.end(), base::NotFatalUntil::M130);
   host_resolvers_.erase(found_resolver);
 }
 
@@ -2925,7 +2946,7 @@ GURL NetworkContext::GetHSTSRedirect(const GURL& original_url) {
 #if BUILDFLAG(IS_P2P_ENABLED)
 void NetworkContext::DestroySocketManager(P2PSocketManager* socket_manager) {
   auto iter = socket_managers_.find(socket_manager);
-  DCHECK(iter != socket_managers_.end());
+  CHECK(iter != socket_managers_.end(), base::NotFatalUntil::M130);
   socket_managers_.erase(iter);
 }
 #endif  // BUILDFLAG(IS_P2P_ENABLED)
@@ -2944,7 +2965,7 @@ void NetworkContext::OnVerifyCertForSignedExchangeComplete(
     uint64_t cert_verify_id,
     int result) {
   auto iter = cert_verifier_requests_.find(cert_verify_id);
-  DCHECK(iter != cert_verifier_requests_.end());
+  CHECK(iter != cert_verifier_requests_.end(), base::NotFatalUntil::M130);
 
   auto pending_cert_verify = std::move(iter->second);
   cert_verifier_requests_.erase(iter);
@@ -3104,6 +3125,23 @@ void NetworkContext::GetSharedDictionaryOriginsBetween(
                                                 std::move(callback));
 }
 
+void NetworkContext::PreloadSharedDictionaryInfoForDocument(
+    const std::vector<GURL>& urls,
+    mojo::PendingReceiver<mojom::PreloadedSharedDictionaryInfoHandle>
+        preload_handle) {
+  if (shared_dictionary_manager_) {
+    shared_dictionary_manager_->PreloadSharedDictionaryInfoForDocument(
+        urls, std::move(preload_handle));
+  }
+}
+
+void NetworkContext::HasPreloadedSharedDictionaryInfoForTesting(
+    HasPreloadedSharedDictionaryInfoForTestingCallback callback) {
+  std::move(callback).Run(
+      shared_dictionary_manager_ &&
+      shared_dictionary_manager_->HasPreloadedSharedDictionaryInfo());
+}
+
 void NetworkContext::ResourceSchedulerClientVisibilityChanged(
     const base::UnguessableToken& client_token,
     bool visible) {
@@ -3174,18 +3212,8 @@ void NetworkContext::Prefetch(
     uint32_t options,
     const ResourceRequest& request,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
-  if (!base::FeatureList::IsEnabled(features::kNetworkContextPrefetch)) {
+  if (!prefetch_enabled_) {
     return;
-  }
-
-  if (!prefetch_cache_) {
-    // Lazily initialized to avoid slowing down startup.
-    prefetch_cache_ = std::make_unique<PrefetchCache>();
-  }
-
-  if (!prefetch_url_loader_factory_remote_.is_bound() ||
-      !prefetch_url_loader_factory_remote_.is_connected()) {
-    InitializePrefetchURLLoaderFactory();
   }
 
   PrefetchURLLoaderClient* client = prefetch_cache_->Emplace(request);
@@ -3198,6 +3226,11 @@ void NetworkContext::Prefetch(
   prefetch_url_loader_factory_remote_->CreateLoaderAndStart(
       client->GetURLLoaderPendingReceiver(), request_id, options, request,
       client->BindNewPipeAndPassRemote(), traffic_annotation);
+}
+
+void NetworkContext::GetBoundNetworkForTesting(
+    GetBoundNetworkForTestingCallback callback) {
+  std::move(callback).Run(url_request_context()->bound_network());
 }
 
 bool NetworkContext::IsNetworkForNonceAndUrlAllowed(

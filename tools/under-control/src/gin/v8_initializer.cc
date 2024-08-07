@@ -290,6 +290,10 @@ void SetFlags(IsolateHolder::ScriptMode mode,
                          "--cppheap-optimize-sweep-for-mutator",
                          "--no-cppheap-optimize-sweep-for-mutator");
   SetV8FlagsIfOverridden(features::kV8MinorMS, "--minor-ms", "--no-minor-ms");
+  if (base::FeatureList::IsEnabled(features::kV8ScavengerHigherCapacity)) {
+    SetV8FlagsFormatted("--scavenger-max-new-space-capacity-mb=%i",
+                        features::kV8ScavengerMaxCapacity.Get());
+  }
   SetV8FlagsIfOverridden(features::kV8Sparkplug, "--sparkplug",
                          "--no-sparkplug");
   SetV8FlagsIfOverridden(features::kV8Turbofan, "--turbofan", "--no-turbofan");
@@ -404,6 +408,18 @@ void SetFlags(IsolateHolder::ScriptMode mode,
                          "--intel-jcc-erratum-mitigation",
                          "--no-intel-jcc-erratum-mitigation");
 
+  SetV8FlagsIfOverridden(features::kV8UpdateLimitAfterLoading,
+                         "--update-allocation-limits-after-loading",
+                         "--no-update-allocation-limits-after-loading");
+
+  SetV8FlagsIfOverridden(features::kV8UseLibmTrigFunctions,
+                         "--use-libm-trig-functions",
+                         "--no-use-libm-trig-functions");
+
+  SetV8FlagsIfOverridden(features::kV8UseOriginalMessageForStackTrace,
+                         "--use-original-message-for-stack-trace",
+                         "--no-use-original-message-for-stack-trace");
+
   // JavaScript language features.
   SetV8FlagsIfOverridden(features::kJavaScriptIteratorHelpers,
                          "--harmony-iterator-helpers",
@@ -411,9 +427,6 @@ void SetFlags(IsolateHolder::ScriptMode mode,
   SetV8FlagsIfOverridden(features::kJavaScriptPromiseWithResolvers,
                          "--js-promise-withresolvers",
                          "--no-js-promise-withresolvers");
-  SetV8FlagsIfOverridden(features::kJavaScriptArrayFromAsync,
-                         "--harmony-array-from-async",
-                         "--no-harmony-array-from-async");
   SetV8FlagsIfOverridden(features::kJavaScriptRegExpModifiers,
                          "--js-regexp-modifiers", "--no-js-regexp-modifiers");
   SetV8FlagsIfOverridden(features::kJavaScriptImportAttributes,
@@ -424,18 +437,12 @@ void SetFlags(IsolateHolder::ScriptMode mode,
   SetV8FlagsIfOverridden(features::kJavaScriptRegExpDuplicateNamedGroups,
                          "--js-regexp-duplicate-named-groups",
                          "--no-js-duplicate-named-groups");
+  SetV8FlagsIfOverridden(features::kJavaScriptPromiseTry, "--js-promise-try",
+                         "--no-js-promise-try");
 
   if (IsolateHolder::kStrictMode == mode) {
     SetV8Flags("--use_strict");
   }
-
-  SetV8FlagsIfOverridden(features::kV8UseLibmTrigFunctions,
-                         "--use-libm-trig-functions",
-                         "--no-use-libm-trig-functions");
-
-  SetV8FlagsIfOverridden(features::kV8UseOriginalMessageForStackTrace,
-                         "--use-original-message-for-stack-trace",
-                         "--no-use-original-message-for-stack-trace");
 
   SetV8FlagsIfOverridden(features::kJavaScriptCompileHintsMagic,
                          "--compile-hints-magic", "--no-compile-hints-magic");
@@ -445,6 +452,9 @@ void SetFlags(IsolateHolder::ScriptMode mode,
   SetV8FlagsIfOverridden(features::kWebAssemblyInlining,
                          "--experimental-wasm-inlining",
                          "--no-experimental-wasm-inlining");
+  SetV8FlagsIfOverridden(features::kWebAssemblyInliningCallIndirect,
+                         "--wasm-inlining-call-indirect",
+                         "--no-wasm-inlining-call-indirect");
   SetV8FlagsIfOverridden(features::kWebAssemblyLiftoffCodeFlushing,
                          "--flush-liftoff-code", "--no-flush-liftoff-code");
   SetV8FlagsIfOverridden(features::kWebAssemblyGenericWrapper,
