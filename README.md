@@ -44,10 +44,11 @@ Cromite is currently built for ARM64, x86 (Android SDK version 23+) and Windows 
 
 You will automatically receive notifications about new updates (and be able to install them) via the auto updater functionality (enabled by default), see [related wiki page](https://github.com/bromite/bromite/wiki/AutomaticUpdates).
 
-### F-droid
+### F-Droid repo
 
-Official F-droid repo url:
-https://www.cromite.org/fdroid/repo/?fingerprint=49F37E74DEE483DCA2B991334FB5A0200787430D0B5F9A783DD5F13695E9517B
+We host a F-Droid compatible repo so you can have automatic updates right from your F-Droid client.
+
+https://fdroid.link/#https://www.cromite.org/fdroid/repo/?fingerprint=49F37E74DEE483DCA2B991334FB5A0200787430D0B5F9A783DD5F13695E9517B
 
 ### Auto-update setup for windows
 
