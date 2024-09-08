@@ -844,6 +844,20 @@ bool AwContentBrowserClient::ShouldOverrideUrlLoading(
       request_headers, ignore_navigation);
 }
 
+bool AwContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
+    const content::RenderFrameHost& rfh) {
+  content::RenderFrameHost* rfh_ptr =
+      const_cast<content::RenderFrameHost*>(&rfh);
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderFrameHost(rfh_ptr);
+  AwSettings* aw_settings = AwSettings::FromWebContents(web_contents);
+  // Don't allow same-site RFH swap on non-crashed frames if the initial page
+  // scale is non-default. See the comment in `AwSettings` about this for more
+  // details.
+  return !aw_settings || !rfh_ptr->IsRenderFrameLive() ||
+         !aw_settings->initial_page_scale_is_non_default();
+}
+
 std::unique_ptr<content::LoginDelegate>
 AwContentBrowserClient::CreateLoginDelegate(
     const net::AuthChallengeInfo& auth_info,
@@ -1337,7 +1351,7 @@ bool AwContentBrowserClient::IsAttributionReportingOperationAllowed(
     }
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 content::ContentBrowserClient::AttributionReportingOsRegistrars
@@ -1385,7 +1399,7 @@ AwContentBrowserClient::GetAttributionReportingOsRegistrars(
               AttributionReportingOsRegistrar::kDisabled};
   }
 
-  NOTREACHED_NORETURN();
+  NOTREACHED();
 }
 
 network::mojom::IpProtectionProxyBypassPolicy

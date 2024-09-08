@@ -15,8 +15,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/allocator/partition_allocator/src/partition_alloc/page_allocator.h"
-#include "base/allocator/partition_allocator/src/partition_alloc/partition_address_space.h"
 #include "base/bits.h"
 #include "base/check.h"
 #include "base/check_op.h"
@@ -41,6 +39,8 @@
 #include "build/build_config.h"
 #include "gin/array_buffer.h"
 #include "gin/gin_features.h"
+#include "partition_alloc/page_allocator.h"
+#include "partition_alloc/partition_address_space.h"
 #include "tools/v8_context_snapshot/buildflags.h"
 #include "v8/include/v8-initialization.h"
 #include "v8/include/v8-snapshot.h"
@@ -66,7 +66,7 @@ std::optional<gin::V8SnapshotFileType> g_snapshot_file_type;
 
 bool GenerateEntropy(unsigned char* buffer, size_t amount) {
   base::RandBytes(
-      // SAFETY: This depends on callers providing a valid pointer/size pair.
+      // SAFETY: This depends on v8 providing a valid pointer/size pair.
       //
       // TODO(crbug.com/338574383): The signature is fixed as it's a callback
       // from v8, but maybe v8 can use a span.
@@ -444,11 +444,10 @@ void SetFlags(IsolateHolder::ScriptMode mode,
     SetV8Flags("--use_strict");
   }
 
-  SetV8FlagsIfOverridden(features::kJavaScriptCompileHintsMagic,
-                         "--compile-hints-magic", "--no-compile-hints-magic");
-
   // WebAssembly features.
 
+  SetV8FlagsIfOverridden(features::kWebAssemblyDeopt, "--wasm-deopt",
+                         "--no-wasm-deopt");
   SetV8FlagsIfOverridden(features::kWebAssemblyInlining,
                          "--experimental-wasm-inlining",
                          "--no-experimental-wasm-inlining");
