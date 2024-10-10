@@ -85,10 +85,13 @@
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
+#include "chrome/browser/user_annotations/user_annotations_service_factory.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/url_constants.h"
+#include "components/autofill/core/browser/address_data_manager.h"
+#include "components/autofill/core/browser/payments_data_manager.h"
 #include "components/autofill/core/browser/personal_data_manager.h"
 #include "components/autofill/core/browser/strike_databases/strike_database.h"
 #include "components/autofill/core/browser/webdata/autofill_webdata_service.h"
@@ -139,6 +142,7 @@
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
 #include "components/tpcd/metadata/browser/manager.h"
+#include "components/user_annotations/user_annotations_service.h"
 #include "components/web_cache/browser/web_cache_manager.h"
 #include "components/webrtc_logging/browser/log_cleanup.h"
 #include "components/webrtc_logging/browser/text_log_list.h"
@@ -505,27 +509,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           prerender::NoStatePrefetchManager::CLEAR_PRERENDER_HISTORY);
     }
 
-    // The saved Autofill profiles and credit cards can include the origin from
-    // which these profiles and credit cards were learned.  These are a form of
-    // history, so clear them as well.
-    // TODO(dmurph): Support all backends with filter (crbug.com/113621).
-    scoped_refptr<autofill::AutofillWebDataService> web_data_service =
-        WebDataServiceFactory::GetAutofillWebDataForProfile(
-            profile_, ServiceAccessType::EXPLICIT_ACCESS);
-    if (web_data_service.get()) {
-      web_data_service->RemoveOriginURLsModifiedBetween(delete_begin_,
-                                                        delete_end_);
-      // Ask for a call back when the above call is finished.
-      web_data_service->GetDBTaskRunner()->PostTaskAndReply(
-          FROM_HERE, base::DoNothing(),
-          CreateTaskCompletionClosure(TracingDataType::kAutofillOrigins));
-
-      autofill::PersonalDataManager* data_manager =
-          autofill::PersonalDataManagerFactory::GetForBrowserContext(profile_);
-      if (data_manager)
-        data_manager->Refresh();
-    }
-
     base::ThreadPool::PostTaskAndReply(
         FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
         base::BindOnce(
@@ -745,7 +728,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     browsing_data::RemoveSiteSettingsData(delete_begin, delete_end,
                                           host_content_settings_map_);
 
-#if !BUILDFLAG(IS_ANDROID)
     // The active permission does not have timestamps, so the all active grants
     // will be revoked regardless of the time range because all the are expected
     // to be recent.
@@ -753,7 +735,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
             FileSystemAccessPermissionContextFactory::GetForProfile(profile_)) {
       permission_context->RevokeAllActiveGrants();
     }
-#endif
 
     auto* handler_registry =
         ProtocolHandlerRegistryFactory::GetForBrowserContext(profile_);
@@ -883,14 +864,14 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         ContentSettingsType::NOTIFICATION_PERMISSION_REVIEW, delete_begin_,
         delete_end_, website_settings_filter);
 
+    host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
+        ContentSettingsType::FILE_SYSTEM_LAST_PICKED_DIRECTORY, delete_begin,
+        delete_end, website_settings_filter);
+
 #if !BUILDFLAG(IS_ANDROID)
     host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
         ContentSettingsType::INTENT_PICKER_DISPLAY, delete_begin_, delete_end_,
         website_settings_filter);
-
-    host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
-        ContentSettingsType::FILE_SYSTEM_LAST_PICKED_DIRECTORY, delete_begin,
-        delete_end, website_settings_filter);
 
     host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
         ContentSettingsType::PRIVATE_NETWORK_GUARD, delete_begin_, delete_end_,
@@ -1066,8 +1047,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     if (web_data_service.get()) {
       web_data_service->RemoveFormElementsAddedBetween(delete_begin_,
                                                        delete_end_);
-      web_data_service->RemoveAutofillDataModifiedBetween(delete_begin_,
-                                                          delete_end_);
       // Clear out the Autofill StrikeDatabase in its entirety.
       // TODO(crbug.com/40594007): Respect |delete_begin_| and |delete_end_| and
       // only clear out entries whose last strikes were created in that
@@ -1077,15 +1056,22 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
       if (strike_database)
         strike_database->ClearAllStrikes();
 
+      autofill::PersonalDataManager* data_manager =
+          autofill::PersonalDataManagerFactory::GetForBrowserContext(profile_);
+      data_manager->address_data_manager().RemoveLocalProfilesModifiedBetween(
+          delete_begin_, delete_end_);
+      data_manager->payments_data_manager().RemoveLocalDataModifiedBetween(
+          delete_begin_, delete_end_);
+
       // Ask for a call back when the above calls are finished.
       web_data_service->GetDBTaskRunner()->PostTaskAndReply(
           FROM_HERE, base::DoNothing(),
           CreateTaskCompletionClosure(TracingDataType::kAutofillData));
-
-      autofill::PersonalDataManager* data_manager =
-          autofill::PersonalDataManagerFactory::GetForBrowserContext(profile_);
-      if (data_manager)
-        data_manager->Refresh();
+    }
+    if (auto* user_annotations_service =
+            UserAnnotationsServiceFactory::GetForProfile(profile_)) {
+      user_annotations_service->RemoveAnnotationsInRange(delete_begin_,
+                                                         delete_end_);
     }
   }
 

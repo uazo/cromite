@@ -89,6 +89,7 @@
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/file_url_loader.h"
+#include "content/public/browser/frame_type.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/network_service_instance.h"
@@ -132,6 +133,7 @@
 #include "ui/resources/grit/ui_resources.h"
 
 using content::BrowserThread;
+using content::FrameType;
 using content::WebContents;
 using safe_browsing::AsyncCheckTracker;
 using safe_browsing::hash_realtime_utils::HashRealTimeSelection;
@@ -183,7 +185,7 @@ class XrwNavigationThrottle : public content::NavigationThrottle {
 // Get async check tracker to make Safe Browsing v5 check asynchronous
 base::WeakPtr<AsyncCheckTracker> GetAsyncCheckTracker(
     const base::RepeatingCallback<content::WebContents*()>& wc_getter,
-    int frame_tree_node_id) {
+    content::FrameTreeNodeId frame_tree_node_id) {
   if (!base::FeatureList::IsEnabled(
           safe_browsing::kSafeBrowsingAsyncRealTimeCheck)) {
     return nullptr;
@@ -196,9 +198,12 @@ base::WeakPtr<AsyncCheckTracker> GetAsyncCheckTracker(
     return nullptr;
   }
 
+  // Setting should_sync_checker_check_allowlist to false since the allowlist
+  // is not available on WebView.
   return AsyncCheckTracker::GetOrCreateForWebContents(
              web_contents,
-             AwBrowserProcess::GetInstance()->GetSafeBrowsingUIManager())
+             AwBrowserProcess::GetInstance()->GetSafeBrowsingUIManager(),
+             /*should_sync_checker_check_allowlist=*/false)
       ->GetWeakPtr();
 }
 
@@ -520,9 +525,7 @@ base::FilePath AwContentBrowserClient::GetDefaultDownloadDirectory() {
 }
 
 std::string AwContentBrowserClient::GetDefaultDownloadName() {
-  NOTREACHED_IN_MIGRATION()
-      << "Android WebView does not use chromium downloads";
-  return std::string();
+  NOTREACHED() << "Android WebView does not use chromium downloads";
 }
 
 std::optional<base::FilePath>
@@ -538,7 +541,7 @@ AwContentBrowserClient::GetLocalTracesDirectory() {
 
 void AwContentBrowserClient::DidCreatePpapiPlugin(
     content::BrowserPpapiHost* browser_host) {
-  NOTREACHED_IN_MIGRATION() << "Android WebView does not support plugins";
+  NOTREACHED() << "Android WebView does not support plugins";
 }
 
 bool AwContentBrowserClient::AllowPepperSocketAPI(
@@ -546,15 +549,13 @@ bool AwContentBrowserClient::AllowPepperSocketAPI(
     const GURL& url,
     bool private_api,
     const content::SocketPermissionRequest* params) {
-  NOTREACHED_IN_MIGRATION() << "Android WebView does not support plugins";
-  return false;
+  NOTREACHED() << "Android WebView does not support plugins";
 }
 
 bool AwContentBrowserClient::IsPepperVpnProviderAPIAllowed(
     content::BrowserContext* browser_context,
     const GURL& url) {
-  NOTREACHED_IN_MIGRATION() << "Android WebView does not support plugins";
-  return false;
+  NOTREACHED() << "Android WebView does not support plugins";
 }
 
 std::unique_ptr<content::TracingDelegate>
@@ -645,6 +646,19 @@ AwContentBrowserClient::CreateThrottlesForNavigation(
     throttles.push_back(
         std::make_unique<XrwNavigationThrottle>(navigation_handle));
   }
+
+  if ((navigation_handle->GetNavigatingFrameType() ==
+           FrameType::kPrimaryMainFrame ||
+       navigation_handle->GetNavigatingFrameType() == FrameType::kSubframe) &&
+      navigation_handle->GetURL().SchemeIsHTTPOrHTTPS()) {
+    AwSupervisedUserUrlClassifier* urlClassifier =
+        AwSupervisedUserUrlClassifier::GetInstance();
+    if (urlClassifier->ShouldCreateThrottle()) {
+      throttles.push_back(std::make_unique<AwSupervisedUserThrottle>(
+          navigation_handle, urlClassifier));
+    }
+  }
+
   return throttles;
 }
 
@@ -659,7 +673,7 @@ AwContentBrowserClient::CreateURLLoaderThrottles(
     content::BrowserContext* browser_context,
     const base::RepeatingCallback<content::WebContents*()>& wc_getter,
     content::NavigationUIData* navigation_ui_data,
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     std::optional<int64_t> navigation_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
@@ -705,17 +719,6 @@ AwContentBrowserClient::CreateURLLoaderThrottles(
     }
   }
 
-  if ((request.destination == network::mojom::RequestDestination::kDocument ||
-       request.destination == network::mojom::RequestDestination::kIframe) &&
-      request.url.SchemeIsHTTPOrHTTPS()) {
-    AwSupervisedUserUrlClassifier* urlClassifier =
-        AwSupervisedUserUrlClassifier::GetInstance();
-    if (urlClassifier->ShouldCreateThrottle()) {
-      result.push_back(
-          std::make_unique<AwSupervisedUserThrottle>(urlClassifier));
-    }
-  }
-
   return result;
 }
 
@@ -724,7 +727,7 @@ AwContentBrowserClient::CreateURLLoaderThrottlesForKeepAlive(
     const network::ResourceRequest& request,
     content::BrowserContext* browser_context,
     const base::RepeatingCallback<content::WebContents*()>& wc_getter,
-    int frame_tree_node_id) {
+    content::FrameTreeNodeId frame_tree_node_id) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   // Set lookup mechanism based on feature flag
   HashRealTimeSelection hash_real_time_selection =
@@ -768,7 +771,7 @@ AwContentBrowserClient::GetSafeBrowsingUrlCheckerDelegate() {
 }
 
 bool AwContentBrowserClient::ShouldOverrideUrlLoading(
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     bool browser_initiated,
     const GURL& gurl,
     const std::string& request_method,
@@ -846,6 +849,9 @@ bool AwContentBrowserClient::ShouldOverrideUrlLoading(
 
 bool AwContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
     const content::RenderFrameHost& rfh) {
+  if (!base::FeatureList::IsEnabled(features::kWebViewRenderDocument)) {
+    return false;
+  }
   content::RenderFrameHost* rfh_ptr =
       const_cast<content::RenderFrameHost*>(&rfh);
   content::WebContents* web_contents =
@@ -877,7 +883,7 @@ AwContentBrowserClient::CreateLoginDelegate(
 bool AwContentBrowserClient::HandleExternalProtocol(
     const GURL& url,
     content::WebContents::Getter wc_getter,
-    int frame_tree_node_id,
+    content::FrameTreeNodeId frame_tree_node_id,
     content::NavigationUIData* navigation_data,
     bool is_primary_main_frame,
     bool /* is_in_fenced_frame_tree */,
@@ -926,7 +932,7 @@ bool AwContentBrowserClient::HandleExternalProtocol(
         FROM_HERE,
         base::BindOnce(
             [](mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
-               int frame_tree_node_id,
+               content::FrameTreeNodeId frame_tree_node_id,
                scoped_refptr<AwBrowserContextIoThreadHandle>
                    browser_context_handle) {
               // Manages its own lifetime.
@@ -1126,8 +1132,7 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
         FROM_HERE,
         base::BindOnce(
             &AwProxyingURLLoaderFactory::CreateProxy, std::move(cookie_manager),
-            cookie_access_policy, isolation_info,
-            content::RenderFrameHost::kNoFrameTreeNodeId,
+            cookie_access_policy, isolation_info, content::FrameTreeNodeId(),
             std::move(proxied_receiver), std::move(target_factory_remote),
             std::nullopt /* security_options */,
             aw_browser_context->service_worker_xrw_allowlist_matcher(),

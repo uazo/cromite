@@ -271,6 +271,10 @@ void SetFlags(IsolateHolder::ScriptMode mode,
       features::kV8ExperimentalRegexpEngine,
       "--enable-experimental-regexp-engine-on-excessive-backtracks",
       "--no-enable-experimental-regexp-engine-on-excessive-backtracks");
+  SetV8FlagsIfOverridden(
+      features::kV8ExternalMemoryAccountedInGlobalLimit,
+      "--enable-external-memory-accounted-in-global-limit",
+      "--no-enable-external-memory-accounted-in-global-limit");
   SetV8FlagsIfOverridden(features::kV8TurboFastApiCalls,
                          "--turbo-fast-api-calls", "--no-turbo-fast-api-calls");
   SetV8FlagsIfOverridden(features::kV8MegaDomIC, "--mega-dom-ic",
@@ -283,17 +287,19 @@ void SetFlags(IsolateHolder::ScriptMode mode,
     SetV8FlagsFormatted("--memory-reducer-gc-count=%i",
                         features::kV8MemoryReducerGCCount.Get());
   }
+  SetV8FlagsIfOverridden(features::kV8IncrementalMarkingStartUserVisible,
+                         "--incremental-marking-start-user-visible",
+                         "--no-incremental-marking-start-user-visible");
   SetV8FlagsIfOverridden(features::kV8IdleGcOnContextDisposal,
                          "--idle-gc-on-context-disposal",
                          "--no-idle-gc-on-context-disposal");
-  SetV8FlagsIfOverridden(features::kV8GCOptimizeSweepForMutator,
-                         "--cppheap-optimize-sweep-for-mutator",
-                         "--no-cppheap-optimize-sweep-for-mutator");
   SetV8FlagsIfOverridden(features::kV8MinorMS, "--minor-ms", "--no-minor-ms");
   if (base::FeatureList::IsEnabled(features::kV8ScavengerHigherCapacity)) {
     SetV8FlagsFormatted("--scavenger-max-new-space-capacity-mb=%i",
                         features::kV8ScavengerMaxCapacity.Get());
   }
+  SetV8FlagsIfOverridden(features::kV8SeparateGCPhases, "--separate-gc-phases",
+                         "--no-separate-gc-phases");
   SetV8FlagsIfOverridden(features::kV8Sparkplug, "--sparkplug",
                          "--no-sparkplug");
   SetV8FlagsIfOverridden(features::kV8Turbofan, "--turbofan", "--no-turbofan");

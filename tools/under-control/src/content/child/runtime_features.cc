@@ -325,8 +325,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableWebXRSpecParity,
            raw_ref(device::features::kWebXrIncubations)},
 #endif
-          {wf::EnableRemoveMobileViewportDoubleTap,
-           raw_ref(features::kRemoveMobileViewportDoubleTap)},
           {wf::EnableServiceWorkerStaticRouter,
            raw_ref(features::kServiceWorkerStaticRouter)},
           {wf::EnablePermissions, raw_ref(features::kWebPermissionsApi),
@@ -383,6 +381,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            kSetOnlyIfOverridden},
           {"Fledge", raw_ref(features::kPrivacySandboxAdsAPIsM1Override),
            kSetOnlyIfOverridden},
+          {"FledgeBiddingAndAuctionServerAPI",
+           raw_ref(blink::features::kFledgeBiddingAndAuctionServer), kDefault},
           {"FontationsFontBackend",
            raw_ref(blink::features::kFontationsFontBackend)},
           {"FontSrcLocalMatching", raw_ref(features::kFontSrcLocalMatching)},
