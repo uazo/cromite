@@ -22,6 +22,7 @@
 #include "android_webview/browser/aw_contents_io_thread_client.h"
 #include "android_webview/browser/aw_cookie_access_policy.h"
 #include "android_webview/browser/aw_devtools_manager_delegate.h"
+#include "android_webview/browser/aw_enterprise_helper.h"
 #include "android_webview/browser/aw_feature_list_creator.h"
 #include "android_webview/browser/aw_http_auth_handler.h"
 #include "android_webview/browser/aw_settings.h"
@@ -109,6 +110,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/android/network_library.h"
 #include "net/cookies/site_for_cookies.h"
+#include "net/dns/public/secure_dns_mode.h"
 #include "net/http/http_util.h"
 #include "net/net_buildflags.h"
 #include "net/ssl/ssl_cert_request_info.h"
@@ -155,7 +157,7 @@ bool g_check_cleartext_permitted = false;
 
 BASE_FEATURE(kWebViewOptimizeXrwNavigationFlow,
              "WebViewOptimizeXrwNavigationFlow",
-             base::FEATURE_DISABLED_BY_DEFAULT);
+             base::FEATURE_ENABLED_BY_DEFAULT);
 
 // A throttle which checks if the XRW origin trial is enabled for this
 // navigation, and forwards it to the proxying loader factory.
@@ -269,7 +271,7 @@ AwContentBrowserClient::AwContentBrowserClient(
   DCHECK(aw_feature_list_creator_);
 }
 
-AwContentBrowserClient::~AwContentBrowserClient() {}
+AwContentBrowserClient::~AwContentBrowserClient() = default;
 
 void AwContentBrowserClient::OnNetworkServiceCreated(
     network::mojom::NetworkService* network_service) {
@@ -279,15 +281,31 @@ void AwContentBrowserClient::OnNetworkServiceCreated(
   content::GetCertVerifierServiceFactory()->SetUseChromeRootStore(
       false, base::DoNothing());
 
-  content::GetNetworkService()->SetUpHttpAuth(
-      network::mojom::HttpAuthStaticParams::New());
-  content::GetNetworkService()->ConfigureHttpAuthPrefs(
+  network_service->SetUpHttpAuth(network::mojom::HttpAuthStaticParams::New());
+  network_service->ConfigureHttpAuthPrefs(
       AwBrowserProcess::GetInstance()->CreateHttpAuthDynamicParams());
+
   if (base::FeatureList::IsEnabled(features::kWebViewAsyncDns)) {
-    content::GetNetworkService()->ConfigureStubHostResolver(
-        /*insecure_dns_client_enabled=*/true, net::SecureDnsMode::kAutomatic,
-        net::DnsOverHttpsConfig(),
-        /*additional_dns_types_enabled=*/true);
+    enterprise::GetEnterpriseState(
+        base::BindOnce([](enterprise::EnterpriseState state) {
+          switch (state) {
+            case enterprise::EnterpriseState::kUnknown:
+              // If we cannot be certain about the enterprise state, we should
+              // not enable the AsyncDNS resolver, but fall back on the system
+              // resolver.
+            case enterprise::EnterpriseState::kEnterpriseOwned:
+              // On enterprise owned devices, we should use the system resolver
+              // to make sure that we respect any network settings implemented
+              // by the device owner.
+              return;
+            case enterprise::EnterpriseState::kNotOwned:
+              content::GetNetworkService()->ConfigureStubHostResolver(
+                  /*insecure_dns_client_enabled=*/true,
+                  net::SecureDnsMode::kAutomatic, net::DnsOverHttpsConfig(),
+                  /*additional_dns_types_enabled=*/true);
+              break;
+          }
+        }));
   }
 }
 
@@ -870,7 +888,8 @@ AwContentBrowserClient::CreateLoginDelegate(
     content::WebContents* web_contents,
     content::BrowserContext* browser_context,
     const content::GlobalRequestID& request_id,
-    bool is_request_for_primary_main_frame,
+    bool is_request_for_primary_main_frame_navigation,
+    bool is_request_for_navigation,
     const GURL& url,
     scoped_refptr<net::HttpResponseHeaders> response_headers,
     bool first_auth_attempt,
@@ -892,6 +911,7 @@ bool AwContentBrowserClient::HandleExternalProtocol(
     bool has_user_gesture,
     const std::optional<url::Origin>& initiating_origin,
     content::RenderFrameHost* initiator_document,
+    const net::IsolationInfo& isolation_info,
     mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
   // Sandbox flags
   // =============
@@ -912,6 +932,15 @@ bool AwContentBrowserClient::HandleExternalProtocol(
                 static_cast<AwBrowserContext*>(
                     web_contents->GetBrowserContext()));
 
+  // Pass WebContentsKey to look up AwContentsIoThreadClient in
+  // WebContentsToIoThreadClientMap later. Currently this is used only when a
+  // page is being prerendered.
+  // TODO(crbug.com/373474043): Use this even for non-prerendered pages.
+  std::optional<WebContentsKey> web_contents_key;
+  if (web_contents && web_contents->IsPrerenderedFrame(frame_tree_node_id)) {
+    web_contents_key = GetWebContentsKey(*web_contents);
+  }
+
   // We don't need to care for |security_options| as the factories constructed
   // below are used only for navigation.
   // We also don't care about retrieving cookies in this case because these will
@@ -922,7 +951,7 @@ bool AwContentBrowserClient::HandleExternalProtocol(
     // Manages its own lifetime.
     new android_webview::AwProxyingURLLoaderFactory(
         std::nullopt /* cookie_manager */, nullptr /* cookie_access_policy */,
-        std::nullopt /* isolation_info*/, frame_tree_node_id,
+        isolation_info, web_contents_key, frame_tree_node_id,
         std::move(receiver), mojo::NullRemote(), true /* intercept_only */,
         std::nullopt /* security_options */,
         nullptr /* xrw_allowlist_matcher */, std::move(browser_context_handle),
@@ -932,23 +961,24 @@ bool AwContentBrowserClient::HandleExternalProtocol(
         FROM_HERE,
         base::BindOnce(
             [](mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
+               std::optional<WebContentsKey> web_contents_key,
                content::FrameTreeNodeId frame_tree_node_id,
                scoped_refptr<AwBrowserContextIoThreadHandle>
-                   browser_context_handle) {
+                   browser_context_handle,
+               const net::IsolationInfo& isolation_info) {
               // Manages its own lifetime.
               new android_webview::AwProxyingURLLoaderFactory(
                   std::nullopt /* cookie_manager */,
-                  nullptr /* cookie_access_policy */,
-                  std::nullopt /* isolation_info*/, frame_tree_node_id,
-                  std::move(receiver), mojo::NullRemote(),
-                  true /* intercept_only */,
+                  nullptr /* cookie_access_policy */, isolation_info,
+                  web_contents_key, frame_tree_node_id, std::move(receiver),
+                  mojo::NullRemote(), true /* intercept_only */,
                   std::nullopt /* security_options */,
                   nullptr /* xrw_allowlist_matcher */,
                   std::move(browser_context_handle),
                   std::nullopt /* navigation_id */);
             },
-            std::move(receiver), frame_tree_node_id,
-            std::move(browser_context_handle)));
+            std::move(receiver), web_contents_key, frame_tree_node_id,
+            std::move(browser_context_handle), isolation_info));
   }
   return false;
 }
@@ -1113,17 +1143,27 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
           preferences.allow_universal_access_from_file_urls;
     }
 
+    // Pass WebContentsKey to look up AwContentsIoThreadClient in
+    // WebContentsToIoThreadClientMap later. Currently this is used only when a
+    // page is being prerendered.
+    // TODO(crbug.com/373474043): Use this even for non-prerendered pages.
+    std::optional<WebContentsKey> web_contents_key;
+    if (web_contents->IsPrerenderedFrame(frame->GetFrameTreeNodeId())) {
+      web_contents_key = GetWebContentsKey(*web_contents);
+    }
+
     auto xrw_allowlist_matcher =
         AwSettings::FromWebContents(web_contents)->xrw_allowlist_matcher();
 
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
-        base::BindOnce(
-            &AwProxyingURLLoaderFactory::CreateProxy, std::move(cookie_manager),
-            cookie_access_policy, isolation_info, frame->GetFrameTreeNodeId(),
-            std::move(proxied_receiver), std::move(target_factory_remote),
-            security_options, std::move(xrw_allowlist_matcher),
-            std::move(browser_context_handle), navigation_id));
+        base::BindOnce(&AwProxyingURLLoaderFactory::CreateProxy,
+                       std::move(cookie_manager), cookie_access_policy,
+                       isolation_info, web_contents_key,
+                       frame->GetFrameTreeNodeId(), std::move(proxied_receiver),
+                       std::move(target_factory_remote), security_options,
+                       std::move(xrw_allowlist_matcher),
+                       std::move(browser_context_handle), navigation_id));
   } else {
     // A service worker and worker subresources set nullptr to |frame|, and
     // work without seeing the AllowUniversalAccessFromFileURLs setting. So,
@@ -1132,7 +1172,8 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
         FROM_HERE,
         base::BindOnce(
             &AwProxyingURLLoaderFactory::CreateProxy, std::move(cookie_manager),
-            cookie_access_policy, isolation_info, content::FrameTreeNodeId(),
+            cookie_access_policy, isolation_info,
+            /*web_contents_key=*/std::nullopt, content::FrameTreeNodeId(),
             std::move(proxied_receiver), std::move(target_factory_remote),
             std::nullopt /* security_options */,
             aw_browser_context->service_worker_xrw_allowlist_matcher(),
@@ -1435,4 +1476,13 @@ bool AwContentBrowserClient::IsFullCookieAccessAllowed(
 
   return aw_settings->GetAllowThirdPartyCookies();
 }
+
+bool AwContentBrowserClient::AllowNonActivatedCrossOriginPaintHolding() {
+  // In WebView, we allow non-activated cross-origin paint holding, since apps
+  // currently experience this behavior and are in control of what to show.
+  // TODO(crbug.com/368087192): We can consider disabling it while monitoring
+  // for any breakages.
+  return true;
+}
+
 }  // namespace android_webview

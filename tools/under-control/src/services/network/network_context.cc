@@ -45,8 +45,10 @@
 #include "build/chromeos_buildflags.h"
 #include "components/cookie_config/cookie_store_util.h"
 #include "components/domain_reliability/monitor.h"
-#include "components/ip_protection/common/ip_protection_config_cache_impl.h"
 #include "components/ip_protection/common/ip_protection_config_getter_mojo_impl.h"
+#include "components/ip_protection/common/ip_protection_control_mojo.h"
+#include "components/ip_protection/common/ip_protection_core_impl.h"
+#include "components/ip_protection/common/ip_protection_proxy_delegate.h"
 #include "components/network_session_configurator/browser/network_session_configurator.h"
 #include "components/network_session_configurator/common/network_switches.h"
 #include "components/os_crypt/async/common/encryptor.h"
@@ -105,7 +107,6 @@
 #include "services/network/http_auth_cache_copier.h"
 #include "services/network/http_server_properties_pref_delegate.h"
 #include "services/network/ignore_errors_cert_verifier.h"
-#include "services/network/ip_protection/ip_protection_proxy_delegate.h"
 #include "services/network/is_browser_initiated.h"
 #include "services/network/net_log_exporter.h"
 #include "services/network/network_service.h"
@@ -941,6 +942,14 @@ void NetworkContext::CreateURLLoaderFactoryForCertNetFetcher(
   url_loader_factory_params->process_id = mojom::kBrowserProcessId;
   url_loader_factory_params->automatically_assign_isolation_info = true;
   url_loader_factory_params->is_orb_enabled = false;
+  if (url_request_context()->bound_network() !=
+      net::handles::kInvalidNetworkHandle) {
+    // This is done to maintain consistency with network-bound
+    // URLLoaderFactories used by multi-network CCT. See
+    // CorsURLLoaderFactory::IsCorsPreflighLoadOptionAllowed
+    // http://crrev.com/c/5899528.
+    url_loader_factory_params->disable_web_security = true;
+  }
   CreateURLLoaderFactory(std::move(factory_receiver),
                          std::move(url_loader_factory_params));
 }
@@ -2536,27 +2545,25 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
   // IP Protection, or for any network context when the IP Protection feature is
   // disabled).
   auto* nspal = network_service_->masked_domain_list_manager();
+  std::unique_ptr<ip_protection::IpProtectionControlMojo>
+      ip_protection_control_mojo;
   if (!params_->initial_custom_proxy_config && nspal->IsEnabled()) {
-    auto ipp_config_cache =
-        std::make_unique<ip_protection::IpProtectionConfigCacheImpl>(
-            std::make_unique<ip_protection::IpProtectionConfigGetterMojoImpl>(
-                std::move(params_->ip_protection_config_getter)));
-    std::unique_ptr<IpProtectionProxyDelegate> proxy_delegate =
-        std::make_unique<IpProtectionProxyDelegate>(
-            nspal, std::move(ipp_config_cache), params_->enable_ip_protection);
-    proxy_delegate->SetReceiver(
-        std::move(params_->ip_protection_proxy_delegate));
-    proxy_delegate_ = proxy_delegate.get();
-    builder.set_proxy_delegate(std::move(proxy_delegate));
+    auto ipp_core = std::make_unique<ip_protection::IpProtectionCoreImpl>(
+        std::make_unique<ip_protection::IpProtectionConfigGetterMojoImpl>(
+            std::move(params_->ip_protection_config_getter)),
+        params_->enable_ip_protection);
+    ip_protection_control_mojo =
+        std::make_unique<ip_protection::IpProtectionControlMojo>(
+            std::move(params_->ip_protection_control), ipp_core.get());
+    builder.set_proxy_delegate(
+        std::make_unique<ip_protection::IpProtectionProxyDelegate>(
+            nspal, std::move(ipp_core)));
   } else if (params_->initial_custom_proxy_config ||
              params_->custom_proxy_config_client_receiver) {
-    std::unique_ptr<NetworkServiceProxyDelegate> proxy_delegate =
-        std::make_unique<NetworkServiceProxyDelegate>(
-            std::move(params_->initial_custom_proxy_config),
-            std::move(params_->custom_proxy_config_client_receiver),
-            std::move(params_->custom_proxy_connection_observer_remote));
-    proxy_delegate_ = proxy_delegate.get();
-    builder.set_proxy_delegate(std::move(proxy_delegate));
+    builder.set_proxy_delegate(std::make_unique<NetworkServiceProxyDelegate>(
+        std::move(params_->initial_custom_proxy_config),
+        std::move(params_->custom_proxy_config_client_receiver),
+        std::move(params_->custom_proxy_connection_observer_remote)));
   }
 
   net::NetLog* net_log = nullptr;
@@ -2864,8 +2871,8 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
   if (on_url_request_context_builder_configured) {
     std::move(on_url_request_context_builder_configured).Run(&builder);
   }
-  auto result =
-      URLRequestContextOwner(std::move(pref_service), builder.Build());
+  auto result = URLRequestContextOwner(std::move(pref_service), builder.Build(),
+                                       std::move(ip_protection_control_mojo));
 
   // Subscribe the CertVerifier to configuration changes that are exposed via
   // the mojom::SSLConfig, but which are not part of the

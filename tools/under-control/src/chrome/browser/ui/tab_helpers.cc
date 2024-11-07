@@ -28,7 +28,7 @@
 #include "chrome/browser/content_settings/page_specific_content_settings_delegate.h"
 #include "chrome/browser/content_settings/sound_content_setting_observer.h"
 #include "chrome/browser/dips/dips_bounce_detector.h"
-#include "chrome/browser/dips/dips_service.h"
+#include "chrome/browser/dips/dips_navigation_flow_detector.h"
 #include "chrome/browser/external_protocol/external_protocol_observer.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/file_system_access/file_system_access_features.h"
@@ -179,7 +179,6 @@
 #include "chrome/browser/android/policy/policy_auditor_bridge.h"
 #include "chrome/browser/banners/android/chrome_app_banner_manager_android.h"
 #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
-#include "chrome/browser/dips/dips_navigation_flow_detector.h"
 #include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
 #include "chrome/browser/fast_checkout/fast_checkout_tab_helper.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
@@ -225,6 +224,7 @@
 #if BUILDFLAG(IS_CHROMEOS_ASH)
 #include "chrome/browser/ash/boot_times_recorder/boot_times_recorder_tab_helper.h"
 #include "chrome/browser/ash/growth/campaigns_manager_session_tab_helper.h"
+#include "chrome/browser/ash/mahi/web_contents/mahi_tab_helper.h"
 #include "chrome/browser/ui/ash/google_one/google_one_offer_iph_tab_helper.h"
 #endif
 
@@ -235,7 +235,6 @@
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/chromeos/container_app/container_app_tab_helper.h"
 #include "chrome/browser/chromeos/cros_apps/cros_apps_tab_helper.h"
-#include "chrome/browser/chromeos/mahi/mahi_tab_helper.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_content_tab_helper.h"
 #include "chrome/browser/chromeos/printing/print_preview/printing_init_cros.h"
 #endif
@@ -388,7 +387,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   }
   browsing_topics::BrowsingTopicsRedirectObserver::MaybeCreateForWebContents(
       web_contents);
-  chrome::ChainedBackNavigationTracker::CreateForWebContents(web_contents);
+  ChainedBackNavigationTracker::CreateForWebContents(web_contents);
   chrome_browser_net::NetErrorTabHelper::CreateForWebContents(web_contents);
   if (!autofill_client_provider.uses_platform_autofill()) {
     ChromePasswordManagerClient::CreateForWebContents(web_contents);
@@ -409,6 +408,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       ISOLATED_WORLD_ID_CHROME_INTERNAL);
   ConnectionHelpTabHelper::CreateForWebContents(web_contents);
   CoreTabHelper::CreateForWebContents(web_contents);
+  DipsNavigationFlowDetector::CreateForWebContents(web_contents);
   DIPSWebContentsObserver::MaybeCreateForWebContents(web_contents);
 #if BUILDFLAG(ENABLE_REPORTING)
   if (base::FeatureList::IsEnabled(
@@ -597,7 +597,6 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   // --- Section 2: Platform-specific tab helpers ---
 
 #if BUILDFLAG(IS_ANDROID)
-  DipsNavigationFlowDetector::MaybeCreateForWebContents(web_contents);
   webapps::MLInstallabilityPromoter::CreateForWebContents(web_contents);
   {
     // Remove after fixing https://crbug/905919

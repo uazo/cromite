@@ -288,6 +288,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kTouchDragAndContextMenu)},
           {wf::EnableUserActivationSameOriginVisibility,
            raw_ref(features::kUserActivationSameOriginVisibility)},
+          {wf::EnableWebAuthenticationAmbient,
+           raw_ref(device::kWebAuthnAmbientSignin)},
           {wf::EnableWebBluetooth, raw_ref(features::kWebBluetooth),
            kSetOnlyIfOverridden},
           {wf::EnableWebBluetoothGetDevices,
@@ -482,6 +484,8 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
        blink::switches::kDisableStandardizedBrowserZoom, false},
       {wrf::EnableCSSCustomStateDeprecatedSyntax,
        blink::switches::kCSSCustomStateDeprecatedSyntaxEnabled, true},
+      {wrf::EnableSelectParserRelaxation,
+       blink::switches::kDisableSelectParserRelaxation, false},
       {wrf::EnableTextFragmentIdentifiers,
        switches::kDisableScrollToTextFragment, false},
       {wrf::EnableWebAuthenticationRemoteDesktopSupport,
@@ -494,6 +498,8 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
        switches::kEnableWebGPUDeveloperFeatures, true},
       {wrf::EnableWebGPUExperimentalFeatures, switches::kEnableUnsafeWebGPU,
        true},
+      {wrf::EnableWebAudioBypassOutputBufferingOptOut,
+       blink::switches::kWebAudioBypassOutputBufferingOptOut, true},
   };
 
   for (const auto& mapping : switchToFeatureMapping) {
@@ -516,24 +522,6 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
     int port;
     if (base::StringToInt(port_str, &port) && port == 0) {
       WebRuntimeFeatures::EnableAutomationControlled(true);
-    }
-  }
-
-  // Enable or disable BeforeunloadEventCancelByPreventDefault for Enterprise
-  // Policy. This overrides any existing settings via base::Feature.
-  if (command_line.HasSwitch(
-          blink::switches::kBeforeunloadEventCancelByPreventDefaultPolicy)) {
-    const std::string value = command_line.GetSwitchValueASCII(
-        blink::switches::kBeforeunloadEventCancelByPreventDefaultPolicy);
-    if (value ==
-        blink::switches::
-            kBeforeunloadEventCancelByPreventDefaultPolicy_ForceEnable) {
-      WebRuntimeFeatures::EnableBeforeunloadEventCancelByPreventDefault(true);
-    }
-    if (value ==
-        blink::switches::
-            kBeforeunloadEventCancelByPreventDefaultPolicy_ForceDisable) {
-      WebRuntimeFeatures::EnableBeforeunloadEventCancelByPreventDefault(false);
     }
   }
 }

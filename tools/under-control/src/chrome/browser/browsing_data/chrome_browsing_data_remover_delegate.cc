@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "base/barrier_closure.h"
+#include "base/check_deref.h"
 #include "base/containers/flat_set.h"
 #include "base/containers/to_vector.h"
 #include "base/feature_list.h"
@@ -41,8 +42,7 @@
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
-#include "chrome/browser/dips/dips_service.h"
-#include "chrome/browser/dips/dips_service_factory.h"
+#include "chrome/browser/dips/dips_service_impl.h"
 #include "chrome/browser/dips/dips_utils.h"
 #include "chrome/browser/domain_reliability/service_factory.h"
 #include "chrome/browser/downgrade/user_data_downgrade.h"
@@ -74,6 +74,7 @@
 #include "chrome/browser/reading_list/reading_list_model_factory.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/verdict_cache_manager_factory.h"
+#include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/share/share_history.h"
 #include "chrome/browser/share/share_ranking.h"
@@ -85,7 +86,6 @@
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
-#include "chrome/browser/user_annotations/user_annotations_service_factory.h"
 #include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
 #include "chrome/browser/webdata_services/web_data_service_factory.h"
 #include "chrome/common/buildflags.h"
@@ -132,6 +132,7 @@
 #include "components/privacy_sandbox/privacy_sandbox_settings.h"
 #include "components/reading_list/core/reading_list_model.h"
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/gaia_id_hash.h"
@@ -142,7 +143,6 @@
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
 #include "components/tpcd/metadata/browser/manager.h"
-#include "components/user_annotations/user_annotations_service.h"
 #include "components/web_cache/browser/web_cache_manager.h"
 #include "components/webrtc_logging/browser/log_cleanup.h"
 #include "components/webrtc_logging/browser/text_log_list.h"
@@ -185,12 +185,14 @@
 
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/user_annotations/user_annotations_service_factory.h"
 #include "chrome/browser/user_education/browser_feature_promo_storage_service.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/browser/web_applications/web_app_command_scheduler.h"
 #include "chrome/browser/web_applications/web_app_provider.h"
 #include "chrome/browser/web_applications/web_app_registrar.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
+#include "components/user_annotations/user_annotations_service.h"
 #include "content/public/browser/isolated_web_apps_policy.h"
 #include "content/public/browser/storage_partition_config.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
@@ -901,8 +903,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   }
 
   if (dips_mask != DIPSEventRemovalType::kNone) {
-    auto* dips_service = DIPSServiceFactory::GetForBrowserContext(profile_);
-    if (dips_service) {
+    if (DIPSServiceImpl* dips_service = DIPSServiceImpl::Get(profile_)) {
       dips_service->RemoveEvents(delete_begin_, delete_end_,
                                  filter_builder->BuildNetworkServiceFilter(),
                                  dips_mask);
@@ -1068,11 +1069,13 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           FROM_HERE, base::DoNothing(),
           CreateTaskCompletionClosure(TracingDataType::kAutofillData));
     }
+#if !BUILDFLAG(IS_ANDROID)
     if (auto* user_annotations_service =
             UserAnnotationsServiceFactory::GetForProfile(profile_)) {
       user_annotations_service->RemoveAnnotationsInRange(delete_begin_,
                                                          delete_end_);
     }
+#endif
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -1477,6 +1480,28 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
                        });
           });
     }
+  }
+
+  if (remove_mask & constants::DATA_TYPE_SEARCH_ENGINE_CHOICE) {
+    // Clear the search engine choice prefs.
+    // TODO(b/312180262): Consider clearing other Guest preferences as well.
+    // TODO(crbug.com/369959287): Delete the Guest OTR profile object instead of
+    // wiping it.
+
+    search_engines::WipeSearchEngineChoicePrefs(
+        // For Guest profiles, the OTR is the one that gets wiped, but the
+        // choice prefs get set on the parent profile. For other OTR profiles,
+        // we don't want to automatically forward to the original profile, the
+        // choice made is still relevant there. This method is also called for
+        // regular profiles, when they are deleted. We don't really care about
+        // resetting the pref in that case, because the full directory will be
+        // deleted anyway.
+        CHECK_DEREF((profile_->IsGuestSession() ? profile_->GetOriginalProfile()
+                                                : profile_.get())
+                        ->GetPrefs()),
+        search_engines::WipeSearchEngineChoiceReason::kProfileWipe);
+    search_engines::SearchEngineChoiceServiceFactory::GetForProfile(profile_)
+        ->ResetState();
   }
 }
 

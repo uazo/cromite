@@ -20,7 +20,6 @@
 #include "base/no_destructor.h"
 #include "base/notreached.h"
 #include "base/process/current_process.h"
-#include "base/profiler/process_type.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -91,6 +90,9 @@
 #include "components/error_page/common/error.h"
 #include "components/error_page/common/localized_error.h"
 #include "components/feed/feed_feature_list.h"
+#include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
+#include "components/fingerprinting_protection_filter/renderer/renderer_agent.h"
+#include "components/fingerprinting_protection_filter/renderer/unverified_ruleset_dealer.h"
 #include "components/grit/components_scaled_resources.h"
 #include "components/heap_profiling/in_process/heap_profiler_controller.h"
 #include "components/history_clusters/core/config.h"
@@ -110,6 +112,7 @@
 #include "components/permissions/features.h"
 #include "components/safe_browsing/buildflags.h"
 #include "components/safe_browsing/content/renderer/threat_dom_details.h"
+#include "components/sampling_profiler/process_type.h"
 #include "components/sampling_profiler/thread_profiler.h"
 #include "components/security_interstitials/content/renderer/security_interstitial_page_controller_delegate_impl.h"
 #include "components/spellcheck/spellcheck_buildflags.h"
@@ -473,6 +476,13 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   subresource_filter_ruleset_dealer_ =
       std::make_unique<subresource_filter::UnverifiedRulesetDealer>();
 
+  if (fingerprinting_protection_filter::features::
+          IsFingerprintingProtectionFeatureEnabled()) {
+    fingerprinting_protection_ruleset_dealer_ = std::make_unique<
+        fingerprinting_protection_filter::UnverifiedRulesetDealer>();
+    thread->AddObserver(fingerprinting_protection_ruleset_dealer_.get());
+  }
+
   phishing_model_setter_ =
       std::make_unique<safe_browsing::PhishingModelSetterImpl>();
 
@@ -748,6 +758,15 @@ void ChromeContentRendererClient::RenderFrameCreated(
     subresource_filter_agent->Initialize();
   }
 
+  if (fingerprinting_protection_filter::features::
+          IsFingerprintingProtectionFeatureEnabled() &&
+      fingerprinting_protection_ruleset_dealer_) {
+    auto* fingerprinting_protection_renderer_agent =
+        new fingerprinting_protection_filter::RendererAgent(
+            render_frame, fingerprinting_protection_ruleset_dealer_.get());
+    fingerprinting_protection_renderer_agent->Initialize();
+  }
+
 #if !BUILDFLAG(IS_ANDROID)
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kInstantProcess) &&
@@ -810,7 +829,7 @@ void ChromeContentRendererClient::WebViewCreated(
     const url::Origin* outermost_origin) {
   new prerender::NoStatePrefetchClient(web_view);
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extensions::ExtensionsRendererClient::Get()->WebViewCreated(web_view,
                                                               outermost_origin);
 #endif
@@ -1411,7 +1430,7 @@ void ChromeContentRendererClient::PostIOThreadCreated(
   io_thread_task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(&sampling_profiler::ThreadProfiler::StartOnChildThread,
-                     base::ProfilerThreadType::kIo));
+                     sampling_profiler::ProfilerThreadType::kIo));
 }
 
 void ChromeContentRendererClient::PostCompositorThreadCreated(
@@ -1419,7 +1438,7 @@ void ChromeContentRendererClient::PostCompositorThreadCreated(
   compositor_thread_task_runner->PostTask(
       FROM_HERE,
       base::BindOnce(&sampling_profiler::ThreadProfiler::StartOnChildThread,
-                     base::ProfilerThreadType::kCompositor));
+                     sampling_profiler::ProfilerThreadType::kCompositor));
   // Enable stack sampling for tracing.
   // We pass in CreateCoreUnwindersFactory here since it lives in the chrome/
   // layer while TracingSamplerProfiler is outside of chrome/.
@@ -1747,7 +1766,7 @@ void ChromeContentRendererClient::
     WillInitializeServiceWorkerContextOnWorkerThread() {
   // This is called on the service worker thread.
   sampling_profiler::ThreadProfiler::StartOnChildThread(
-      base::ProfilerThreadType::kServiceWorker);
+      sampling_profiler::ProfilerThreadType::kServiceWorker);
 }
 
 void ChromeContentRendererClient::

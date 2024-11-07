@@ -43,7 +43,6 @@
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/to_string.h"
-#include "base/system/sys_info.h"
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "base/timer/elapsed_timer.h"
@@ -88,6 +87,7 @@
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/permissions/permission_util.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
+#include "content/browser/preloading/preload_pipeline_info.h"
 #include "content/browser/preloading/preloading.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
 #include "content/browser/preloading/prerender/prerender_host_registry.h"
@@ -111,7 +111,7 @@
 #include "content/browser/renderer_host/render_widget_host_impl.h"
 #include "content/browser/renderer_host/render_widget_host_view_base.h"
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
-#include "content/browser/renderer_host/spare_render_process_host_manager.h"
+#include "content/browser/renderer_host/spare_render_process_host_manager_impl.h"
 #include "content/browser/renderer_host/text_input_manager.h"
 #include "content/browser/renderer_host/visible_time_request_trigger.h"
 #include "content/browser/screen_details/screen_change_monitor.h"
@@ -120,6 +120,7 @@
 #include "content/browser/site_instance_impl.h"
 #include "content/browser/wake_lock/wake_lock_context_host.h"
 #include "content/browser/web_contents/java_script_dialog_commit_deferring_condition.h"
+#include "content/browser/web_contents/slow_web_preference_cache.h"
 #include "content/browser/web_contents/web_contents_view.h"
 #include "content/browser/web_contents/web_contents_view_child_frame.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
@@ -251,25 +252,6 @@
 namespace content {
 
 namespace {
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class AllPointerTypes {
-  kNone = 0,
-  kCoarse = 1,
-  kFine = 2,
-  kBoth = 3,
-  kMaxValue = kBoth
-};
-
-// These values are persisted to logs. Entries should not be renumbered and
-// numeric values should never be reused.
-enum class PrimaryPointerType {
-  kNone = 0,
-  kCoarse = 1,
-  kFine = 2,
-  kMaxValue = kFine
-};
 
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
@@ -666,6 +648,68 @@ void RunCallback(RenderWidgetHostAtPointCallback callback,
   if (!callback.is_null()) {
     std::move(callback).Run(target ? target->GetWeakPtr() : nullptr, point);
   }
+}
+
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+enum class RenderProcessHostPriority {
+  kBestEffort = 0,
+  kUserVisible = 1,
+  kUserBlocking = 2,
+  kMissingRenderProcessHost = 3,
+  kMaxValue = kMissingRenderProcessHost,
+};
+
+RenderProcessHostPriority GetRenderProcessHostPriority(
+    RenderProcessHost* render_process_host) {
+  if (!render_process_host) {
+    return RenderProcessHostPriority::kMissingRenderProcessHost;
+  }
+  switch (render_process_host->GetPriority()) {
+    case base::Process::Priority::kBestEffort:
+      return RenderProcessHostPriority::kBestEffort;
+    case base::Process::Priority::kUserVisible:
+      return RenderProcessHostPriority::kUserVisible;
+    case base::Process::Priority::kUserBlocking:
+      return RenderProcessHostPriority::kUserBlocking;
+  }
+  NOTREACHED();
+}
+
+void RecordRendererUnresponsiveMetrics(
+    bool web_contents_visible,
+    RenderWidgetHostImpl* render_widget_host) {
+  base::UmaHistogramBoolean("Renderer.Unresponsive.Visibility",
+                            web_contents_visible);
+
+  if (!web_contents_visible) {
+    return;
+  }
+
+  RenderProcessHostPriority rph_priority =
+      GetRenderProcessHostPriority(render_widget_host->GetProcess());
+  base::UmaHistogramEnumeration(
+      "Renderer.Unresponsive.PageVisible.RenderProcessHostPriority",
+      rph_priority);
+
+  bool widget_visible = !render_widget_host->is_hidden();
+  base::UmaHistogramBoolean(
+      "Renderer.Unresponsive.PageVisible.WidgetVisibility", widget_visible);
+
+  if (!widget_visible) {
+    return;
+  }
+
+  base::UmaHistogramEnumeration(
+      "Renderer.Unresponsive.WidgetVisible.RenderProcessHostPriority",
+      rph_priority);
+}
+
+// Returns a GroupingID used by VizCompositor to allow grouping
+// CompositorFrameSinks from same WebContents.
+uint32_t NextCompositorFrameSinkGroupingId() {
+  static uint32_t grouping_id = 0;
+  return grouping_id++;
 }
 
 }  // namespace
@@ -1237,7 +1281,8 @@ WebContentsImpl::WebContentsImpl(BrowserContext* browser_context)
           std::make_unique<MediaWebContentsObserver>(this)),
       is_overlay_content_(false),
       showing_context_menu_(false),
-      prerender_host_registry_(std::make_unique<PrerenderHostRegistry>(*this)) {
+      prerender_host_registry_(std::make_unique<PrerenderHostRegistry>(*this)),
+      compositor_frame_sink_grouping_id_(NextCompositorFrameSinkGroupingId()) {
   TRACE_EVENT0("content", "WebContentsImpl::WebContentsImpl");
   WebContentsOfBrowserContext::Attach(*this);
   node_.SetFocusedFrameTree(&primary_frame_tree_);
@@ -1251,6 +1296,8 @@ WebContentsImpl::WebContentsImpl(BrowserContext* browser_context)
 
   ui::NativeTheme* native_theme = ui::NativeTheme::GetInstanceForWeb();
   native_theme_observation_.Observe(native_theme);
+  slow_web_preference_cache_observation_.Observe(
+      SlowWebPreferenceCache::GetInstance());
   using_dark_colors_ = native_theme->ShouldUseDarkColors();
   in_forced_colors_ = native_theme->InForcedColorsMode();
   preferred_color_scheme_ = native_theme->GetPreferredColorScheme();
@@ -1338,6 +1385,11 @@ WebContentsImpl::~WebContentsImpl() {
   color_chooser_holder_.reset();
 #endif
   find_request_manager_.reset();
+
+  // crbug.com/373898450: The `FrameTree` should outlive the animation manager.
+  if (view_) {
+    view_->DestroyBackForwardTransitionAnimationManager();
+  }
 
   // Shutdown the primary FrameTree.
   primary_frame_tree_.Shutdown();
@@ -1470,15 +1522,29 @@ std::unique_ptr<WebContentsImpl> WebContentsImpl::CreateWithOpener(
         params.guest_delegate->GetOwnerWebContents());
   }
 
-  // To support multi-network feature in chrome (e.g. want to open a tab over
-  // a specific network such as Wi-Fi while the current default network is
-  // cellular connection), a feasible solution would be to associate the target
-  // network handle to WebContents on creation time and MUST set it before
-  // WebContents initialization, otherwise the renderer might create a
-  // URLLoaderFactory that won't load the resources from the target network
-  // handle during WebContents initialization below, as a result, it will end
-  // up with a URLLoaderFactory that has not been bound to the target network.
+  // Multi-network CCT relies on the following invariant: WebContents associated
+  // with a CCT tab targeting a network will always have
+  // WebContents::GetTargetNetwork == that target network. We MUST set the
+  // target_network before WebContents initialization. Otherwise, the renderer,
+  // during WebContents initialization, might create (and keep around)
+  // URLLoaderFactories that won't load resources from the target network. For
+  // WebContents created from Java (e.g., WebContents rendering a CCT), this is
+  // guaranteed by the Java side setting
+  // WebContents::CreateParams::target_network_ when that CCT is targeting a
+  // network.
   new_contents->target_network_ = params.target_network;
+  if (new_contents->target_network_ == net::handles::kInvalidNetworkHandle) {
+    // For WebContents opened by another WebContents (e.g. through
+    // window.open(), instead of from the UI / by the embedder),
+    // WebContents::CreateParams::target_network_ won't be set, as the calling
+    // code is not aware of multi-network CCT. Instead, to handle that, we pass
+    // along the target network (if present) of the WebContents associated with
+    // the opener frame.
+    auto* web_contents = WebContentsImpl::FromRenderFrameHostImpl(opener_rfh);
+    if (web_contents) {
+      new_contents->target_network_ = web_contents->GetTargetNetwork();
+    }
+  }
 
   new_contents->Init(params, frame_policy);
   if (outer_web_contents) {
@@ -3171,10 +3237,12 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences() {
 
   blink::web_pref::WebPreferences prefs;
 
+  // Sets the hardware-related fields in |prefs| that are slow to compute. The
+  // fields are set from cache if available, otherwise recomputed.
+  SlowWebPreferenceCache::GetInstance()->Load(&prefs);
+
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
-
-  SetSlowWebPreferences(command_line, &prefs);
 
   prefs.web_security_enabled =
       !command_line.HasSwitch(switches::kDisableWebSecurity);
@@ -3347,93 +3415,6 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences() {
 
   GetContentClient()->browser()->OverrideWebkitPrefs(this, &prefs);
   return prefs;
-}
-
-void WebContentsImpl::SetSlowWebPreferences(
-    const base::CommandLine& command_line,
-    blink::web_pref::WebPreferences* prefs) {
-  OPTIONAL_TRACE_EVENT0("content", "WebContentsImpl::SetSlowWebPreferences");
-
-  if (web_preferences_.get()) {
-#define SET_FROM_CACHE(prefs, field) prefs->field = web_preferences_->field
-
-    SET_FROM_CACHE(prefs, touch_event_feature_detection_enabled);
-    SET_FROM_CACHE(prefs, available_pointer_types);
-    SET_FROM_CACHE(prefs, available_hover_types);
-    SET_FROM_CACHE(prefs, primary_pointer_type);
-    SET_FROM_CACHE(prefs, primary_hover_type);
-    SET_FROM_CACHE(prefs, pointer_events_max_touch_points);
-    SET_FROM_CACHE(prefs, number_of_cpu_cores);
-
-#if BUILDFLAG(IS_ANDROID)
-    SET_FROM_CACHE(prefs, video_fullscreen_orientation_lock_enabled);
-    SET_FROM_CACHE(prefs, video_rotate_to_fullscreen_enabled);
-#endif
-
-#undef SET_FROM_CACHE
-  } else {
-    // Every prefs->field modified below should have a SET_FROM_CACHE entry
-    // above.
-
-    // On Android, Touch event feature detection is enabled by default,
-    // Otherwise default is disabled.
-    std::string touch_enabled_default_switch =
-        switches::kTouchEventFeatureDetectionDisabled;
-#if BUILDFLAG(IS_ANDROID)
-    touch_enabled_default_switch = switches::kTouchEventFeatureDetectionEnabled;
-#endif  // BUILDFLAG(IS_ANDROID)
-    const std::string touch_enabled_switch =
-        command_line.HasSwitch(switches::kTouchEventFeatureDetection)
-            ? command_line.GetSwitchValueASCII(
-                  switches::kTouchEventFeatureDetection)
-            : touch_enabled_default_switch;
-
-    prefs->touch_event_feature_detection_enabled =
-        (touch_enabled_switch == switches::kTouchEventFeatureDetectionAuto)
-            ? (ui::GetTouchScreensAvailability() ==
-               ui::TouchScreensAvailability::ENABLED)
-            : (touch_enabled_switch.empty() ||
-               touch_enabled_switch ==
-                   switches::kTouchEventFeatureDetectionEnabled);
-
-    std::tie(prefs->available_pointer_types, prefs->available_hover_types) =
-        GetAvailablePointerAndHoverTypes();
-    prefs->primary_pointer_type = static_cast<blink::mojom::PointerType>(
-        ui::GetPrimaryPointerType(prefs->available_pointer_types));
-    prefs->primary_hover_type = static_cast<blink::mojom::HoverType>(
-        ui::GetPrimaryHoverType(prefs->available_hover_types));
-
-    prefs->pointer_events_max_touch_points = ui::MaxTouchPoints();
-
-    prefs->number_of_cpu_cores = base::SysInfo::NumberOfProcessors();
-
-    AllPointerTypes all_pointer_types = AllPointerTypes::kNone;
-    if (prefs->available_pointer_types & ui::POINTER_TYPE_COARSE &&
-        prefs->available_pointer_types & ui::POINTER_TYPE_FINE) {
-      all_pointer_types = AllPointerTypes::kBoth;
-    } else if (prefs->available_pointer_types & ui::POINTER_TYPE_COARSE) {
-      all_pointer_types = AllPointerTypes::kCoarse;
-    } else if (prefs->available_pointer_types & ui::POINTER_TYPE_FINE) {
-      all_pointer_types = AllPointerTypes::kFine;
-    }
-    PrimaryPointerType primary_pointer = PrimaryPointerType::kNone;
-    if (prefs->primary_pointer_type ==
-        blink::mojom::PointerType::kPointerCoarseType) {
-      primary_pointer = PrimaryPointerType::kCoarse;
-    } else if (prefs->primary_pointer_type ==
-               blink::mojom::PointerType::kPointerFineType) {
-      primary_pointer = PrimaryPointerType::kFine;
-    }
-    base::UmaHistogramEnumeration("Input.PointerTypesAll", all_pointer_types);
-    base::UmaHistogramEnumeration("Input.PointerTypePrimary", primary_pointer);
-
-#if BUILDFLAG(IS_ANDROID)
-    const bool device_is_phone =
-        ui::GetDeviceFormFactor() == ui::DEVICE_FORM_FACTOR_PHONE;
-    prefs->video_fullscreen_orientation_lock_enabled = device_is_phone;
-    prefs->video_rotate_to_fullscreen_enabled = device_is_phone;
-#endif
-  }
 }
 
 void WebContentsImpl::OnWebPreferencesChanged() {
@@ -3764,7 +3745,8 @@ void WebContentsImpl::OnWebContentsDestroyed(WebContentsImpl* web_contents) {
 
 void WebContentsImpl::OnRenderWidgetHostDestroyed(
     RenderWidgetHost* render_widget_host) {
-  OPTIONAL_TRACE_EVENT0("content", "WebContentsImpl::OnWebContentsDestroyed");
+  OPTIONAL_TRACE_EVENT0("content",
+                        "WebContentsImpl::OnRenderWidgetHostDestroyed");
 
   RemoveRenderWidgetHostDestructionObserver(render_widget_host);
 
@@ -4013,7 +3995,7 @@ WebContentsImpl::GetInputEventRouter() {
 
     if (!rwh_input_event_router_.get()) {
       rwh_input_event_router_ =
-          std::make_unique<input::RenderWidgetHostInputEventRouter>(
+          MakeRefCounted<input::RenderWidgetHostInputEventRouter>(
               GetHostFrameSinkManager(), this);
     }
   }
@@ -4531,6 +4513,14 @@ void WebContentsImpl::RequestToLockPointer(
   }
 }
 
+bool WebContentsImpl::IsWaitingForPointerLockPrompt(
+    RenderWidgetHostImpl* render_widget_host) {
+  if (!delegate_ || (pointer_lock_widget_ != render_widget_host)) {
+    return false;
+  }
+  return delegate_->IsWaitingForPointerLockPrompt(this);
+}
+
 void WebContentsImpl::LostPointerLock(
     RenderWidgetHostImpl* render_widget_host) {
   OPTIONAL_TRACE_EVENT1("content", "WebContentsImpl::LostPointerLock",
@@ -4711,6 +4701,9 @@ FrameTree* WebContentsImpl::CreateNewWindow(
   bool renderer_started_hidden =
       params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
 
+  // While some guest types do not have a guest SiteInstance, the ones that
+  // don't all override WebContents creation above.
+  CHECK_EQ(source_site_instance->IsGuest(), IsGuest());
   bool is_guest = IsGuest();
 
   // We usually create the new window in the same BrowsingInstance (group of
@@ -5326,11 +5319,13 @@ void WebContentsImpl::ProcessAccessibilityUpdatesAndEvents(
 }
 
 void WebContentsImpl::AccessibilityLocationChangesReceived(
-    const std::vector<ui::AXLocationChanges>& details) {
+    const ui::AXTreeID& tree_id,
+    ui::AXLocationAndScrollUpdates& details) {
   OPTIONAL_TRACE_EVENT0(
       "content", "WebContentsImpl::AccessibilityLocationChangesReceived");
   observers_.NotifyObservers(
-      &WebContentsObserver::AccessibilityLocationChangesReceived, details);
+      &WebContentsObserver::AccessibilityLocationChangesReceived, tree_id,
+      details);
 }
 
 ui::AXNode* WebContentsImpl::GetAccessibilityRootNode() {
@@ -5579,6 +5574,10 @@ void WebContentsImpl::MoveCaret(const gfx::Point& extent) {
   }
 
   input_handler->MoveCaret(extent);
+}
+
+uint32_t WebContentsImpl::GetCompositorFrameSinkGroupingId() const {
+  return compositor_frame_sink_grouping_id_;
 }
 
 void WebContentsImpl::AdjustSelectionByCharacterOffset(
@@ -6945,13 +6944,10 @@ void WebContentsImpl::DidNavigateMainFramePreCommit(
     ExitFullscreen(false);
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kInvalidateLocalSurfaceIdPreCommit)) {
-    auto* rwhvb = static_cast<RenderWidgetHostViewBase*>(
-        frame_tree_node->current_frame_host()->GetView());
-    if (rwhvb) {
-      rwhvb->OnOldViewDidNavigatePreCommit();
-    }
+  auto* rwhvb = static_cast<RenderWidgetHostViewBase*>(
+      frame_tree_node->current_frame_host()->GetView());
+  if (rwhvb) {
+    rwhvb->OnOldViewDidNavigatePreCommit();
   }
 
   // Clean up keyboard lock state when navigating.
@@ -6981,25 +6977,10 @@ void WebContentsImpl::DidNavigateMainFramePostCommit(
       // page.
       ClearTargetURL();
 
-      // If the feature flag is enabled, we only call the PostCommit on the new
-      // View, for a primary main frame navigation. The PreCommit counterpart is
-      // called in `WCImpl:DidNavigateMainFramePreCommit`.
-      if (rwhvb && base::FeatureList::IsEnabled(
-                       features::kInvalidateLocalSurfaceIdPreCommit)) {
+      // Run the post-commit tasks on the new View.
+      if (rwhvb) {
         rwhvb->OnNewViewDidNavigatePostCommit();
       }
-    }
-
-    // If the feature flag is disabled, we restore to the "original" behavior (
-    // the behavior prior to https://crrev.com/c/4702023):
-    // When the new view is just made visible, we:
-    // - Reset the LocalSurfaceId on the new View (PreCommit), and
-    // - Cancel the ongoing gestures on the new View (PostCommit), and
-    // - We call the two APIs on all main frames, including non-primary ones.
-    if (rwhvb && !base::FeatureList::IsEnabled(
-                     features::kInvalidateLocalSurfaceIdPreCommit)) {
-      rwhvb->OnOldViewDidNavigatePreCommit();
-      rwhvb->OnNewViewDidNavigatePostCommit();
     }
   }
 
@@ -7334,20 +7315,6 @@ void WebContentsImpl::SetWebPreferences(
   // be sent when we restore those pages from the back-forward cache.
   primary_frame_tree_.ForEachRenderViewHost(
       [](RenderViewHostImpl* rvh) { rvh->SendWebPreferencesToRenderer(); });
-}
-
-void WebContentsImpl::RecomputeWebPreferencesSlow() {
-  OPTIONAL_TRACE_EVENT0("content",
-                        "WebContentsImpl::RecomputeWebPreferencesSlow");
-  // OnWebPreferencesChanged is a no-op when this is true.
-  if (updating_web_preferences_) {
-    return;
-  }
-  // Resets |web_preferences_| so that we won't have any cached value for slow
-  // attributes (which won't get recomputed if we have pre-existing values for
-  // them).
-  web_preferences_.reset();
-  OnWebPreferencesChanged();
 }
 
 std::optional<SkColor> WebContentsImpl::GetBaseBackgroundColor() {
@@ -9399,7 +9366,7 @@ void WebContentsImpl::RendererUnresponsive(
   }
 
   bool visible = GetVisibility() == Visibility::VISIBLE;
-  base::UmaHistogramBoolean("Renderer.Unresponsive.Visibility", visible);
+  RecordRendererUnresponsiveMetrics(visible, render_widget_host);
 
   // Do not report hangs (to task manager, to hang renderer dialog, etc.) for
   // invisible tabs (like extension background page, background tabs).  See
@@ -9408,10 +9375,6 @@ void WebContentsImpl::RendererUnresponsive(
   if (!visible) {
     return;
   }
-
-  base::UmaHistogramBoolean(
-      "Renderer.Unresponsive.PageVisible.WidgetVisibility",
-      !render_widget_host->is_hidden());
 
   if (!render_widget_host->renderer_initialized()) {
     return;
@@ -9562,9 +9525,19 @@ void WebContentsImpl::CreateRenderWidgetHostViewForRenderManager(
   OPTIONAL_TRACE_EVENT1(
       "content", "WebContentsImpl::CreateRenderWidgetHostViewForRenderManager",
       "render_view_host", render_view_host);
-  bool is_inner_frame_tree = static_cast<RenderViewHostImpl*>(render_view_host)
-                                 ->frame_tree()
-                                 ->is_fenced_frame();
+
+  bool is_inner_frame_tree = [&]() {
+    FrameTree* frame_tree =
+        static_cast<RenderViewHostImpl*>(render_view_host)->frame_tree();
+    switch (frame_tree->type()) {
+      case FrameTree::Type::kPrimary:
+      case FrameTree::Type::kPrerender:
+        return false;
+      case FrameTree::Type::kFencedFrame:
+        return true;
+    }
+  }();
+
   if (is_inner_frame_tree) {
     WebContentsViewChildFrame::CreateRenderWidgetHostViewForInnerFrameTree(
         this, render_view_host->GetWidget());
@@ -9984,7 +9957,8 @@ void WebContentsImpl::IncrementBluetoothConnectedDeviceCount() {
   // Notify for UI updates if the state changes.
   bluetooth_connected_device_count_++;
   if (bluetooth_connected_device_count_ == 1) {
-    OnIsConnectedToBluetoothDeviceChanged(true);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kBluetooth, /*used=*/true);
   }
 }
 
@@ -10000,18 +9974,10 @@ void WebContentsImpl::DecrementBluetoothConnectedDeviceCount() {
   DCHECK_NE(bluetooth_connected_device_count_, 0u);
   bluetooth_connected_device_count_--;
   if (bluetooth_connected_device_count_ == 0) {
-    OnIsConnectedToBluetoothDeviceChanged(false);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kBluetooth,
+        /*used=*/false);
   }
-}
-
-void WebContentsImpl::OnIsConnectedToBluetoothDeviceChanged(
-    bool is_connected_to_bluetooth_device) {
-  OPTIONAL_TRACE_EVENT0(
-      "content", "WebContentsImpl::OnIsConnectedToBluetoothDeviceChanged");
-  NotifyNavigationStateChanged(INVALIDATE_TYPE_TAB);
-  observers_.NotifyObservers(
-      &WebContentsObserver::OnIsConnectedToBluetoothDeviceChanged,
-      is_connected_to_bluetooth_device);
 }
 
 void WebContentsImpl::IncrementBluetoothScanningSessionsCount() {
@@ -10058,7 +10024,8 @@ void WebContentsImpl::IncrementSerialActiveFrameCount() {
   // Notify for UI updates if the state changes.
   serial_active_frame_count_++;
   if (serial_active_frame_count_ == 1) {
-    NotifyNavigationStateChanged(INVALIDATE_TYPE_TAB);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kSerial, /*used=*/true);
   }
 }
 
@@ -10075,7 +10042,8 @@ void WebContentsImpl::DecrementSerialActiveFrameCount() {
   DCHECK_NE(0u, serial_active_frame_count_);
   serial_active_frame_count_--;
   if (serial_active_frame_count_ == 0) {
-    NotifyNavigationStateChanged(INVALIDATE_TYPE_TAB);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kSerial, /*used=*/false);
   }
 }
 
@@ -10092,7 +10060,8 @@ void WebContentsImpl::IncrementHidActiveFrameCount() {
   // non-zero.
   hid_active_frame_count_++;
   if (hid_active_frame_count_ == 1) {
-    NotifyNavigationStateChanged(INVALIDATE_TYPE_TAB);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kHID, /*used=*/true);
   }
 }
 
@@ -10110,18 +10079,20 @@ void WebContentsImpl::DecrementHidActiveFrameCount() {
   DCHECK_NE(0u, hid_active_frame_count_);
   hid_active_frame_count_--;
   if (hid_active_frame_count_ == 0) {
-    NotifyNavigationStateChanged(INVALIDATE_TYPE_TAB);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kHID, /*used=*/false);
   }
 }
 
-void WebContentsImpl::OnIsConnectedToUsbDeviceChanged(
-    bool is_connected_to_usb_device) {
+void WebContentsImpl::OnDeviceConnectionTypesChanged(
+    WebContentsObserver::DeviceConnectionType device_connection_type,
+    bool used) {
   OPTIONAL_TRACE_EVENT0("content",
-                        "WebContentsImpl::OnIsConnectedToUsbDeviceChanged");
+                        "WebContentsImpl::OnDeviceConnectionTypesChanged");
   NotifyNavigationStateChanged(INVALIDATE_TYPE_TAB);
   observers_.NotifyObservers(
-      &WebContentsObserver::OnIsConnectedToUsbDeviceChanged,
-      is_connected_to_usb_device);
+      &WebContentsObserver::OnDeviceConnectionTypesChanged,
+      device_connection_type, used);
 }
 
 void WebContentsImpl::IncrementUsbActiveFrameCount() {
@@ -10137,7 +10108,8 @@ void WebContentsImpl::IncrementUsbActiveFrameCount() {
   // non-zero.
   usb_active_frame_count_++;
   if (usb_active_frame_count_ == 1) {
-    OnIsConnectedToUsbDeviceChanged(true);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kUSB, /*used=*/true);
   }
 }
 
@@ -10155,7 +10127,8 @@ void WebContentsImpl::DecrementUsbActiveFrameCount() {
   DCHECK_NE(0u, usb_active_frame_count_);
   usb_active_frame_count_--;
   if (usb_active_frame_count_ == 0) {
-    OnIsConnectedToUsbDeviceChanged(false);
+    OnDeviceConnectionTypesChanged(
+        WebContentsObserver::DeviceConnectionType::kUSB, /*used=*/false);
   }
 }
 
@@ -10814,6 +10787,10 @@ const ui::ColorProvider& WebContentsImpl::GetColorProvider() const {
   return *color_provider;
 }
 
+void WebContentsImpl::OnSlowWebPreferenceChanged() {
+  OnWebPreferencesChanged();
+}
+
 blink::mojom::FrameWidgetInputHandler*
 WebContentsImpl::GetFocusedFrameWidgetInputHandler() {
   auto* focused_render_widget_host =
@@ -11101,7 +11078,8 @@ void WebContentsImpl::StartPrefetch(
     bool use_prefetch_proxy,
     const blink::mojom::Referrer& referrer,
     const std::optional<url::Origin>& referring_origin,
-    base::WeakPtr<PreloadingAttempt> attempt) {
+    base::WeakPtr<PreloadingAttempt> attempt,
+    std::optional<PreloadingHoldbackStatus> holdback_status_override) {
   if (!base::FeatureList::IsEnabled(
           features::kPrefetchBrowserInitiatedTriggers)) {
     return;
@@ -11118,7 +11096,8 @@ void WebContentsImpl::StartPrefetch(
 
   auto container = std::make_unique<PrefetchContainer>(
       *this, prefetch_url, prefetch_type, referrer, referring_origin,
-      /*no_vary_search_expected=*/std::nullopt, std::move(attempt));
+      /*no_vary_search_expected=*/std::nullopt, std::move(attempt),
+      holdback_status_override);
 
   // TODO(crbug.com/40946257): Update this list when prefetch container is
   // eliminated from `PrefetchService`.
@@ -11150,7 +11129,8 @@ std::unique_ptr<PrerenderHandle> WebContentsImpl::StartPrerendering(
       /*initiator_frame_tree_node_id=*/FrameTreeNodeId(), ukm::kInvalidSourceId,
       page_transition, should_warm_up_compositor,
       std::move(url_match_predicate),
-      std::move(prerender_navigation_handle_callback));
+      std::move(prerender_navigation_handle_callback),
+      base::MakeRefCounted<PreloadPipelineInfo>());
   attributes.holdback_status_override = holdback_status_override;
 
   FrameTreeNodeId frame_tree_node_id =
@@ -11250,18 +11230,6 @@ ui::mojom::VirtualKeyboardMode WebContentsImpl::GetVirtualKeyboardMode() const {
       .virtual_keyboard_mode();
 }
 
-// static
-std::pair<int, int> WebContentsImpl::GetAvailablePointerAndHoverTypes() {
-  // On Windows we have to temporarily allow blocking calls since
-  // ui::GetAvailablePointerAndHoverTypes needs to call some in order to
-  // figure out tablet device details in base::win::IsDeviceUsedAsATablet,
-  // see https://crbug.com/1262162.
-#if BUILDFLAG(IS_WIN)
-  base::ScopedAllowBlocking scoped_allow_blocking;
-#endif
-  return ui::GetAvailablePointerAndHoverTypes();
-}
-
 void WebContentsImpl::SetOverscrollNavigationEnabled(bool enabled) {
   GetView()->SetOverscrollControllerEnabled(enabled);
 }
@@ -11340,12 +11308,11 @@ void WebContentsImpl::WarmUpAndroidSpareRenderer() {
   int renderer_timeout_seconds =
       features::kAndroidSpareRendererTimeoutSeconds.Get();
   if (renderer_timeout_seconds < 0) {
-    SpareRenderProcessHostManager::GetInstance().WarmupSpareRenderProcessHost(
-        GetBrowserContext());
+    SpareRenderProcessHostManagerImpl::Get().WarmupSpare(GetBrowserContext());
   } else {
     base::TimeDelta timeout = base::Seconds(renderer_timeout_seconds);
-    SpareRenderProcessHostManager::GetInstance().WarmupSpareRenderProcessHost(
-        GetBrowserContext(), timeout);
+    SpareRenderProcessHostManagerImpl::Get().WarmupSpare(GetBrowserContext(),
+                                                         timeout);
   }
 }
 

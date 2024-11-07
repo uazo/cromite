@@ -114,7 +114,6 @@
 #include "components/autofill/core/common/autofill_prefs.h"
 #include "components/blocked_content/safe_browsing_triggered_popup_blocker.h"
 #include "components/breadcrumbs/core/breadcrumbs_status.h"
-#include "components/browser_sync/sync_to_signin_migration.h"
 #include "components/browsing_data/core/pref_names.h"
 #include "components/certificate_transparency/pref_names.h"
 #include "components/commerce/core/pref_names.h"
@@ -169,7 +168,7 @@
 #include "components/proxy_config/pref_proxy_config_tracker_impl.h"
 #include "components/safe_browsing/content/common/file_type_policies_prefs.h"
 #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
-#include "components/saved_tab_groups/pref_names.h"
+#include "components/saved_tab_groups/public/pref_names.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
 #include "components/search_engines/template_url_prepopulate_data.h"
 #include "components/security_interstitials/content/insecure_form_blocking_page.h"
@@ -226,11 +225,11 @@
 #include "extensions/browser/api/audio/audio_api.h"
 #include "extensions/browser/api/runtime/runtime_api.h"
 #if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/crosapi/browser_data_migrator.h"
 #include "chrome/browser/ash/device_name/device_name_store.h"
 #include "chrome/browser/ash/extensions/extensions_permissions_tracker.h"
 #include "chrome/browser/ash/kerberos/kerberos_credentials_manager.h"
 #include "chrome/browser/ash/net/system_proxy_manager.h"
+#include "chrome/browser/ash/performance/doze_mode_power_status_scheduler.h"
 #include "chrome/browser/ash/platform_keys/key_permissions/key_permissions_manager_impl.h"
 #include "chrome/browser/ash/policy/networking/euicc_status_uploader.h"
 #include "chrome/browser/ash/policy/remote_commands/crd/crd_admin_session_controller.h"
@@ -289,6 +288,7 @@
 #include "chrome/browser/new_tab_page/promos/promo_service.h"
 #include "chrome/browser/on_device_translation/pref_names.h"
 #include "chrome/browser/policy/developer_tools_policy_handler.h"
+#include "chrome/browser/promos/promos_utils.h"
 #include "chrome/browser/screen_ai/pref_names.h"
 #include "chrome/browser/search/background/ntp_custom_background_service.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_dialog_service.h"
@@ -316,10 +316,6 @@
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/ui/webui/whats_new/whats_new_ui.h"
 #endif
-
-#if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-#include "chrome/browser/promos/promos_utils.h"
-#endif  // !BUILDFLAG(IS_ANDROID) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/chromeos/extensions/echo_private/echo_private_api.h"
@@ -441,6 +437,7 @@
 #include "chrome/browser/ui/webui/settings/reset_settings_handler.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector_chromeos.h"
 #include "chromeos/ash/components/audio/audio_devices_pref_handler_impl.h"
+#include "chromeos/ash/components/boca/on_task/on_task_prefs.h"
 #include "chromeos/ash/components/local_search_service/search_metrics_reporter.h"
 #include "chromeos/ash/components/network/cellular_esim_profile_handler_impl.h"
 #include "chromeos/ash/components/network/cellular_metrics_logger.h"
@@ -462,7 +459,7 @@
 #include "components/account_manager_core/chromeos/account_manager.h"
 #include "components/onc/onc_pref_names.h"
 #include "components/quirks/quirks_manager.h"
-#include "components/user_manager/user_manager_base.h"
+#include "components/user_manager/user_manager_impl.h"
 #include "extensions/browser/api/lock_screen_data/lock_screen_item_storage.h"
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
@@ -1085,11 +1082,53 @@ constexpr char kPasswordGenerationNudgePasswordDismissCount[] =
     "password_generation_nudge_password_dismiss_count";
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+// Deprecated 09/2024
+#if !BUILDFLAG(IS_ANDROID)
+const char kTranslateKitRootDir[] =
+    "on_device_translation.translate_kit_root_dir";
+#endif
+
+// Deprecated 09/2024
+#if BUILDFLAG(IS_ANDROID)
+constexpr char kPrivacySandboxActivityTypeRecord[] =
+    "privacy_sandbox.activity_type.record";
+#endif  // BUILDFLAG(IS_ANDROID)
+
 // Deprecated 09/2024.
 #if !BUILDFLAG(IS_ANDROID)
 const char kTabResumeDismissedTabsPrefName[] =
     "NewTabPage.MostRelevantTabResumption.DismissedTabs";
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+// Deprecated 10/2024.
+#if BUILDFLAG(IS_CHROMEOS)
+const char kMigrationStep[] = "ash.browser_data_migrator.migration_step";
+const char kMoveMigrationResumeStepPref[] =
+    "ash.browser_data_migrator.move_migration_resume_step";
+const char kMoveMigrationResumeCountPref[] =
+    "ash.browser_data_migrator.move_migration_resume_count";
+const char kLacrosSecondaryProfilesAllowed[] =
+    "lacros_secondary_profiles_allowed";
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+// Deprecated 10/2024
+// Pref name for the percent threshold to show HaTS on the What's New page.
+inline constexpr char kWhatsNewHatsActivationThreshold[] =
+    "browser.whats_new_hats_activation_threshold";
+#endif
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+// Deprecated 10/2024
+// An integer pref which determines how much FaceGaze should smooth cursor
+// movements.
+inline constexpr char kAccessibilityFaceGazeCursorSmoothing[] =
+    "settings.a11y.face_gaze.cursor_smoothing";
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+
+// Deprecated 10/2024.
+const char kBeforeunloadEventCancelByPreventDefaultEnabled[] =
+    "policy.beforeunload_event_cancel_by_prevent_default_enabled";
 
 // Register local state used only for migration (clearing or moving to a new
 // key).
@@ -1185,6 +1224,22 @@ void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
   registry->RegisterBooleanPref(kDemoModeResourcesRemoved, false);
   registry->RegisterIntegerPref(kAccumulatedUsagePref, 0);
 #endif
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Deprecated 10/2024.
+  registry->RegisterIntegerPref(kMigrationStep, 0);
+  registry->RegisterDictionaryPref(kMoveMigrationResumeStepPref);
+  registry->RegisterDictionaryPref(kMoveMigrationResumeCountPref);
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Deprecated 10/2024
+  registry->RegisterIntegerPref(kWhatsNewHatsActivationThreshold, 100);
+#endif
+
+  // Deprecated 10/2024.
+  registry->RegisterBooleanPref(kBeforeunloadEventCancelByPreventDefaultEnabled,
+                                true);
 }
 
 // Register prefs used only for migration (clearing or moving to a new key).
@@ -1525,11 +1580,31 @@ void RegisterProfilePrefsForMigration(
                                 0);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+// Deprecated 09/2024.
+#if !BUILDFLAG(IS_ANDROID)
+  registry->RegisterFilePathPref(kTranslateKitRootDir, base::FilePath());
+#endif
+
+// Deprecated 09/2024
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterListPref(kPrivacySandboxActivityTypeRecord);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 // Deprecated 09/2024
 #if !BUILDFLAG(IS_ANDROID)
   registry->RegisterListPref(kTabResumeDismissedTabsPrefName,
                              base::Value::List());
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+// Deprecated 10/2024
+#if BUILDFLAG(IS_CHROMEOS)
+  registry->RegisterBooleanPref(kLacrosSecondaryProfilesAllowed, true);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // Deprecated 10/2024
+  registry->RegisterIntegerPref(kAccessibilityFaceGazeCursorSmoothing, 7);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 }
 
 void ClearSyncRequestedPrefAndMaybeMigrate(PrefService* profile_prefs) {
@@ -1695,10 +1770,9 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   ash::CellularESimProfileHandlerImpl::RegisterLocalStatePrefs(registry);
   ash::ManagedCellularPrefHandler::RegisterLocalStatePrefs(registry);
   ash::ChromeSessionManager::RegisterPrefs(registry);
-  user_manager::UserManagerBase::RegisterPrefs(registry);
+  user_manager::UserManagerImpl::RegisterPrefs(registry);
   crosapi::browser_util::RegisterLocalStatePrefs(registry);
   ash::CupsPrintersManager::RegisterLocalStatePrefs(registry);
-  ash::BrowserDataMigratorImpl::RegisterLocalStatePrefs(registry);
   ash::bluetooth_config::BluetoothPowerControllerImpl::RegisterLocalStatePrefs(
       registry);
   ash::bluetooth_config::DeviceNameManagerImpl::RegisterLocalStatePrefs(
@@ -1706,6 +1780,7 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   ash::DemoSession::RegisterLocalStatePrefs(registry);
   ash::DemoSetupController::RegisterLocalStatePrefs(registry);
   ash::DeviceNameStore::RegisterLocalStatePrefs(registry);
+  ash::DozeModePowerStatusScheduler::RegisterLocalStatePrefs(registry);
   chromeos::DeviceOAuth2TokenStoreChromeOS::RegisterPrefs(registry);
   ash::device_settings_cache::RegisterPrefs(registry);
   ash::EnableAdbSideloadingScreen::RegisterPrefs(registry);
@@ -1971,10 +2046,6 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   omnibox::RegisterProfilePrefs(registry);
   ZeroSuggestProvider::RegisterProfilePrefs(registry);
 
-#if !BUILDFLAG(IS_ANDROID) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-  promos_utils::RegisterProfilePrefs(registry);
-#endif  // !BUILDFLAG(IS_ANDROID) && BUILDFLAG(GOOGLE_CHROME_BRANDING)
-
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
   RegisterSessionServiceLogProfilePrefs(registry);
   SessionDataService::RegisterProfilePrefs(registry);
@@ -2062,6 +2133,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   ntp_tiles::CustomLinksManagerImpl::RegisterProfilePrefs(registry);
   PinnedTabCodec::RegisterProfilePrefs(registry);
   policy::DeveloperToolsPolicyHandler::RegisterProfilePrefs(registry);
+  promos_utils::RegisterProfilePrefs(registry);
   PromoService::RegisterProfilePrefs(registry);
   RegisterReadAnythingProfilePrefs(registry);
   settings::SettingsUI::RegisterProfilePrefs(registry);
@@ -2135,7 +2207,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   ash::bluetooth_config::BluetoothPowerControllerImpl::RegisterProfilePrefs(
       registry);
   ash::HatsBluetoothRevampTriggerImpl::RegisterProfilePrefs(registry);
-  user_manager::UserManagerBase::RegisterProfilePrefs(registry);
+  user_manager::UserManagerImpl::RegisterProfilePrefs(registry);
   ash::ClientAppMetadataProviderService::RegisterProfilePrefs(registry);
   ash::CupsPrintersManager::RegisterProfilePrefs(registry);
   ash::device_sync::RegisterProfilePrefs(registry);
@@ -2196,6 +2268,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   wallpaper_handlers::prefs::RegisterProfilePrefs(registry);
   ash::reporting::RegisterProfilePrefs(registry);
   ChromeMediaAppGuestUIDelegate::RegisterProfilePrefs(registry);
+  ash::boca::RegisterOnTaskProfilePrefs(registry);
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
 #if BUILDFLAG(IS_CHROMEOS_LACROS)
@@ -2442,6 +2515,21 @@ void MigrateObsoleteLocalStatePrefs(PrefService* local_state) {
   local_state->ClearPref(kAccumulatedUsagePref);
 #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
+// Added 10/2024
+#if BUILDFLAG(IS_CHROMEOS)
+  local_state->ClearPref(kMigrationStep);
+  local_state->ClearPref(kMoveMigrationResumeStepPref);
+  local_state->ClearPref(kMoveMigrationResumeCountPref);
+#endif
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Added 10/2024
+  local_state->ClearPref(kWhatsNewHatsActivationThreshold);
+#endif
+
+  // Added 10/2024.
+  local_state->ClearPref(kBeforeunloadEventCancelByPreventDefaultEnabled);
+
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_LOCAL_STATE_PREFS
 
@@ -2687,10 +2775,6 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
   // Added 03/2024.
   profile_prefs->ClearPref(kDefaultSearchProviderChoicePendingDeprecated);
 
-  // Added 02/2024, but DO NOT REMOVE after the usual year!
-  // TODO(crbug.com/40282890): Remove ~one year after full launch.
-  browser_sync::MaybeMigrateSyncingUserToSignedIn(profile_path, profile_prefs);
-
   // Added 03/2024.
   profile_prefs->ClearPref(kShowInternalAccessibilityTree);
 
@@ -2858,10 +2942,30 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
   profile_prefs->ClearPref(kPasswordGenerationNudgePasswordDismissCount);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
+// Added 09/2024.
+#if !BUILDFLAG(IS_ANDROID)
+  profile_prefs->ClearPref(kTranslateKitRootDir);
+#endif
+
+// Added 09/2024
+#if BUILDFLAG(IS_ANDROID)
+  profile_prefs->ClearPref(kPrivacySandboxActivityTypeRecord);
+#endif  // BUILDFLAG(IS_ANDROID)
+
 // Added 09/2024
 #if !BUILDFLAG(IS_ANDROID)
   profile_prefs->ClearPref(kTabResumeDismissedTabsPrefName);
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+// Added 10/2024
+#if BUILDFLAG(IS_CHROMEOS)
+  profile_prefs->ClearPref(kLacrosSecondaryProfilesAllowed);
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
+#if BUILDFLAG(IS_CHROMEOS_ASH)
+  // Added 10/2024
+  profile_prefs->ClearPref(kAccessibilityFaceGazeCursorSmoothing);
+#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_PROFILE_PREFS

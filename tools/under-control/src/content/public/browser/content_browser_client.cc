@@ -257,6 +257,11 @@ bool ContentBrowserClient::HasCustomSchemeHandler(
   return false;
 }
 
+bool ContentBrowserClient::HasWebRequestAPIProxy(
+    BrowserContext* browser_context) {
+  return false;
+}
+
 bool ContentBrowserClient::CanCommitURL(RenderProcessHost* process_host,
                                         const GURL& site_url) {
   return true;
@@ -549,8 +554,7 @@ bool ContentBrowserClient::IsInterestGroupAPIAllowed(
 bool ContentBrowserClient::IsPrivacySandboxReportingDestinationAttested(
     content::BrowserContext* browser_context,
     const url::Origin& destination_origin,
-    content::PrivacySandboxInvokingAPI invoking_api,
-    bool post_impression_reporting) {
+    content::PrivacySandboxInvokingAPI invoking_api) {
   return false;
 }
 
@@ -652,6 +656,13 @@ bool ContentBrowserClient::IsFullCookieAccessAllowed(
     const blink::StorageKey& storage_key) {
   return true;
 }
+
+void ContentBrowserClient::GrantCookieAccessDueToHeuristic(
+    content::BrowserContext* browser_context,
+    const net::SchemefulSite& top_frame_site,
+    const net::SchemefulSite& accessing_site,
+    base::TimeDelta ttl,
+    bool ignore_schemes) {}
 
 bool ContentBrowserClient::CanSendSCTAuditingReport(
     BrowserContext* browser_context) {
@@ -1264,7 +1275,8 @@ std::unique_ptr<LoginDelegate> ContentBrowserClient::CreateLoginDelegate(
     content::WebContents* web_contents,
     BrowserContext* browser_context,
     const GlobalRequestID& request_id,
-    bool is_request_for_primary_main_frame,
+    bool is_request_for_primary_main_frame_navigation,
+    bool is_request_for_navigation,
     const GURL& url,
     scoped_refptr<net::HttpResponseHeaders> response_headers,
     bool first_auth_attempt,
@@ -1284,6 +1296,7 @@ bool ContentBrowserClient::HandleExternalProtocol(
     bool has_user_gesture,
     const std::optional<url::Origin>& initiating_origin,
     RenderFrameHost* initiator_document,
+    const net::IsolationInfo& isolation_info,
     mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
   return true;
 }
@@ -1450,7 +1463,7 @@ base::OnceClosure ContentBrowserClient::FetchRemoteSms(
 
 void ContentBrowserClient::ReportLegacyTechEvent(
     content::RenderFrameHost* render_frame_host,
-    const std::string type,
+    const std::string& type,
     const GURL& url,
     const GURL& frame_url,
     const std::string& filename,
@@ -1759,7 +1772,7 @@ void ContentBrowserClient::BindAIManager(
     BrowserContext* browser_context,
     std::variant<RenderFrameHost*, base::SupportsUserData*> context,
     mojo::PendingReceiver<blink::mojom::AIManager> receiver) {
-  EchoAIManagerImpl::Create(browser_context, context, std::move(receiver));
+  EchoAIManagerImpl::Create(context, std::move(receiver));
 }
 
 #if !BUILDFLAG(IS_ANDROID)
@@ -1776,6 +1789,31 @@ void ContentBrowserClient::QueryInstalledWebAppsByManifestId(
 bool ContentBrowserClient::IsSaveableNavigation(
     NavigationHandle* navigation_handle) {
   return false;
+}
+
+#if BUILDFLAG(IS_WIN)
+void ContentBrowserClient::OnUiaProviderRequested(bool uia_provider_enabled) {}
+#endif
+
+base::ReadOnlySharedMemoryRegion
+ContentBrowserClient::GetPerformanceScenarioRegionForProcess(
+    RenderProcessHost* process_host) {
+  return base::ReadOnlySharedMemoryRegion();
+}
+
+base::ReadOnlySharedMemoryRegion
+ContentBrowserClient::GetGlobalPerformanceScenarioRegion() {
+  return base::ReadOnlySharedMemoryRegion();
+}
+
+bool ContentBrowserClient::AllowNonActivatedCrossOriginPaintHolding() {
+  return false;
+}
+
+bool ContentBrowserClient::ShouldDispatchPagehideDuringCommit(
+    BrowserContext* browser_context,
+    const GURL& destination_url) {
+  return true;
 }
 
 }  // namespace content

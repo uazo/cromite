@@ -9,6 +9,7 @@
 
 #include "base/feature_list.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "components/attribution_reporting/features.h"
 #include "services/network/public/cpp/features.h"
 #include "third_party/blink/public/common/features.h"
@@ -537,22 +538,42 @@ bool OriginTrialContext::CanEnableTrialFromName(const StringView& trial_name) {
     return base::FeatureList::IsEnabled(blink::features::kPermissionElement);
   }
 
+  // TODO(crbug.com/362675965): remove after origin trial.
+  if (trial_name == "AISummarizationAPI") {
+    return base::FeatureList::IsEnabled(features::kEnableAISummarizationAPI);
+  }
+
+  if (trial_name == "LanguageDetectionAPI") {
+    return base::FeatureList::IsEnabled(features::kLanguageDetectionAPI);
+  }
+
+  if (trial_name == "AIPromptAPIForExtension") {
+    return base::FeatureList::IsEnabled(
+        features::kEnableAIPromptAPIForExtension);
+  }
+
+  if (trial_name == "TranslationAPI") {
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
+    return base::FeatureList::IsEnabled(features::kEnableTranslationAPI);
+#else
+    return false;
+#endif
+  }
+
   return true;
 }
 
 OriginTrialFeaturesEnabled OriginTrialContext::EnableTrialFromName(
     const String& trial_name,
     base::Time expiry_time) {
-  Vector<mojom::blink::OriginTrialFeature> origin_trial_features =
-      Vector<mojom::blink::OriginTrialFeature>();
   if (!CanEnableTrialFromName(trial_name)) {
     DVLOG(1) << "EnableTrialFromName: cannot enable trial " << trial_name;
-    OriginTrialFeaturesEnabled result = {OriginTrialStatus::kTrialNotAllowed,
-                                         origin_trial_features};
-    return result;
+    return {OriginTrialStatus::kTrialNotAllowed,
+            Vector<mojom::blink::OriginTrialFeature>()};
   }
 
   bool did_enable_feature = false;
+  Vector<mojom::blink::OriginTrialFeature> origin_trial_features;
   for (mojom::blink::OriginTrialFeature feature :
        origin_trials::FeaturesForTrial(trial_name.Utf8())) {
     if (!origin_trials::FeatureEnabledForOS(feature)) {
@@ -580,11 +601,10 @@ OriginTrialFeaturesEnabled OriginTrialContext::EnableTrialFromName(
         feature_expiry_times_.Set(implied_feature, expiry_time);
     }
   }
-  OriginTrialFeaturesEnabled result = {
-      (did_enable_feature ? OriginTrialStatus::kEnabled
-                          : OriginTrialStatus::kOSNotSupported),
-      origin_trial_features};
-  return result;
+  OriginTrialStatus status = did_enable_feature
+                                 ? OriginTrialStatus::kEnabled
+                                 : OriginTrialStatus::kOSNotSupported;
+  return {status, std::move(origin_trial_features)};
 }
 
 bool OriginTrialContext::EnableTrialFromToken(const String& token,
@@ -622,8 +642,7 @@ bool OriginTrialContext::EnableTrialFromToken(
 
   if (token_result.Status() == OriginTrialTokenStatus::kSuccess) {
     String trial_name =
-        String::FromUTF8(token_result.ParsedToken()->feature_name().data(),
-                         token_result.ParsedToken()->feature_name().size());
+        String::FromUTF8(token_result.ParsedToken()->feature_name());
     OriginTrialFeaturesEnabled result = EnableTrialFromName(
         trial_name, token_result.ParsedToken()->expiry_time());
     trial_status = result.status;
@@ -659,8 +678,7 @@ void OriginTrialContext::CacheToken(const String& raw_token,
   String trial_name =
       token_result.ParsedToken() &&
               token_result.Status() != OriginTrialTokenStatus::kUnknownTrial
-          ? String::FromUTF8(token_result.ParsedToken()->feature_name().data(),
-                             token_result.ParsedToken()->feature_name().size())
+          ? String::FromUTF8(token_result.ParsedToken()->feature_name())
           : kDefaultTrialName;
 
   // Does nothing if key already exists.
