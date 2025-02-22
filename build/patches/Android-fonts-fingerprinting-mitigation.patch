@@ -6,13 +6,15 @@ Replaces system fonts with a predefined set downloaded from www.cromite.org
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
+ .../component_updater/registration.cc         |    9 +
  .../java/res/xml/developer_preferences.xml    |    5 +
- chrome/browser/BUILD.gn                       |   11 +
- .../fonts_pack_component_installer.cc         |   97 +
- .../fonts_pack_component_installer.h          |   60 +
+ chrome/browser/BUILD.gn                       |    7 +
  .../browser/component_updater/registration.cc |   10 +
  ...droid-fonts-fingerprinting-mitigation.grdp |    9 +
  chrome/renderer/BUILD.gn                      |    3 +
+ .../installer_policies/BUILD.gn               |    7 +
+ .../fonts_pack_component_installer.cc         |   96 +
+ .../fonts_pack_component_installer.h          |   60 +
  components/services/font/BUILD.gn             |   10 +
  components/services/font/font_service_app.cc  |   44 +
  components/services/font/font_service_app.h   |    1 +
@@ -21,7 +23,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../font/public/cpp/font_service_thread.cc    |   48 +
  .../font/public/cpp/font_service_thread.h     |    5 +
  .../font/public/mojom/font_service.mojom      |    2 +
- content/browser/BUILD.gn                      |   11 +
+ content/browser/BUILD.gn                      |   18 +
  ...der_process_host_impl_receiver_bindings.cc |   12 +
  content/child/BUILD.gn                        |    7 +
  content/renderer/BUILD.gn                     |    4 +
@@ -39,15 +41,41 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../skia/src/ports/SkFontMgr_android_data.cpp | 1640 +++++++++++++++++
  .../src/ports/SkFontMgr_android_parser.cpp    |   49 +-
  .../skia/src/ports/SkFontMgr_android_parser.h |    5 +-
- 33 files changed, 2338 insertions(+), 52 deletions(-)
- create mode 100644 chrome/browser/component_updater/fonts_pack_component_installer.cc
- create mode 100644 chrome/browser/component_updater/fonts_pack_component_installer.h
+ 35 files changed, 2356 insertions(+), 52 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
+ create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.cc
+ create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.h
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Android-fonts-fingerprinting-mitigation.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Android-fonts-fingerprinting-mitigation.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_h/Android-fonts-fingerprinting-mitigation.inc
  create mode 100644 third_party/skia/src/ports/SkFontMgr_android_data.cpp
 
+diff --git a/android_webview/nonembedded/component_updater/registration.cc b/android_webview/nonembedded/component_updater/registration.cc
+--- a/android_webview/nonembedded/component_updater/registration.cc
++++ b/android_webview/nonembedded/component_updater/registration.cc
+@@ -27,6 +27,9 @@
+ #include "components/update_client/update_client.h"
+ #include "mojo/public/cpp/base/proto_wrapper.h"
+ 
++#include "third_party/blink/public/common/features.h"
++#include "chrome/browser/component_updater/fonts_pack_component_installer.h"
++
+ namespace android_webview {
+ 
+ void RegisterComponentsForUpdate(
+@@ -43,6 +46,12 @@ void RegisterComponentsForUpdate(
+   std::vector<std::unique_ptr<component_updater::ComponentInstallerPolicy>>
+       component_installer_list_cromite;
+ 
++  if (base::FeatureList::IsEnabled(blink::features::kAndroidFontsFingerprintingMitigation)) {
++    component_installer_list_cromite.push_back(
++      std::make_unique<
++          component_updater::FontsPackComponentInstallerPolicy>());
++  }
++
+   component_installer_list.push_back(
+       std::make_unique<
+           component_updater::OriginTrialsComponentInstallerPolicy>());
 diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/android/java/res/xml/developer_preferences.xml
 --- a/chrome/android/java/res/xml/developer_preferences.xml
 +++ b/chrome/android/java/res/xml/developer_preferences.xml
@@ -64,15 +92,11 @@ diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/andr
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -7864,6 +7864,17 @@ static_library("browser") {
+@@ -7900,6 +7900,13 @@ static_library("browser") {
      }
    }
  
 +  if (is_android) {
-+    sources += [
-+      "component_updater/fonts_pack_component_installer.cc",
-+      "component_updater/fonts_pack_component_installer.h",
-+    ]
 +    deps += [
 +      "//components/services/font:lib",
 +      "//components/services/font/public/mojom",
@@ -82,12 +106,87 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
    if (enable_chrome_notifications) {
      assert(enable_message_center)
      sources += [
-diff --git a/chrome/browser/component_updater/fonts_pack_component_installer.cc b/chrome/browser/component_updater/fonts_pack_component_installer.cc
+diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
+--- a/chrome/browser/component_updater/registration.cc
++++ b/chrome/browser/component_updater/registration.cc
+@@ -55,6 +55,7 @@
+ #include "device/vr/buildflags/buildflags.h"
+ #include "ppapi/buildflags/buildflags.h"
+ #include "third_party/widevine/cdm/buildflags.h"
++#include "third_party/blink/public/common/features.h"
+ 
+ #if BUILDFLAG(IS_WIN)
+ #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+@@ -110,10 +111,19 @@
+ #include "ui/aura/env.h"
+ #endif
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "components/component_updater/installer_policies/fonts_pack_component_installer.h"
++#endif
++
+ namespace component_updater {
+ 
+ void RegisterComponentsForUpdate() {
+   auto* const cus = g_browser_process->component_updater();
++#if BUILDFLAG(IS_ANDROID)
++  if (base::FeatureList::IsEnabled(blink::features::kAndroidFontsFingerprintingMitigation)) {
++    RegisterFontsPackComponent(cus);
++  }
++#endif
+ 
+   if ((true)) return;
+ 
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
 new file mode 100644
 --- /dev/null
-+++ b/chrome/browser/component_updater/fonts_pack_component_installer.cc
-@@ -0,0 +1,97 @@
-+#include "chrome/browser/component_updater/fonts_pack_component_installer.h"
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_ANDROID_FONTS_FINGERPRINTING_MITIGATION_TITLE" desc="Text for 'Android fonts fingerprinting mitigation' settings option.">
++        Android fonts fingerprinting mitigation
++    </message>
++    <message name="IDS_ANDROID_FONTS_FINGERPRINTING_MITIGATION_SUMMARY" desc="Summary text for 'Android fonts fingerprinting mitigation' settings option.">
++        Replaces all system fonts with the same for all devices
++    </message>
++</grit-part>
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -295,6 +295,9 @@ static_library("renderer") {
+       "//ppapi/shared_impl",
+     ]
+ 
++    if (is_android) {
++      deps += [ "//components/services/font/public/cpp" ]
++    }
+     if (is_linux || is_chromeos) {
+       deps += [ "//components/services/font/public/cpp" ]
+     }
+diff --git a/components/component_updater/installer_policies/BUILD.gn b/components/component_updater/installer_policies/BUILD.gn
+--- a/components/component_updater/installer_policies/BUILD.gn
++++ b/components/component_updater/installer_policies/BUILD.gn
+@@ -34,6 +34,13 @@ static_library("installer_policies_no_content_deps") {
+     "trust_token_key_commitments_component_installer_policy.h",
+   ]
+ 
++  if (is_android) {
++    sources += [
++      "fonts_pack_component_installer.h",
++      "fonts_pack_component_installer.cc",
++    ]
++  }
++
+   deps = [
+     "//base",
+     "//components/autofill/core/browser",
+diff --git a/components/component_updater/installer_policies/fonts_pack_component_installer.cc b/components/component_updater/installer_policies/fonts_pack_component_installer.cc
+new file mode 100644
+--- /dev/null
++++ b/components/component_updater/installer_policies/fonts_pack_component_installer.cc
+@@ -0,0 +1,96 @@
++#include "fonts_pack_component_installer.h"
 +
 +#include <optional>
 +#include <utility>
@@ -100,7 +199,6 @@ new file mode 100644
 +#include "base/path_service.h"
 +#include "base/values.h"
 +#include "base/version.h"
-+#include "chrome/browser/browser_process.h"
 +#include "components/component_updater/component_updater_paths.h"
 +
 +using component_updater::ComponentUpdateService;
@@ -184,13 +282,13 @@ new file mode 100644
 +}
 +
 +}  // namespace component_updater
-diff --git a/chrome/browser/component_updater/fonts_pack_component_installer.h b/chrome/browser/component_updater/fonts_pack_component_installer.h
+diff --git a/components/component_updater/installer_policies/fonts_pack_component_installer.h b/components/component_updater/installer_policies/fonts_pack_component_installer.h
 new file mode 100644
 --- /dev/null
-+++ b/chrome/browser/component_updater/fonts_pack_component_installer.h
++++ b/components/component_updater/installer_policies/fonts_pack_component_installer.h
 @@ -0,0 +1,60 @@
-+#ifndef CHROME_BROWSER_COMPONENT_UPDATER_FONTS_PACK_COMPONENT_INSTALLER_H_
-+#define CHROME_BROWSER_COMPONENT_UPDATER_FONTS_PACK_COMPONENT_INSTALLER_H_
++#ifndef COMPONENTS_COMPONENT_UPDATER_INSTALLER_POLICIES_FONTS_PACK_COMPONENT_INSTALLER_H_
++#define COMPONENTS_COMPONENT_UPDATER_INSTALLER_POLICIES_FONTS_PACK_COMPONENT_INSTALLER_H_
 +
 +#include <memory>
 +#include <string>
@@ -248,65 +346,7 @@ new file mode 100644
 +
 +}  // namespace component_updater
 +
-+#endif  // CHROME_BROWSER_COMPONENT_UPDATER_FONTS_PACK_COMPONENT_INSTALLER_H_
-diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
---- a/chrome/browser/component_updater/registration.cc
-+++ b/chrome/browser/component_updater/registration.cc
-@@ -55,6 +55,7 @@
- #include "device/vr/buildflags/buildflags.h"
- #include "ppapi/buildflags/buildflags.h"
- #include "third_party/widevine/cdm/buildflags.h"
-+#include "third_party/blink/public/common/features.h"
- 
- #if BUILDFLAG(IS_WIN)
- #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
-@@ -110,10 +111,19 @@
- #include "ui/aura/env.h"
- #endif
- 
-+#if BUILDFLAG(IS_ANDROID)
-+#include "chrome/browser/component_updater/fonts_pack_component_installer.h"
-+#endif
-+
- namespace component_updater {
- 
- void RegisterComponentsForUpdate() {
-   auto* const cus = g_browser_process->component_updater();
-+#if BUILDFLAG(IS_ANDROID)
-+  if (base::FeatureList::IsEnabled(blink::features::kAndroidFontsFingerprintingMitigation)) {
-+    RegisterFontsPackComponent(cus);
-+  }
-+#endif
- 
-   if ((true)) return;
- 
-diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
-new file mode 100644
---- /dev/null
-+++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
-@@ -0,0 +1,9 @@
-+<?xml version="1.0" encoding="utf-8"?>
-+<grit-part>
-+    <message name="IDS_ANDROID_FONTS_FINGERPRINTING_MITIGATION_TITLE" desc="Text for 'Android fonts fingerprinting mitigation' settings option.">
-+        Android fonts fingerprinting mitigation
-+    </message>
-+    <message name="IDS_ANDROID_FONTS_FINGERPRINTING_MITIGATION_SUMMARY" desc="Summary text for 'Android fonts fingerprinting mitigation' settings option.">
-+        Replaces all system fonts with the same for all devices
-+    </message>
-+</grit-part>
-diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
---- a/chrome/renderer/BUILD.gn
-+++ b/chrome/renderer/BUILD.gn
-@@ -295,6 +295,9 @@ static_library("renderer") {
-       "//ppapi/shared_impl",
-     ]
- 
-+    if (is_android) {
-+      deps += [ "//components/services/font/public/cpp" ]
-+    }
-     if (is_linux || is_chromeos) {
-       deps += [ "//components/services/font/public/cpp" ]
-     }
++#endif  // COMPONENTS_COMPONENT_UPDATER_INSTALLER_POLICIES_FONTS_PACK_COMPONENT_INSTALLER_H_
 diff --git a/components/services/font/BUILD.gn b/components/services/font/BUILD.gn
 --- a/components/services/font/BUILD.gn
 +++ b/components/services/font/BUILD.gn
@@ -585,6 +625,20 @@ diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
    if (is_linux || is_chromeos) {
      sources -=
          [ "file_system_access/file_path_watcher/file_path_watcher_stub.cc" ]
+@@ -2547,6 +2558,13 @@ source_set("browser") {
+     ]
+   }
+ 
++  if (is_android) {
++    deps += [
++      "//components/services/font:lib",
++    ]
++    public_deps += [ "//components/services/font/public/mojom" ]
++  }
++
+   if (allow_oop_video_decoder) {
+     sources += [ "media/stable_video_decoder_factory.cc" ]
+     deps += [ "//media/mojo/mojom/stable:stable_video_decoder" ]
 diff --git a/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc b/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
 --- a/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
 +++ b/content/browser/renderer_host/render_process_host_impl_receiver_bindings.cc
