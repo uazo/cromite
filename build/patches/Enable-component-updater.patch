@@ -8,6 +8,11 @@ Only cromite-specific components can be enabled.
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
+ .../browser/aw_browser_main_parts.cc          |  7 +++
+ .../component_updater/registration.cc         | 12 +++--
+ .../nonembedded/webview_apk_application.cc    |  2 +-
+ .../nonembedded/webview_apk_process.cc        | 19 +++++---
+ .../nonembedded/webview_apk_process.h         |  4 +-
  .../browser/component_updater/registration.cc |  2 +
  .../component_updater/component_installer.cc  | 48 +++++++++++--------
  .../component_updater/component_installer.h   |  4 +-
@@ -24,8 +29,141 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  components/update_client/update_checker.cc    |  6 ++-
  components/update_client/update_engine.cc     |  9 ++++
  components/update_client/utils.cc             |  3 ++
- 16 files changed, 100 insertions(+), 37 deletions(-)
+ 21 files changed, 132 insertions(+), 49 deletions(-)
 
+diff --git a/android_webview/browser/aw_browser_main_parts.cc b/android_webview/browser/aw_browser_main_parts.cc
+--- a/android_webview/browser/aw_browser_main_parts.cc
++++ b/android_webview/browser/aw_browser_main_parts.cc
+@@ -69,6 +69,9 @@
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/gl/gl_surface.h"
+ 
++#include "android_webview/nonembedded/webview_apk_process.h"
++#include "android_webview/nonembedded/component_updater/aw_component_update_service.h"
++
+ // Must come after all headers that specialize FromJniType() / ToJniType().
+ #include "android_webview/browser_jni_headers/AwBrowserMainParts_jni.h"
+ #include "android_webview/browser_jni_headers/AwInterfaceRegistrar_jni.h"
+@@ -332,6 +335,10 @@ int AwBrowserMainParts::PreMainMessageLoopRun() {
+   Java_AwInterfaceRegistrar_registerMojoInterfaces(
+       base::android::AttachCurrentThread());
+ 
++  WebViewApkProcess::Init(/*embedded*/ true);
++  AwComponentUpdateService::GetInstance()->StartComponentUpdateService(
++    base::DoNothing(), false);
++
+   return content::RESULT_CODE_NORMAL_EXIT;
+ }
+ 
+diff --git a/android_webview/nonembedded/component_updater/registration.cc b/android_webview/nonembedded/component_updater/registration.cc
+--- a/android_webview/nonembedded/component_updater/registration.cc
++++ b/android_webview/nonembedded/component_updater/registration.cc
+@@ -40,6 +40,9 @@ void RegisterComponentsForUpdate(
+   std::vector<std::unique_ptr<component_updater::ComponentInstallerPolicy>>
+       component_installer_list;
+ 
++  std::vector<std::unique_ptr<component_updater::ComponentInstallerPolicy>>
++      component_installer_list_cromite;
++
+   component_installer_list.push_back(
+       std::make_unique<
+           component_updater::OriginTrialsComponentInstallerPolicy>());
+@@ -102,14 +105,17 @@ void RegisterComponentsForUpdate(
+   }
+ 
+   base::RepeatingClosure barrier_closure = base::BarrierClosure(
+-      component_installer_list.size(), std::move(on_finished));
+-  for (auto& component : component_installer_list) {
++    component_installer_list_cromite.size(), std::move(on_finished));
++  for (auto& component : component_installer_list_cromite) {
+     base::MakeRefCounted<component_updater::ComponentInstaller>(
+         std::make_unique<AwComponentInstallerPolicyShim>(std::move(component)))
+         ->Register(base::OnceCallback<bool(
+                        const component_updater::ComponentRegistration&)>(
+                        register_callback),
+-                   base::OnceClosure(barrier_closure));
++                   base::OnceClosure(barrier_closure),
++                   /* registered_version */ base::Version(component_updater::kNullVersion),
++                   /* max_previous_product_version */ base::Version(component_updater::kNullVersion),
++                   /* allowed */ true);
+   }
+ }
+ 
+diff --git a/android_webview/nonembedded/webview_apk_application.cc b/android_webview/nonembedded/webview_apk_application.cc
+--- a/android_webview/nonembedded/webview_apk_application.cc
++++ b/android_webview/nonembedded/webview_apk_application.cc
+@@ -15,7 +15,7 @@ namespace android_webview {
+ 
+ void JNI_WebViewApkApplication_InitializeGlobalsAndResources(JNIEnv* env) {
+   InitIcuAndResourceBundleBrowserSide();
+-  WebViewApkProcess::Init();
++  WebViewApkProcess::Init(/*embedded*/ false);
+ }
+ 
+ }  // namespace android_webview
+diff --git a/android_webview/nonembedded/webview_apk_process.cc b/android_webview/nonembedded/webview_apk_process.cc
+--- a/android_webview/nonembedded/webview_apk_process.cc
++++ b/android_webview/nonembedded/webview_apk_process.cc
+@@ -34,27 +34,34 @@ WebViewApkProcess* WebViewApkProcess::GetInstance() {
+ 
+ // static
+ // Must be called exactly once during the process startup.
+-void WebViewApkProcess::Init() {
++void WebViewApkProcess::Init(bool embedded) {
+   // TODO(crbug.com/40749658): Add check to assert this is only loaded by
+   // LibraryProcessType PROCESS_WEBVIEW_NONEMBEDDED.
+ 
+   // This doesn't have to be thread safe, because it should only happen once on
+   // the main thread before any GetInstances calls are made.
+   DCHECK(!g_webview_apk_process);
+-  g_webview_apk_process = new WebViewApkProcess();
++  g_webview_apk_process = new WebViewApkProcess(embedded);
+ }
+ 
+-WebViewApkProcess::WebViewApkProcess() {
+-  base::ThreadPoolInstance::CreateAndStartWithDefaultParams(
++WebViewApkProcess::WebViewApkProcess(bool embedded) {
++  if (!embedded) {
++    base::ThreadPoolInstance::CreateAndStartWithDefaultParams(
+       "WebViewApkProcess");
++  }
+ 
+   // There's no UI message pump in nonembedded WebView, using
+   // `base::MessagePumpType::JAVA` so that the `SingleThreadExecutor` will bind
+   // to the java thread the `WebViewApkProcess` is created on.
+-  main_task_executor_ = std::make_unique<base::SingleThreadTaskExecutor>(
++  if (!embedded) {
++    main_task_executor_ = std::make_unique<base::SingleThreadTaskExecutor>(
+       base::MessagePumpType::JAVA);
++  }
++
++  if (!embedded) {
++    RegisterPathProvider();
++  }
+ 
+-  RegisterPathProvider();
+   component_updater::RegisterPathProvider(
+       /*components_system_root_key=*/android_webview::DIR_COMPONENTS_ROOT,
+       /*components_system_root_key_alt=*/android_webview::DIR_COMPONENTS_ROOT,
+diff --git a/android_webview/nonembedded/webview_apk_process.h b/android_webview/nonembedded/webview_apk_process.h
+--- a/android_webview/nonembedded/webview_apk_process.h
++++ b/android_webview/nonembedded/webview_apk_process.h
+@@ -17,13 +17,13 @@ namespace android_webview {
+ // Class that holds global state in the webview apk process.
+ class WebViewApkProcess {
+  public:
+-  static void Init();
++  static void Init(bool embedded);
+   static WebViewApkProcess* GetInstance();
+ 
+   PrefService* GetPrefService() const;
+ 
+  private:
+-  WebViewApkProcess();
++  WebViewApkProcess(bool embedded);
+   ~WebViewApkProcess();
+ 
+   void CreatePrefService();
 diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
 --- a/chrome/browser/component_updater/registration.cc
 +++ b/chrome/browser/component_updater/registration.cc
