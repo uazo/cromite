@@ -72,8 +72,7 @@ ADB is developed in c++ while uBlock is an extension in javascript. Currently, s
 ADB in Cromite is enhanced with support for cname uncloaking and blocking even in workers (a unique feature of Cromite). Support for "acceptable ads" has been completely removed.
 
 ## Why don't you accept donations?
-I haven't decided yet. Currently the motivation is that I have no time or desire to understand how donations work in my country and with my current job position.
-Fortunately, I don't need it for now.
+I haven't decided yet. I'm giving it a try.
 
 ## Why is JIT disabled by default? How to enable JIT selectively per site?
 JIT stands for Just-In-Time compilation and is a feature of chromium v8 which is the module responsible for executing javascript code. The purpose of JIT is to compile javascript to speed up its execution.

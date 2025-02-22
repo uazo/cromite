@@ -183,6 +183,10 @@ For any usage or development discussion please use GitHub Discussions: https://g
 
 thanks to [austinhuang0131](https://github.com/austinhuang0131) for the svg icon
 
+# Donate
+
+If you want, you can donate to support cromite development through [paypal](https://www.paypal.com/pools/c/9cwNgAQhRL).
+
 # License
 
 Cromite is published under [GNU GPL v3](./LICENSE).
