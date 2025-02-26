@@ -29,7 +29,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/not_fatal_until.h"
-#include "base/ranges/algorithm.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -110,6 +109,7 @@
 #include "services/network/http_server_properties_pref_delegate.h"
 #include "services/network/ignore_errors_cert_verifier.h"
 #include "services/network/is_browser_initiated.h"
+#include "services/network/known_legacy_scope_domains_delegate.h"
 #include "services/network/net_log_exporter.h"
 #include "services/network/network_service.h"
 #include "services/network/network_service_network_delegate.h"
@@ -134,6 +134,7 @@
 #include "services/network/public/mojom/reporting_service.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
+#include "services/network/public/mojom/web_transport.mojom.h"
 #include "services/network/resolve_host_request.h"
 #include "services/network/resource_scheduler/resource_scheduler_client.h"
 #include "services/network/restricted_cookie_manager.h"
@@ -166,10 +167,6 @@
 #include "services/network/sct_auditing/sct_auditing_cache.h"
 #include "services/network/sct_auditing/sct_auditing_handler.h"
 #endif  // BUILDFLAG(IS_CT_SUPPORTED)
-
-#if BUILDFLAG(IS_CHROMEOS)
-#include "services/network/cert_verifier_with_trust_anchors.h"
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
 #include "services/network/websocket_factory.h"
@@ -597,7 +594,10 @@ enum class HSTSRedirectUpgradeReason {
 // LINT.ThenChange(//tools/metrics/histograms/metadata/net/enums.xml:HSTSRedirectUpgradeReason)
 
 void RecordHSTSPreconnectUpgradeReason(HSTSRedirectUpgradeReason reason) {
-  base::UmaHistogramEnumeration("Net.PreconnectHSTSUpgradesUrl", reason);
+  if (!base::FeatureList::IsEnabled(
+          net::features::kHstsTopLevelNavigationsOnly)) {
+    base::UmaHistogramEnumeration("Net.PreconnectHSTSUpgradesUrl", reason);
+  }
 }
 
 }  // namespace
@@ -1041,12 +1041,14 @@ void NetworkContext::GetRestrictedCookieManager(
     const url::Origin& origin,
     const net::IsolationInfo& isolation_info,
     const net::CookieSettingOverrides& cookie_setting_overrides,
+    const net::CookieSettingOverrides& devtools_cookie_setting_overrides,
     mojo::PendingRemote<mojom::CookieAccessObserver> cookie_observer) {
   RestrictedCookieManager::ComputeFirstPartySetMetadata(
       origin, url_request_context_->cookie_store(), isolation_info,
       base::BindOnce(&NetworkContext::OnComputedFirstPartySetMetadata,
                      weak_factory_.GetWeakPtr(), std::move(receiver), role,
                      origin, isolation_info, cookie_setting_overrides,
+                     devtools_cookie_setting_overrides,
                      std::move(cookie_observer)));
 }
 
@@ -1064,6 +1066,7 @@ void NetworkContext::OnComputedFirstPartySetMetadata(
     const url::Origin& origin,
     const net::IsolationInfo& isolation_info,
     const net::CookieSettingOverrides& cookie_setting_overrides,
+    const net::CookieSettingOverrides& devtools_cookie_setting_overrides,
     mojo::PendingRemote<mojom::CookieAccessObserver> cookie_observer,
     net::FirstPartySetMetadata first_party_set_metadata) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -1072,8 +1075,8 @@ void NetworkContext::OnComputedFirstPartySetMetadata(
       std::make_unique<RestrictedCookieManager>(
           role, url_request_context_->cookie_store(),
           cookie_manager_->cookie_settings(), origin, isolation_info,
-          cookie_setting_overrides, std::move(cookie_observer),
-          std::move(first_party_set_metadata),
+          cookie_setting_overrides, devtools_cookie_setting_overrides,
+          std::move(cookie_observer), std::move(first_party_set_metadata),
           network_service_->metrics_updater());
 
   auto callback = base::BindOnce(&NetworkContext::OnRCMDisconnect,
@@ -1360,11 +1363,12 @@ void NetworkContext::ClearHttpAuthCache(base::Time start_time,
       url_request_context_->http_transaction_factory()->GetSession();
   DCHECK(http_session);
 
-  http_session->http_auth_cache()->ClearEntriesAddedBetween(
-      start_time, end_time, BuildUrlFilter(std::move(filter)));
-  // TODO(mmenke): Use another error code for this, as ERR_ABORTED has somewhat
-  // magical handling with respect to navigations.
-  http_session->CloseAllConnections(net::ERR_ABORTED, "Clearing auth cache");
+  if (http_session->http_auth_cache()->ClearEntriesAddedBetween(
+          start_time, end_time, BuildUrlFilter(std::move(filter)))) {
+    // TODO(mmenke): Use another error code for this, as ERR_ABORTED has
+    // somewhat magical handling with respect to navigations.
+    http_session->CloseAllConnections(net::ERR_ABORTED, "Clearing auth cache");
+  }
 
   std::move(callback).Run();
 }
@@ -1929,6 +1933,14 @@ void NetworkContext::CreateWebTransport(
     std::vector<mojom::WebTransportCertificateFingerprintPtr> fingerprints,
     mojo::PendingRemote<mojom::WebTransportHandshakeClient>
         pending_handshake_client) {
+  if (!IsNetworkForNonceAndUrlAllowed(
+          key.GetNonce().value_or(base::UnguessableToken::Null()), url)) {
+    mojo::Remote<mojom::WebTransportHandshakeClient> remote_handshake_client(
+        std::move(pending_handshake_client));
+    remote_handshake_client->OnHandshakeFailed(
+        net::WebTransportError(net::ERR_NETWORK_ACCESS_REVOKED));
+    return;
+  }
   web_transports_.insert(
       std::make_unique<WebTransport>(url, origin, key, fingerprints, this,
                                      std::move(pending_handshake_client)));
@@ -2076,6 +2088,7 @@ void NetworkContext::AddHSTS(const std::string& host,
 }
 
 void NetworkContext::IsHSTSActiveForHost(const std::string& host,
+                                         bool is_top_level_nav,
                                          IsHSTSActiveForHostCallback callback) {
   net::TransportSecurityState* security_state =
       url_request_context_->transport_security_state();
@@ -2085,7 +2098,8 @@ void NetworkContext::IsHSTSActiveForHost(const std::string& host,
     return;
   }
 
-  std::move(callback).Run(security_state->ShouldUpgradeToSSL(host));
+  std::move(callback).Run(
+      security_state->ShouldUpgradeToSSL(host, is_top_level_nav));
 }
 
 void NetworkContext::GetHSTSState(const std::string& domain,
@@ -2456,7 +2470,7 @@ const net::HttpAuthPreferences* NetworkContext::GetHttpAuthPreferences() const {
 }
 
 size_t NetworkContext::NumOpenWebTransports() const {
-  return base::ranges::count(web_transports_, false, &WebTransport::torn_down);
+  return std::ranges::count(web_transports_, false, &WebTransport::torn_down);
 }
 
 bool NetworkContext::AllURLLoaderFactoriesAreBoundToNetworkForTesting(
@@ -2555,18 +2569,6 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
     cert_verifier = std::make_unique<net::CachingCertVerifier>(
         std::make_unique<net::CoalescingCertVerifier>(
             std::move(cert_verifier)));
-
-#if BUILDFLAG(IS_CHROMEOS)
-    // TODO(crbug.com/40928765): The TrustAnchorUsed callback should
-    // work on all platforms. (Also consider whether this wrapper is the best
-    // way to handle this or if it should be refactored.)
-    auto cert_verifier_with_trust_anchors =
-        std::make_unique<CertVerifierWithTrustAnchors>(base::BindRepeating(
-            &NetworkContext::TrustAnchorUsed, base::Unretained(this)));
-    cert_verifier_with_trust_anchors->InitializeOnIOThread(
-        std::move(cert_verifier));
-    cert_verifier = std::move(cert_verifier_with_trust_anchors);
-#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   builder.SetCertVerifier(IgnoreErrorsCertVerifier::MaybeWrapCertVerifier(
@@ -2635,38 +2637,26 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
     builder.set_network_quality_estimator(
         network_service_->network_quality_estimator());
   }
+  trust_token_store_ = std::make_unique<PendingTrustTokenStore>();
 
-  if (session_cleanup_cookie_store) {
-    std::unique_ptr<net::CookieMonster> cookie_store =
-        std::make_unique<net::CookieMonster>(session_cleanup_cookie_store.get(),
-                                             net_log);
-    if (params_->persist_session_cookies) {
-      cookie_store->SetPersistSessionCookies(true);
-    }
-
-    builder.SetCookieStore(std::move(cookie_store));
+  base::FilePath trust_token_path;
+  if (GetFullDataFilePath(
+          params_->file_paths,
+          &network::mojom::NetworkContextFilePaths::trust_token_database_name,
+          trust_token_path)) {
+    SQLiteTrustTokenPersister::CreateForFilePath(
+        base::ThreadPool::CreateSequencedTaskRunner(
+            {base::MayBlock(), kTrustTokenDatabaseTaskPriority,
+             base::TaskShutdownBehavior::BLOCK_SHUTDOWN}),
+        trust_token_path, kTrustTokenWriteBufferingWindow,
+        base::BindOnce(&NetworkContext::FinishConstructingTrustTokenStore,
+                       weak_factory_.GetWeakPtr()));
+  } else {
+    trust_token_store_->OnStoreReady(std::make_unique<TrustTokenStore>(
+        std::make_unique<InMemoryTrustTokenPersister>(),
+        std::make_unique<ExpiryInspectingRecordExpiryDelegate>(
+            network_service()->trust_token_key_commitments())));
   }
-
-    trust_token_store_ = std::make_unique<PendingTrustTokenStore>();
-
-    base::FilePath trust_token_path;
-    if (GetFullDataFilePath(
-            params_->file_paths,
-            &network::mojom::NetworkContextFilePaths::trust_token_database_name,
-            trust_token_path)) {
-      SQLiteTrustTokenPersister::CreateForFilePath(
-          base::ThreadPool::CreateSequencedTaskRunner(
-              {base::MayBlock(), kTrustTokenDatabaseTaskPriority,
-               base::TaskShutdownBehavior::BLOCK_SHUTDOWN}),
-          trust_token_path, kTrustTokenWriteBufferingWindow,
-          base::BindOnce(&NetworkContext::FinishConstructingTrustTokenStore,
-                         weak_factory_.GetWeakPtr()));
-    } else {
-      trust_token_store_->OnStoreReady(std::make_unique<TrustTokenStore>(
-          std::make_unique<InMemoryTrustTokenPersister>(),
-          std::make_unique<ExpiryInspectingRecordExpiryDelegate>(
-              network_service()->trust_token_key_commitments())));
-    }
 
   std::unique_ptr<net::StaticHttpUserAgentSettings> user_agent_settings =
       std::make_unique<net::StaticHttpUserAgentSettings>(
@@ -2767,6 +2757,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
     scoped_refptr<PrefRegistrySimple> pref_registry(new PrefRegistrySimple());
     HttpServerPropertiesPrefDelegate::RegisterPrefs(pref_registry.get());
     NetworkQualitiesPrefDelegate::RegisterPrefs(pref_registry.get());
+    KnownLegacyScopeDomainsPrefDelegate::RegisterPrefs(pref_registry.get());
     pref_service = pref_service_factory.Create(pref_registry.get());
 
     builder.SetHttpServerProperties(std::make_unique<net::HttpServerProperties>(
@@ -2776,6 +2767,19 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
     network_qualities_pref_delegate_ =
         std::make_unique<NetworkQualitiesPrefDelegate>(
             pref_service.get(), network_service_->network_quality_estimator());
+  }
+
+  if (session_cleanup_cookie_store) {
+    std::unique_ptr<net::CookieMonster> cookie_store =
+        std::make_unique<net::CookieMonster>(
+            session_cleanup_cookie_store.get(), net_log,
+            std::make_unique<KnownLegacyScopeDomainsPrefDelegate>(
+                pref_service.get()));
+    if (params_->persist_session_cookies) {
+      cookie_store->SetPersistSessionCookies(true);
+    }
+
+    builder.SetCookieStore(std::move(cookie_store));
   }
 
   base::FilePath transport_security_persister_file_name;
@@ -3007,12 +3011,11 @@ NetworkContext::MakeSessionCleanupCookieStore() const {
 
 #if BUILDFLAG(IS_WIN)
   const bool enable_exclusive_access =
-      params_->enable_locking_cookie_database.value_or(
-          base::FeatureList::IsEnabled(
-              features::kEnableLockCookieDatabaseByDefault));
+      network_service()->exclusive_cookie_database_locking();
 #else
   const bool enable_exclusive_access = false;
 #endif  // BUILDFLAG(IS_WIN)
+
   scoped_refptr<net::SQLitePersistentCookieStore> sqlite_store(
       new net::SQLitePersistentCookieStore(
           cookie_path, client_task_runner, background_task_runner,
@@ -3075,8 +3078,17 @@ GURL NetworkContext::GetHSTSRedirectForPreconnect(const GURL& original_url) {
     return original_url;
   }
 
+  // TODO(crbug.com/40725781); This currently doesn't allow for preconnect
+  // upgrades when kHstsTopLevelNavigationsOnly is enabled. Revisit this
+  // decision after analyzing Net.PreconnectHSTSUpgradesUrl metric.
+  //
+  // When kHstsTopLevelNavigationsOnly is enabled only top-level navigations
+  // will be eligable for HSTS upgrades (not sub-resource requests).
+  // Unfortunately we don't know at this point if this request is for a
+  // top-level navigation so we need to disallow HSTS upgrades for every
+  // preconnect.
   if (!url_request_context_->transport_security_state()->ShouldUpgradeToSSL(
-          original_url.host())) {
+          original_url.host(), /*is_top_level_nav=*/false)) {
     RecordHSTSPreconnectUpgradeReason(
         HSTSRedirectUpgradeReason::kNotUpgradedNoHSTSPin);
     return original_url;
@@ -3152,12 +3164,6 @@ void NetworkContext::OnVerifyCertForSignedExchangeComplete(
   std::move(pending_cert_verify->callback)
       .Run(result, *pending_cert_verify->result.get(), pkp_bypassed);
 }
-
-#if BUILDFLAG(IS_CHROMEOS)
-void NetworkContext::TrustAnchorUsed() {
-  client_->OnTrustAnchorUsed();
-}
-#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_DIRECTORY_TRANSFER_REQUIRED)
 void NetworkContext::EnsureMounted(network::TransferableDirectory* directory) {
@@ -3335,6 +3341,9 @@ void NetworkContext::RevokeNetworkForNonces(
       websocket_factory_->RemoveIfNonceMatches(nonce);
     }
 #endif  // BUILDFLAG(ENABLE_WEBSOCKETS)
+    for (const auto& transport : web_transports_) {
+      transport->CloseIfNonceMatches(nonce);
+    }
   }
 
   if (callback) {
