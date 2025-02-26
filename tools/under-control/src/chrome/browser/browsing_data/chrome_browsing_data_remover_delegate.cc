@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 
+#include <algorithm>
 #include <set>
 #include <string>
 #include <utility>
@@ -24,7 +25,6 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/not_fatal_until.h"
-#include "base/ranges/algorithm.h"
 #include "base/strings/strcat.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
@@ -70,7 +70,6 @@
 #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/reading_list/reading_list_model_factory.h"
-#include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/verdict_cache_manager_factory.h"
 #include "chrome/browser/search_engine_choice/search_engine_choice_service_factory.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
@@ -184,6 +183,8 @@
 
 
 #if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/new_tab_page/microsoft_auth/microsoft_auth_service.h"
+#include "chrome/browser/new_tab_page/microsoft_auth/microsoft_auth_service_factory.h"
 #include "chrome/browser/user_annotations/user_annotations_service_factory.h"
 #include "chrome/browser/user_education/browser_user_education_storage_service.h"
 #include "chrome/browser/web_applications/web_app.h"
@@ -223,6 +224,10 @@
 #if BUILDFLAG(IS_WIN)
 #include "chrome/browser/media/cdm_document_service_impl.h"
 #endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+#include "chrome/browser/safe_browsing/safe_browsing_service.h"
+#endif
 
 using base::UserMetricsAction;
 using content::BrowserContext;
@@ -660,10 +665,12 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     base::RecordAction(UserMetricsAction("ClearBrowsingData_Cookies"));
 
     network::mojom::NetworkContext* safe_browsing_context = nullptr;
+#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
     safe_browsing::SafeBrowsingService* sb_service =
         g_browser_process->safe_browsing_service();
     if (sb_service)
       safe_browsing_context = sb_service->GetNetworkContext(profile_);
+#endif
 
     // Cleared for DATA_TYPE_HISTORY, DATA_TYPE_COOKIES and DATA_TYPE_PASSWORDS.
     browsing_data::RemoveFederatedSiteSettingsData(delete_begin_, delete_end_,
@@ -733,6 +740,21 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           delete_begin_, delete_end_, std::move(storage_key_matcher),
           CreateTaskCompletionClosure(TracingDataType::kMediaDeviceSalts));
     }
+
+#if !BUILDFLAG(IS_ANDROID)
+    // Remove local storage data from New Tab page when whenever there's a
+    // Microsoft auth service and cookies and site data is cleared.
+    MicrosoftAuthService* microsoft_auth_service =
+        MicrosoftAuthServiceFactory::GetForProfile(profile_);
+    if (microsoft_auth_service) {
+      microsoft_auth_service->ClearAuthData();
+
+      profile_->GetDefaultStoragePartition()->ClearDataForOrigin(
+          content::StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE,
+          /*quota_storage_remove_mask=*/0, GURL(chrome::kChromeUINewTabPageURL),
+          base::DoNothing());
+    }
+#endif  // !BUILDFLAG(IS_ANDROID)
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -900,6 +922,10 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         ContentSettingsType::NOTIFICATION_INTERACTIONS, delete_begin_,
         delete_end_, website_settings_filter);
 
+    host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
+        ContentSettingsType::ARE_SUSPICIOUS_NOTIFICATIONS_ALLOWLISTED_BY_USER,
+        delete_begin_, delete_end_, website_settings_filter);
+
     PermissionDecisionAutoBlockerFactory::GetForProfile(profile_)
         ->RemoveEmbargoAndResetCounts(filter);
   }
@@ -1047,6 +1073,8 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     if (web_data_service.get()) {
       web_data_service->RemoveFormElementsAddedBetween(delete_begin_,
                                                        delete_end_);
+      web_data_service->RemoveEntityInstancesModifiedBetween(delete_begin_,
+                                                             delete_end_);
       // Clear out the Autofill StrikeDatabase in its entirety.
       // TODO(crbug.com/40594007): Respect |delete_begin_| and |delete_end_| and
       // only clear out entries whose last strikes were created in that
@@ -1393,7 +1421,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   // StoragePartition of an IWA, and all Controlled Frame StoragePartitions if
   // DATA_TYPE_CONTROLLED_FRAME is specified in `remove_mask`.
   if (!filter_builder->GetStoragePartitionConfig().has_value() &&
-      content::IsolatedWebAppsPolicy::AreIsolatedWebAppsEnabled(profile_)) {
+      content::AreIsolatedWebAppsEnabled(profile_)) {
     const web_app::WebAppRegistrar& web_app_registrar =
         web_app::WebAppProvider::GetForLocalAppsUnchecked(profile_)
             ->registrar_unsafe();
@@ -1467,9 +1495,8 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           ContentSettingsType::TOP_LEVEL_STORAGE_ACCESS}) {
       host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
           type_to_clear, [&](const ContentSettingPatternSource& setting) {
-            return content_settings::IsGrantedByRelatedWebsiteSets(
-                       type_to_clear, setting.metadata) &&
-                   base::ranges::any_of(
+            return setting.metadata.decided_by_related_website_sets() &&
+                   std::ranges::any_of(
                        filter_builder->GetOrigins(),
                        [&](const url::Origin& origin) -> bool {
                          return setting.primary_pattern.Matches(
@@ -1576,8 +1603,6 @@ void ChromeBrowsingDataRemoverDelegate::OnTaskComplete(
       sync_service->GetUserSettings()->KeepAccountSettingsPrefsOnlyForUsers(
           base::ToVector(gaia_ids, &signin::GaiaIdHash::FromGaiaId));
     }
-    password_manager::features_util::KeepAccountStorageSettingsOnlyForUsers(
-        profile_->GetPrefs(), std::move(gaia_ids).extract());
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -1760,9 +1785,8 @@ void ChromeBrowsingDataRemoverDelegate::DisablePasswordsAutoSignin(
         CreateTaskCompletionClosure(
             TracingDataType::kDisableAutoSigninForProfilePasswords));
   }
-  if (account_store &&
-      password_manager::features_util::IsOptedInForAccountStorage(
-          profile_->GetPrefs(), sync_service)) {
+  if (account_store && password_manager::features_util::IsAccountStorageEnabled(
+                           profile_->GetPrefs(), sync_service)) {
     account_store->DisableAutoSignInForOrigins(
         url_filter,
         CreateTaskCompletionClosure(

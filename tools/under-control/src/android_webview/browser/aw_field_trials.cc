@@ -28,6 +28,7 @@
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/android/ui_android_features.h"
 #include "ui/gl/gl_features.h"
+#include "ui/gl/gl_switches.h"
 
 namespace internal {
 
@@ -101,9 +102,11 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(
       net::features::kThirdPartyStoragePartitioning);
 
+#if BUILDFLAG(ENABLE_VALIDATING_COMMAND_DECODER)
   // Disable the passthrough on WebView.
   aw_feature_overrides.DisableFeature(
       ::features::kDefaultPassthroughCommandDecoder);
+#endif
 
   // HDR does not support webview yet. See crbug.com/1493153 for an explanation.
   aw_feature_overrides.DisableFeature(ui::kAndroidHDR);
@@ -239,6 +242,10 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(
       ::features::kFocusRenderWidgetHostViewAndroidOnActionDown);
 
+  // Disabling the permission element as it needs embedder support in order to
+  // function and the webview permission manager cannot support it.
+  aw_feature_overrides.DisableFeature(blink::features::kPermissionElement);
+
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kDebugBsa)) {
     // Feature parameters can only be set via a field trial.
     const char kTrialName[] = "StudyDebugBsa";
@@ -259,7 +266,7 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // Feature parameters can only be set via a field trial.
   // Note: Performing a field trial here means we cannot include
-  // |kDIPSTtl| in the testing config json.
+  // |kBtmTtl| in the testing config json.
   {
     const char kDipsWebViewExperiment[] = "DipsWebViewExperiment";
     const char kDipsWebViewGroup[] = "DipsWebViewGroup";
@@ -268,18 +275,18 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
     CHECK(dips_field_trial) << "Unexpected name conflict.";
     base::FieldTrialParams params;
     const std::string ttl_time_delta_30_days = "30d";
-    params.emplace(features::kDIPSInteractionTtl.name, ttl_time_delta_30_days);
+    params.emplace(features::kBtmInteractionTtl.name, ttl_time_delta_30_days);
     base::AssociateFieldTrialParams(kDipsWebViewExperiment, kDipsWebViewGroup,
                                     params);
     aw_feature_overrides.OverrideFeatureWithFieldTrial(
-        features::kDIPSTtl,
+        features::kBtmTtl,
         base::FeatureList::OverrideState::OVERRIDE_ENABLE_FEATURE,
         dips_field_trial);
   }
 
   // Delete Incidental Party State (DIPS) feature is not yet supported on
   // WebView.
-  aw_feature_overrides.DisableFeature(::features::kDIPS);
+  aw_feature_overrides.DisableFeature(::features::kBtm);
 
   // These features have shown performance improvements in WebView but not some
   // other platforms.
@@ -300,6 +307,9 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // Disable Topics on WebView.
   aw_feature_overrides.DisableFeature(blink::features::kBrowsingTopics);
+
+  // Sharing ANGLE's Vulkan queue is not supported on WebView.
+  aw_feature_overrides.DisableFeature(::features::kVulkanFromANGLE);
 
   // Temporarily turn off kFileSystemAccessDirectoryIterationBlocklistCheck for
   // a kill switch. https://crbug.com/393606977
