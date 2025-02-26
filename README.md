@@ -33,7 +33,7 @@ Please note that this project is not free of bugs and that changing the behaviou
 # Docs
 - [Privacy Policy](https://github.com/uazo/cromite/blob/master/docs/PRIVACY_POLICY.md)
 - [Features](https://github.com/uazo/cromite/blob/master/docs/FEATURES.md)
-- [Faqs](https://github.com/uazo/cromite/blob/master/docs/FAQ.md)
+- [FAQ](https://github.com/uazo/cromite/blob/master/docs/FAQ.md)
 - [How to build](https://github.com/uazo/cromite/blob/master/docs/HOW_TO_BUILD.md)
 - [Patch list](https://github.com/uazo/cromite/blob/master/docs/PATCHES.md)
 
@@ -45,12 +45,12 @@ Cromite is currently built for ARM, ARM64, Android x86, Windows x64 and Linux.
 
 The following files will be present for each release:
 
-#### Cromite apk for android:
+#### Cromite APK for Android:
 - [arm64_ChromePublic.apk](https://github.com/uazo/cromite/releases/latest/download/arm64_ChromePublic.apk)
 - [arm_ChromePublic.apk](https://github.com/uazo/cromite/releases/latest/download/arm_ChromePublic.apk)
 - [x64_ChromePublic.apk](https://github.com/uazo/cromite/releases/latest/download/x64_ChromePublic.apk)
 
-#### Cromite System WebView apk for android:
+#### Cromite System WebView APK for Android:
 - [arm64_SystemWebView.apk](https://github.com/uazo/cromite/releases/latest/download/arm64_SystemWebView.apk)
 - [x64_SystemWebView.apk](https://github.com/uazo/cromite/releases/latest/download/x64_SystemWebView.apk)
 
@@ -73,7 +73,7 @@ The following files will be present for each release:
 
 Additional files are also available: please note that these files are created by an [additional build](https://github.com/uazo/cromite/actions/workflows/build_additional_targets.yaml) separate from the release process, and therefore may not be immediately available.
 
-#### Vanilla Chromium for android (used for tests):
+#### Vanilla Chromium for Android (used for tests):
 - arm64_VanillaChromium.apk
 - arm_VanillaChromium.apk
 - x64_VanillaChromium.apk
@@ -82,9 +82,9 @@ Additional files are also available: please note that these files are created by
 - arm64_SystemWebViewShell.apk
 - x64_SystemWebViewShell.apk
 
-### F-droid
+### F-Droid
 
-Official F-droid repo url:
+Official F-Droid repo URL:
 https://www.cromite.org/fdroid/repo/?fingerprint=49F37E74DEE483DCA2B991334FB5A0200787430D0B5F9A783DD5F13695E9517B
 
 ### Auto-update in Android
@@ -185,7 +185,7 @@ thanks to [austinhuang0131](https://github.com/austinhuang0131) for the svg icon
 
 # Donate
 
-If you want, you can donate to support cromite development through [paypal](https://www.paypal.com/pools/c/9cwNgAQhRL).
+If you want, you can donate to support Cromite development through [paypal](https://www.paypal.com/pools/c/9cwNgAQhRL).
 
 # License
 
