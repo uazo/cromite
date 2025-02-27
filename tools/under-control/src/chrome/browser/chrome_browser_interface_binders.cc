@@ -90,7 +90,7 @@
 #include "components/signin/public/identity_manager/identity_manager.h"
 #include "components/site_engagement/core/mojom/site_engagement_details.mojom.h"
 #include "components/translate/content/common/translate.mojom.h"
-#include "components/user_notes/user_notes_features.h"
+#include "components/webui/chrome_urls/features.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -108,8 +108,8 @@
 #include "third_party/blink/public/mojom/facilitated_payments/payment_link_handler.mojom.h"
 #include "third_party/blink/public/mojom/lcp_critical_path_predictor/lcp_critical_path_predictor.mojom.h"
 #include "third_party/blink/public/mojom/loader/navigation_predictor.mojom.h"
-#include "third_party/blink/public/mojom/payments/payment_credential.mojom.h"
 #include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+#include "third_party/blink/public/mojom/payments/secure_payment_confirmation_service.mojom.h"
 #include "third_party/blink/public/mojom/prerender/prerender.mojom.h"
 #include "third_party/blink/public/public_buildflags.h"
 #include "ui/accessibility/accessibility_features.h"
@@ -126,14 +126,21 @@
 #endif  // BUILDFLAG(FULL_SAFE_BROWSING)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS_ASH)
+    BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/screen_ai/screen_ai_service_router.h"
+#include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
+#include "chrome/browser/ui/web_applications/sub_apps_service_impl.h"
 #include "chrome/browser/ui/webui/connectors_internals/connectors_internals.mojom.h"
 #include "chrome/browser/ui/webui/connectors_internals/connectors_internals_ui.h"
+#include "chrome/browser/ui/webui/discards/discards.mojom.h"
+#include "chrome/browser/ui/webui/discards/discards_ui.h"
+#include "chrome/browser/ui/webui/discards/site_data.mojom.h"
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
 #include "chrome/browser/ui/webui/app_settings/web_app_settings_ui.h"
 #include "chrome/browser/ui/webui/on_device_translation_internals/on_device_translation_internals_ui.h"
+#include "chrome/browser/ui/webui/whats_new/whats_new_ui.h"
 #include "ui/webui/resources/cr_components/app_management/app_management.mojom.h"
 #endif
 
@@ -151,6 +158,7 @@
 #else
 #include "chrome/browser/badging/badge_manager.h"
 #include "chrome/browser/new_tab_page/modules/file_suggestion/drive_suggestion.mojom.h"
+#include "chrome/browser/new_tab_page/modules/file_suggestion/microsoft_files.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/authentication/microsoft_auth.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/calendar/google_calendar.mojom.h"
 #include "chrome/browser/new_tab_page/modules/v2/calendar/outlook_calendar.mojom.h"
@@ -180,6 +188,7 @@
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page.mojom.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
 #include "chrome/browser/ui/webui/new_tab_page_third_party/new_tab_page_third_party_ui.h"
+#include "chrome/browser/ui/webui/ntp_microsoft_auth/ntp_microsoft_auth_untrusted_ui.h"
 #include "chrome/browser/ui/webui/omnibox_popup/omnibox_popup_ui.h"
 #include "chrome/browser/ui/webui/password_manager/password_manager_ui.h"
 #include "chrome/browser/ui/webui/privacy_sandbox/private_state_tokens/private_state_tokens.mojom.h"
@@ -219,32 +228,14 @@
 #include "ui/webui/resources/js/metrics_reporter/metrics_reporter.mojom.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/screen_ai/screen_ai_service_router.h"
-#include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
-#include "chrome/browser/ui/web_applications/sub_apps_service_impl.h"
-#include "chrome/browser/ui/webui/discards/discards.mojom.h"
-#include "chrome/browser/ui/webui/discards/discards_ui.h"
-#include "chrome/browser/ui/webui/discards/site_data.mojom.h"
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
-        // BUILDFLAG(IS_CHROMEOS)
-
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-#include "chrome/browser/ui/webui/whats_new/whats_new_ui.h"
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX)
-
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/webui/app_home/app_home.mojom.h"
 #include "chrome/browser/ui/webui/app_home/app_home_ui.h"
-#endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
-
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/webui/signin/profile_customization_ui.h"
 #include "chrome/browser/ui/webui/signin/profile_picker_ui.h"
-#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ash/constants/ash_features.h"
 #include "ash/public/mojom/hid_preserving_bluetooth_state_controller.mojom.h"
 #include "ash/webui/annotator/mojom/untrusted_annotator.mojom.h"
@@ -337,6 +328,8 @@
 #include "chrome/browser/ui/webui/ash/crostini_upgrader/crostini_upgrader.mojom.h"
 #include "chrome/browser/ui/webui/ash/crostini_upgrader/crostini_upgrader_ui.h"
 #include "chrome/browser/ui/webui/ash/curtain_ui/remote_maintenance_curtain_ui.h"
+#include "chrome/browser/ui/webui/ash/dlp_internals/dlp_internals.mojom.h"
+#include "chrome/browser/ui/webui/ash/dlp_internals/dlp_internals_ui.h"
 #include "chrome/browser/ui/webui/ash/emoji/emoji_picker.mojom.h"
 #include "chrome/browser/ui/webui/ash/emoji/emoji_search_proxy.h"
 #include "chrome/browser/ui/webui/ash/emoji/emoji_ui.h"
@@ -413,17 +406,17 @@
 #include "media/capture/video/chromeos/mojom/camera_app.mojom.h"
 #include "third_party/blink/public/mojom/digital_goods/digital_goods.mojom.h"
 #include "ui/webui/resources/cr_components/app_management/app_management.mojom.h"
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_ANDROID)
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
 #include "chrome/browser/webshare/share_service_impl.h"
 #endif
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
+    BUILDFLAG(IS_ANDROID)
 #include "third_party/blink/public/mojom/webshare/webshare.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
+#if BUILDFLAG(IS_CHROMEOS) && !defined(OFFICIAL_BUILD)
 #include "ash/webui/sample_system_web_app_ui/mojom/sample_system_web_app_ui.mojom.h"
 #include "ash/webui/sample_system_web_app_ui/sample_system_web_app_ui.h"
 #include "ash/webui/sample_system_web_app_ui/sample_system_web_app_untrusted_ui.h"
@@ -452,12 +445,6 @@
 #include "media/mojo/mojom/speech_recognition_service.mojom.h"
 #endif  // BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
-#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
-#include "extensions/common/api/mime_handler.mojom.h"  // nogncheck
-#endif
-
 #if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
 #include "chrome/browser/ui/webui/tab_strip/tab_strip.mojom.h"
 #include "chrome/browser/ui/webui/tab_strip/tab_strip_ui.h"
@@ -473,11 +460,6 @@
 #include "third_party/blink/public/mojom/printing/web_printing.mojom.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS)
-#include "chrome/browser/ui/webui/ash/dlp_internals/dlp_internals.mojom.h"
-#include "chrome/browser/ui/webui/ash/dlp_internals/dlp_internals_ui.h"
-#endif
-
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
 #include "chrome/browser/ui/webui/certificate_manager/certificate_manager_ui.h"
 #include "ui/webui/resources/cr_components/certificate_manager/certificate_manager_v2.mojom.h"
@@ -486,12 +468,14 @@
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 #include "chrome/browser/ui/webui/signin/batch_upload/batch_upload.mojom.h"
 #include "chrome/browser/ui/webui/signin/batch_upload_ui.h"
+#include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation.mojom.h"
+#include "chrome/browser/ui/webui/signin/signout_confirmation/signout_confirmation_ui.h"
 #include "components/signin/public/base/signin_switches.h"
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
 #if BUILDFLAG(ENABLE_GLIC)
 #include "chrome/browser/glic/glic_enabling.h"
-#include "chrome/browser/ui/webui/glic/glic_ui.h"
+#include "chrome/browser/glic/glic_ui.h"
 #endif
 
 namespace chrome::internal {
@@ -621,33 +605,6 @@ void ForwardToJavaFrame(content::RenderFrameHost* render_frame_host,
 }
 #endif
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-void BindMimeHandlerService(
-    content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<extensions::mime_handler::MimeHandlerService>
-        receiver) {
-  auto* guest_view =
-      extensions::MimeHandlerViewGuest::FromRenderFrameHost(frame_host);
-  if (!guest_view) {
-    return;
-  }
-  extensions::MimeHandlerServiceImpl::Create(guest_view->GetStreamWeakPtr(),
-                                             std::move(receiver));
-}
-
-void BindBeforeUnloadControl(
-    content::RenderFrameHost* frame_host,
-    mojo::PendingReceiver<extensions::mime_handler::BeforeUnloadControl>
-        receiver) {
-  auto* guest_view =
-      extensions::MimeHandlerViewGuest::FromRenderFrameHost(frame_host);
-  if (!guest_view) {
-    return;
-  }
-  guest_view->FuseBeforeUnloadControl(std::move(receiver));
-}
-#endif
-
 void BindNetworkHintsHandler(
     content::RenderFrameHost* frame_host,
     mojo::PendingReceiver<network_hints::mojom::NetworkHintsHandler> receiver) {
@@ -667,7 +624,7 @@ void BindSpeechRecognitionContextHandler(
       frame_host->GetProcess()->GetBrowserContext());
 #if BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
   auto* factory = SpeechRecognitionServiceFactory::GetForProfile(profile);
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
+#elif BUILDFLAG(IS_CHROMEOS)
   auto* factory = CrosSpeechRecognitionServiceFactory::GetForProfile(profile);
 #else
 #error "No speech recognition service factory on this platform."
@@ -845,7 +802,7 @@ void PopulateChromeFrameBinders(
   }
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   map->Add<payments::mojom::DigitalGoodsFactory>(base::BindRepeating(
       &apps::DigitalGoodsFactoryImpl::BindDigitalGoodsFactory));
 #endif
@@ -855,13 +812,6 @@ void PopulateChromeFrameBinders(
     map->Add<blink::mojom::ShareService>(
         base::BindRepeating(&ShareServiceImpl::Create));
   }
-#endif
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-  map->Add<extensions::mime_handler::MimeHandlerService>(
-      base::BindRepeating(&BindMimeHandlerService));
-  map->Add<extensions::mime_handler::BeforeUnloadControl>(
-      base::BindRepeating(&BindBeforeUnloadControl));
 #endif
 
   map->Add<network_hints::mojom::NetworkHintsHandler>(
@@ -896,10 +846,8 @@ void PopulateChromeFrameBinders(
   map->Add<screen_ai::mojom::ScreenAIAnnotator>(
       base::BindRepeating(&BindScreenAIAnnotator));
 
-  if (features::IsReadAnythingWithScreen2xEnabled()) {
-    map->Add<screen_ai::mojom::Screen2xMainContentExtractor>(
-        base::BindRepeating(&BindScreen2xMainContentExtractor));
-  }
+  map->Add<screen_ai::mojom::Screen2xMainContentExtractor>(
+      base::BindRepeating(&BindScreen2xMainContentExtractor));
 #endif
 
 #if BUILDFLAG(IS_WIN)
@@ -959,7 +907,7 @@ void PopulateChromeWebUIFrameBinders(
       commerce::mojom::CommerceInternalsHandlerFactory,
       commerce::CommerceInternalsUI>(map);
 
-  if (base::FeatureList::IsEnabled(features::kInternalOnlyUisPref)) {
+  if (base::FeatureList::IsEnabled(chrome_urls::kInternalOnlyUisPref)) {
     RegisterWebUIControllerInterfaceBinder<
         chrome_urls::mojom::PageHandlerFactory, chrome_urls::ChromeUrlsUI>(map);
   }
@@ -969,15 +917,17 @@ void PopulateChromeWebUIFrameBinders(
       DataSharingInternalsUI>(map);
 
 #if BUILDFLAG(ENABLE_GLIC)
-  if (GlicEnabling::IsEnabledForProfile(Profile::FromBrowserContext(
+  if (GlicEnabling::IsProfileEligible(Profile::FromBrowserContext(
           render_frame_host->GetProcess()->GetBrowserContext()))) {
+    // Register the binder for all eligible profiles but the WebUI page will
+    // check whether Glic is policy-enabled and restrict access if needed.
     RegisterWebUIControllerInterfaceBinder<glic::mojom::PageHandlerFactory,
                                            glic::GlicUI>(map);
   }
 #endif
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS_ASH)
+    BUILDFLAG(IS_CHROMEOS)
   RegisterWebUIControllerInterfaceBinder<
       connectors_internals::mojom::PageHandler,
       enterprise_connectors::ConnectorsInternalsUI>(map);
@@ -1022,7 +972,7 @@ void PopulateChromeWebUIFrameBinders(
 #if BUILDFLAG(ENABLE_WEBUI_TAB_STRIP)
       TabStripUI,
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
       ash::OobeUI, ash::personalization_app::PersonalizationAppUI,
       ash::vc_background_ui::VcBackgroundUI, ash::settings::OSSettingsUI,
       ash::DiagnosticsDialogUI, ash::FirmwareUpdateAppUI, ash::ScanningUI,
@@ -1101,10 +1051,10 @@ void PopulateChromeWebUIFrameBinders(
   RegisterWebUIControllerInterfaceBinder<
       theme_color_picker::mojom::ThemeColorPickerHandlerFactory,
       CustomizeChromeUI
-#if !BUILDFLAG(IS_CHROMEOS_ASH)
+#if !BUILDFLAG(IS_CHROMEOS)
       ,
       ProfileCustomizationUI, settings::SettingsUI
-#endif  // !BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // !BUILDFLAG(IS_CHROMEOS)
       >(map);
 
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
@@ -1118,10 +1068,10 @@ void PopulateChromeWebUIFrameBinders(
       settings::SettingsUI, ReadingListUI, NewTabPageUI, CustomizeChromeUI,
       PasswordManagerUI, HistoryUI, lens::LensOverlayUntrustedUI,
       lens::LensSidePanelUntrustedUI
-#if !BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
+#if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
       ,
       ProfilePickerUI
-#endif  //! BUILDFLAG(IS_CHROMEOS_ASH) && !BUILDFLAG(IS_ANDROID)
+#endif  //! BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
       >(map);
 
 #if !defined(OFFICIAL_BUILD)
@@ -1146,23 +1096,30 @@ void PopulateChromeWebUIFrameBinders(
         ntp::calendar::mojom::GoogleCalendarPageHandler, NewTabPageUI>(map);
   }
 
-  if (base::FeatureList::IsEnabled(ntp_features::kNtpOutlookCalendarModule)) {
+  if (IsOutlookCalendarModuleEnabledForProfile(Profile::FromBrowserContext(
+          render_frame_host->GetBrowserContext()))) {
     RegisterWebUIControllerInterfaceBinder<
         ntp::calendar::mojom::OutlookCalendarPageHandler, NewTabPageUI>(map);
   }
 
-  if (base::FeatureList::IsEnabled(
-          ntp_features::kNtpMicrosoftAuthenticationModule)) {
+  if (IsMicrosoftModuleEnabledForProfile(Profile::FromBrowserContext(
+          render_frame_host->GetBrowserContext()))) {
     RegisterWebUIControllerInterfaceBinder<
         ntp::authentication::mojom::MicrosoftAuthPageHandler, NewTabPageUI>(
         map);
   }
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+  if (IsMicrosoftFilesModuleEnabledForProfile(Profile::FromBrowserContext(
+          render_frame_host->GetBrowserContext()))) {
+    RegisterWebUIControllerInterfaceBinder<
+        file_suggestion::mojom::MicrosoftFilesPageHandler, NewTabPageUI>(map);
+  }
+
+#if BUILDFLAG(IS_CHROMEOS)
   RegisterWebUIControllerInterfaceBinder<
       ash::mojom::HidPreservingBluetoothStateController,
       ash::settings::OSSettingsUI>(map);
-#endif  // defined(IS_CHROMEOS_ASH)
+#endif  // defined(IS_CHROMEOS)
 
   RegisterWebUIControllerInterfaceBinder<
       reading_list::mojom::PageHandlerFactory, ReadingListUI>(map);
@@ -1235,7 +1192,7 @@ void PopulateChromeWebUIFrameBinders(
                                          TabStripUI>(map);
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   RegisterWebUIControllerInterfaceBinder<
       ash::file_manager::mojom::PageHandlerFactory,
       ash::file_manager::FileManagerUI>(map);
@@ -1606,7 +1563,7 @@ void PopulateChromeWebUIFrameBinders(
     RegisterWebUIControllerInterfaceBinder<ash::growth::mojom::PageHandler,
                                            ash::GrowthInternalsUI>(map);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
@@ -1630,7 +1587,7 @@ void PopulateChromeWebUIFrameBinders(
                                          ResetPasswordUI>(map);
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   // Because Nearby Share is only currently supported for the primary profile,
   // we should only register binders in that scenario. However, we don't want to
   // plumb the profile through to this function, so we 1) ensure that
@@ -1649,7 +1606,7 @@ void PopulateChromeWebUIFrameBinders(
       map);
   RegisterWebUIControllerInterfaceBinder<nearby_share::mojom::ReceiveManager,
                                          ash::settings::OSSettingsUI>(map);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
 #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
   RegisterWebUIControllerInterfaceBinder<::app_home::mojom::PageHandlerFactory,
@@ -1698,27 +1655,27 @@ void PopulateChromeWebUIFrameBinders(
     RegisterWebUIControllerInterfaceBinder<
         batch_upload::mojom::PageHandlerFactory, BatchUploadUI>(map);
   }
+
+  RegisterWebUIControllerInterfaceBinder<
+      signout_confirmation::mojom::PageHandlerFactory, SignoutConfirmationUI>(
+      map);
 #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   if (ash::features::IsFocusModeEnabled()) {
     RegisterWebUIControllerInterfaceBinder<
         ash::focus_mode::mojom::TrackProvider, ash::FocusModeUI>(map);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   RegisterWebUIControllerInterfaceBinder<
       ash::sanitize_ui::mojom::SettingsResetter, ash::SanitizeDialogUI>(map);
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   if (ash::features::IsGraduationEnabled()) {
     RegisterWebUIControllerInterfaceBinder<
         ash::graduation_ui::mojom::GraduationUiHandler,
         ash::graduation::GraduationUI>(map);
   }
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 void PopulateChromeWebUIFrameInterfaceBrokers(
@@ -1727,23 +1684,21 @@ void PopulateChromeWebUIFrameInterfaceBrokers(
 
   // --- Section 1: chrome:// WebUIs:
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
+#if BUILDFLAG(IS_CHROMEOS) && !defined(OFFICIAL_BUILD)
   registry.ForWebUI<ash::SampleSystemWebAppUI>()
       .Add<ash::mojom::sample_swa::PageHandlerFactory>()
       .Add<color_change_listener::mojom::PageHandler>();
 
   registry.ForWebUI<ash::StatusAreaInternalsUI>()
       .Add<ash::mojom::status_area_internals::PageHandler>();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
+#endif  // BUILDFLAG(IS_CHROMEOS) && !defined(OFFICIAL_BUILD)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   registry.ForWebUI<ash::RecorderAppUI>()
       .Add<ash::recorder_app::mojom::PageHandler>()
       .Add<color_change_listener::mojom::PageHandler>()
       .Add<crosapi::mojom::StructuredMetricsService>();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
   registry.ForWebUI<ash::CameraAppUI>()
       .Add<color_change_listener::mojom::PageHandler>()
       .Add<cros::mojom::CameraAppDeviceProvider>()
@@ -1762,10 +1717,10 @@ void PopulateChromeWebUIFrameInterfaceBrokers(
   registry.ForWebUI<FeedbackUI>()
       .Add<color_change_listener::mojom::PageHandler>();
   registry.ForWebUI<ash::MallUI>().Add<ash::mall::mojom::PageHandler>();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // --- Section 2: chrome-untrusted:// WebUIs:
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
   registry.ForWebUI<ash::boca::BocaUI>()
       .Add<ash::boca::mojom::BocaPageHandlerFactory>()
       .Add<color_change_listener::mojom::PageHandler>();
@@ -1800,12 +1755,12 @@ void PopulateChromeWebUIFrameInterfaceBrokers(
   registry.ForWebUI<ash::ScannerFeedbackUntrustedUI>()
       .Add<color_change_listener::mojom::PageHandler>()
       .Add<ash::mojom::scanner_feedback_ui::PageHandler>();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
-#if BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
+#if BUILDFLAG(IS_CHROMEOS) && !defined(OFFICIAL_BUILD)
   registry.ForWebUI<ash::SampleSystemWebAppUntrustedUI>()
       .Add<ash::mojom::sample_swa::UntrustedPageInterfacesFactory>();
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH) && !defined(OFFICIAL_BUILD)
+#endif  // BUILDFLAG(IS_CHROMEOS) && !defined(OFFICIAL_BUILD)
 
 #if BUILDFLAG(ENABLE_COMPOSE)
   registry.ForWebUI<ComposeUntrustedUI>()
@@ -1838,6 +1793,10 @@ void PopulateChromeWebUIFrameInterfaceBrokers(
         .Add<data_sharing::mojom::PageHandlerFactory>()
         .Add<color_change_listener::mojom::PageHandler>();
   }
+
+  registry.ForWebUI<NtpMicrosoftAuthUntrustedUI>()
+      .Add<new_tab_page::mojom::
+               MicrosoftAuthUntrustedDocumentInterfacesFactory>();
 
 #endif  // !BUILDFLAG(IS_ANDROID)
 }

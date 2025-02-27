@@ -27,13 +27,12 @@
 #include "content/browser/ai/echo_ai_manager_impl.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/public/browser/anchor_element_preconnect_delegate.h"
-#include "content/public/browser/authenticator_request_client_delegate.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_main_parts.h"
+#include "content/public/browser/browsing_data_remover.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/devtools_manager_delegate.h"
 #include "content/public/browser/digital_identity_provider.h"
-#include "content/public/browser/dips_delegate.h"
 #include "content/public/browser/identity_request_dialog_controller.h"
 #include "content/public/browser/legacy_tech_cookie_issue_details.h"
 #include "content/public/browser/login_delegate.h"
@@ -87,7 +86,7 @@
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_cloud_identifier.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom.h"
 #include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom.h"
-#include "third_party/blink/public/mojom/payments/payment_credential.mojom.h"
+#include "third_party/blink/public/mojom/payments/secure_payment_confirmation_service.mojom.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "url/gurl.h"
@@ -96,6 +95,8 @@
 #if BUILDFLAG(IS_ANDROID)
 #include "content/public/browser/tts_environment_android.h"
 #else
+#include "content/public/browser/authenticator_request_client_delegate.h"
+#include "content/public/browser/web_authentication_delegate.h"
 #include "third_party/blink/public/mojom/installedapp/related_application.mojom.h"
 #endif
 
@@ -243,6 +244,10 @@ void ContentBrowserClient::GetAdditionalViewSourceSchemes(
   GetAdditionalWebUISchemes(additional_schemes);
 }
 
+bool ContentBrowserClient::IsInternalScheme(const GURL& url) {
+  return false;
+}
+
 network::mojom::IPAddressSpace
 ContentBrowserClient::DetermineAddressSpaceFromURL(const GURL& url) {
   return network::mojom::IPAddressSpace::kUnknown;
@@ -367,6 +372,10 @@ bool ContentBrowserClient::ShouldDisableSiteIsolation(
   return false;
 }
 
+bool ContentBrowserClient::ShouldDisableOriginIsolation() {
+  return false;
+}
+
 std::vector<std::string>
 ContentBrowserClient::GetAdditionalSiteIsolationModes() {
   return std::vector<std::string>();
@@ -486,6 +495,11 @@ bool ContentBrowserClient::AllowCompressionDictionaryTransport(
   return true;
 }
 
+bool ContentBrowserClient::AllowServiceWorkerToControlSrcdocIframe(
+    BrowserContext* context) {
+  return true;
+}
+
 bool ContentBrowserClient::AllowSharedWorkerBlobURLFix(
     BrowserContext* context) {
   return true;
@@ -493,6 +507,7 @@ bool ContentBrowserClient::AllowSharedWorkerBlobURLFix(
 
 bool ContentBrowserClient::OverrideWebPreferencesAfterNavigation(
     WebContents* web_contents,
+    SiteInstance& main_frame_site,
     blink::web_pref::WebPreferences* prefs) {
   return false;
 }
@@ -1217,9 +1232,10 @@ void ContentBrowserClient::CreateManagedConfigurationService(
     mojo::PendingReceiver<blink::mojom::ManagedConfigurationService> receiver) {
 }
 
-void ContentBrowserClient::CreatePaymentCredential(
+void ContentBrowserClient::CreateSecurePaymentConfirmationService(
     RenderFrameHost* render_frame_host,
-    mojo::PendingReceiver<payments::mojom::PaymentCredential> receiver) {}
+    mojo::PendingReceiver<payments::mojom::SecurePaymentConfirmationService>
+        receiver) {}
 
 #if !BUILDFLAG(IS_ANDROID)
 SerialDelegate* ContentBrowserClient::GetSerialDelegate() {
@@ -1552,6 +1568,11 @@ bool ContentBrowserClient::AreV8OptimizationsDisabledForSite(
   return false;
 }
 
+bool ContentBrowserClient::DisallowV8FeatureFlagOverridesForSite(
+    const GURL& site_url) {
+  return false;
+}
+
 ukm::UkmService* ContentBrowserClient::GetUkmService() {
   return nullptr;
 }
@@ -1568,7 +1589,7 @@ void ContentBrowserClient::OnKeepaliveRequestFinished() {}
 #if BUILDFLAG(IS_MAC)
 bool ContentBrowserClient::SetupEmbedderSandboxParameters(
     sandbox::mojom::Sandbox sandbox_type,
-    sandbox::SandboxCompiler* compiler) {
+    sandbox::SandboxSerializer* serializer) {
   return false;
 }
 #endif  // BUILDFLAG(IS_MAC)
@@ -1745,23 +1766,28 @@ bool ContentBrowserClient::
   return true;
 }
 
+bool ContentBrowserClient::IsBlobUrlPartitioningEnabled(
+    content::BrowserContext* browser_context) {
+  return true;
+}
+
 bool ContentBrowserClient::UseOutermostMainFrameOrEmbedderForSubCaptureTargets()
     const {
   return false;
 }
 
 #if BUILDFLAG(ENABLE_VIDEO_EFFECTS)
-void ContentBrowserClient::BindVideoEffectsManager(
+void ContentBrowserClient::BindReadonlyVideoEffectsManager(
     const std::string& device_id,
     BrowserContext* browser_context,
-    mojo::PendingReceiver<media::mojom::VideoEffectsManager>
-        video_effects_manager) {}
+    mojo::PendingReceiver<media::mojom::ReadonlyVideoEffectsManager>
+        readonly_video_effects_manager) {}
 
 void ContentBrowserClient::BindVideoEffectsProcessor(
     const std::string& device_id,
     BrowserContext* browser_context,
     mojo::PendingReceiver<video_effects::mojom::VideoEffectsProcessor>
-        video_effects_manager) {}
+        video_effects_processor) {}
 #endif  // BUILDFLAG(ENABLE_VIDEO_EFFECTS)
 
 void ContentBrowserClient::PreferenceRankAudioDeviceInfos(
@@ -1786,12 +1812,17 @@ void ContentBrowserClient::NotifyMultiCaptureStateChanged(
     const std::string& label,
     MultiCaptureChanged state) {}
 
-std::unique_ptr<DipsDelegate> ContentBrowserClient::CreateDipsDelegate() {
-  return nullptr;
-}
-
 bool ContentBrowserClient::ShouldEnableDips(BrowserContext* browser_context) {
   return true;
+}
+
+uint64_t ContentBrowserClient::GetDipsRemoveMask() {
+  return kDefaultDipsRemoveMask;
+}
+
+bool ContentBrowserClient::ShouldDipsDeleteInteractionRecords(
+    uint64_t remove_mask) {
+  return remove_mask & BrowsingDataRemover::DATA_TYPE_COOKIES;
 }
 
 bool ContentBrowserClient::ShouldSuppressAXLoadComplete(RenderFrameHost* rfh) {
@@ -1892,6 +1923,12 @@ std::unique_ptr<WebUIController> ContentBrowserClient::OverrideForInternalWebUI(
     WebUI* web_ui,
     const GURL& url) {
   return nullptr;
+}
+
+std::optional<network::CrossOriginEmbedderPolicy>
+ContentBrowserClient::MaybeOverrideLocalURLCrossOriginEmbedderPolicy(
+    content::NavigationHandle* navigation_handle) {
+  return std::nullopt;
 }
 
 }  // namespace content
