@@ -9,12 +9,12 @@ Original License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  .../Partition-blobs-by-top-frame-URL.inc      |  1 +
- storage/browser/blob/blob_url_store_impl.cc   | 36 ++++++++++++++++++-
+ storage/browser/blob/blob_url_store_impl.cc   | 35 +++++++++++++++++++
  storage/browser/blob/blob_url_store_impl.h    | 11 ++++++
  storage/browser/blob/features.cc              |  1 +
  .../public/mojom/blob/blob_url_store.mojom    | 12 +++++--
  .../core/fileapi/public_url_manager.cc        | 18 ++++++++++
- 6 files changed, 75 insertions(+), 4 deletions(-)
+ 6 files changed, 75 insertions(+), 3 deletions(-)
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Partition-blobs-by-top-frame-URL.inc
 
 diff --git a/cromite_flags/third_party/blink/common/features_cc/Partition-blobs-by-top-frame-URL.inc b/cromite_flags/third_party/blink/common/features_cc/Partition-blobs-by-top-frame-URL.inc
@@ -26,7 +26,7 @@ new file mode 100644
 diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/blob_url_store_impl.cc
 --- a/storage/browser/blob/blob_url_store_impl.cc
 +++ b/storage/browser/blob/blob_url_store_impl.cc
-@@ -87,6 +87,20 @@ BlobURLStoreImpl::~BlobURLStoreImpl() {
+@@ -89,6 +89,20 @@ BlobURLStoreImpl::~BlobURLStoreImpl() {
    }
  }
  
@@ -47,7 +47,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
  void BlobURLStoreImpl::Register(
      mojo::PendingRemote<blink::mojom::Blob> blob,
      const GURL& url,
-@@ -121,6 +135,8 @@ void BlobURLStoreImpl::Revoke(const GURL& url) {
+@@ -123,12 +137,18 @@ void BlobURLStoreImpl::Revoke(const GURL& url) {
  void BlobURLStoreImpl::ResolveAsURLLoaderFactory(
      const GURL& url,
      mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
@@ -56,7 +56,17 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
      ResolveAsURLLoaderFactoryCallback callback) {
    if (!registry_) {
      BlobURLLoaderFactory::Create(mojo::NullRemote(), url, std::move(receiver));
-@@ -139,6 +155,12 @@ void BlobURLStoreImpl::ResolveAsURLLoaderFactory(
+     std::move(callback).Run(std::nullopt, std::nullopt);
+     return;
+   }
++  if (!IsSamePartition(url, unsafe_agent_cluster_id, unsafe_top_level_site)) {
++    std::move(callback).Run(std::nullopt, std::nullopt);
++    return;
++  }
+   if (!registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url),
+                               storage_key_)) {
+     partitioned_fetch_failure_closure_.Run();
+@@ -142,6 +162,12 @@ void BlobURLStoreImpl::ResolveAsURLLoaderFactory(
      }
    }
  
@@ -69,10 +79,10 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
    BlobURLLoaderFactory::Create(registry_->GetBlobFromUrl(url), url,
                                 std::move(receiver));
    // When a fragment URL is present, registry_->GetUnsafeAgentClusterID(url) and
-@@ -152,11 +174,17 @@ void BlobURLStoreImpl::ResolveAsURLLoaderFactory(
- void BlobURLStoreImpl::ResolveForNavigation(
+@@ -156,12 +182,18 @@ void BlobURLStoreImpl::ResolveForNavigation(
      const GURL& url,
      mojo::PendingReceiver<blink::mojom::BlobURLToken> token,
+     bool is_top_level_navigation,
 +    const base::UnguessableToken& unsafe_agent_cluster_id,
 +    const std::optional<net::SchemefulSite>& unsafe_top_level_site,
      ResolveForNavigationCallback callback) {
@@ -80,14 +90,15 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
      std::move(callback).Run(std::nullopt);
      return;
    }
+ 
 +  if (!IsSamePartition(url, unsafe_agent_cluster_id, unsafe_top_level_site)) {
 +    std::move(callback).Run(std::nullopt);
 +    return;
 +  }
-   mojo::PendingRemote<blink::mojom::Blob> blob = registry_->GetBlobFromUrl(url);
-   if (!blob) {
-     std::move(callback).Run(std::nullopt);
-@@ -169,11 +197,17 @@ void BlobURLStoreImpl::ResolveForNavigation(
+   if (!is_top_level_navigation &&
+       !registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url),
+                               storage_key_)) {
+@@ -187,12 +219,15 @@ void BlobURLStoreImpl::ResolveForNavigation(
  void BlobURLStoreImpl::ResolveForWorkerScriptFetch(
      const GURL& url,
      mojo::PendingReceiver<blink::mojom::BlobURLToken> token,
@@ -98,26 +109,15 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
      std::move(callback).Run(std::nullopt);
      return;
    }
-+  if (!IsSamePartition(url, unsafe_agent_cluster_id, unsafe_top_level_site)) {
-+    std::move(callback).Run(std::nullopt);
-+    return;
-+  }
-   if (!registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url),
-                               storage_key_)) {
-     partitioned_fetch_failure_closure_.Run();
-@@ -183,7 +217,7 @@ void BlobURLStoreImpl::ResolveForWorkerScriptFetch(
-       return;
-     }
-   }
--  ResolveForNavigation(url, std::move(token), std::move(callback));
-+  ResolveForNavigation(url, std::move(token), unsafe_agent_cluster_id, unsafe_top_level_site, std::move(callback));
+   ResolveForNavigation(url, std::move(token), /*is_top_level_navigation=*/false,
++                       unsafe_agent_cluster_id, unsafe_top_level_site,
+                        std::move(callback));
  }
  
- bool BlobURLStoreImpl::BlobUrlIsValid(const GURL& url,
 diff --git a/storage/browser/blob/blob_url_store_impl.h b/storage/browser/blob/blob_url_store_impl.h
 --- a/storage/browser/blob/blob_url_store_impl.h
 +++ b/storage/browser/blob/blob_url_store_impl.h
-@@ -53,14 +53,20 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
+@@ -54,15 +54,21 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
    void ResolveAsURLLoaderFactory(
        const GURL& url,
        mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
@@ -127,6 +127,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.h b/storage/browser/blob/b
    void ResolveForNavigation(
        const GURL& url,
        mojo::PendingReceiver<blink::mojom::BlobURLToken> token,
+       bool is_top_level_navigation,
 +      const base::UnguessableToken& unsafe_agent_cluster_id,
 +      const std::optional<net::SchemefulSite>& unsafe_top_level_site,
        ResolveForNavigationCallback callback) override;
@@ -138,7 +139,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.h b/storage/browser/blob/b
        ResolveForNavigationCallback callback) override;
  
   private:
-@@ -70,6 +76,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
+@@ -72,6 +78,11 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
    // `Revoke()`.
    bool BlobUrlIsValid(const GURL& url, const char* method) const;
  
@@ -175,18 +176,18 @@ diff --git a/third_party/blink/public/mojom/blob/blob_url_store.mojom b/third_pa
      // TODO(https://crbug.com/1224926): Remove these once experiment is over.
      mojo_base.mojom.UnguessableToken? unsafe_agent_cluster_id,
      network.mojom.SchemefulSite? unsafe_top_level_site);
-@@ -47,7 +49,9 @@ interface BlobURLStore {
-   // refer to, even after the URL is revoked.
+@@ -48,7 +50,9 @@ interface BlobURLStore {
    // As long as the token is alive, the resolved blob will also be kept alive.
    ResolveForNavigation(url.mojom.Url url,
--                       pending_receiver<BlobURLToken> token) => (
-+                       pending_receiver<BlobURLToken> token,
+                        pending_receiver<BlobURLToken> token,
+-                       bool is_top_level_navigation) => (
++                       bool is_top_level_navigation,
 +                       mojo_base.mojom.UnguessableToken unsafe_agent_cluster_id,
 +                       network.mojom.SchemefulSite? unsafe_top_level_site) => (
      // TODO(https://crbug.com/1224926): Remove this once experiment is over.
      mojo_base.mojom.UnguessableToken? unsafe_agent_cluster_id);
  
-@@ -58,7 +62,9 @@ interface BlobURLStore {
+@@ -59,7 +63,9 @@ interface BlobURLStore {
    // currently intended for use when fetching a dedicated / shared worker
    // script.
    ResolveForWorkerScriptFetch(url.mojom.Url url,
@@ -230,15 +231,15 @@ diff --git a/third_party/blink/renderer/core/fileapi/public_url_manager.cc b/thi
        WTF::BindOnce(metrics_callback, WrapPersistent(GetExecutionContext())));
  }
  
-@@ -292,6 +308,7 @@ void PublicURLManager::Resolve(
+@@ -293,6 +309,7 @@ void PublicURLManager::ResolveForNavigation(
  
    GetBlobURLStore().ResolveForNavigation(
-       url, std::move(token_receiver),
+       url, std::move(token_receiver), is_top_level_navigation,
 +      GetExecutionContext()->GetAgentClusterID(), GetInsecureTopLevelSite(GetExecutionContext()),
        WTF::BindOnce(metrics_callback, WrapPersistent(GetExecutionContext())));
  }
  
-@@ -318,6 +335,7 @@ void PublicURLManager::ResolveForWorkerScriptFetch(
+@@ -319,6 +336,7 @@ void PublicURLManager::ResolveForWorkerScriptFetch(
  
    GetBlobURLStore().ResolveForWorkerScriptFetch(
        url, std::move(token_receiver),

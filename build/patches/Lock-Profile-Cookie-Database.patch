@@ -4,26 +4,33 @@ Subject: Lock Profile Cookie Database
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- chrome/browser/net/profile_network_context_service.cc      | 3 ++-
- .../browser_features_cc/Lock-Profile-Cookie-Database.inc   | 7 +++++++
- .../browser_features_h/Lock-Profile-Cookie-Database.inc    | 5 +++++
- 3 files changed, 14 insertions(+), 1 deletion(-)
+ chrome/browser/net/profile_network_context_service.cc     | 8 ++++++++
+ .../browser_features_cc/Lock-Profile-Cookie-Database.inc  | 7 +++++++
+ .../browser_features_h/Lock-Profile-Cookie-Database.inc   | 5 +++++
+ services/network/network_context.cc                       | 2 +-
+ services/network/public/mojom/network_context.mojom       | 8 ++++++++
+ 5 files changed, 29 insertions(+), 1 deletion(-)
  create mode 100644 cromite_flags/chrome/browser/browser_features_cc/Lock-Profile-Cookie-Database.inc
  create mode 100644 cromite_flags/chrome/browser/browser_features_h/Lock-Profile-Cookie-Database.inc
 
 diff --git a/chrome/browser/net/profile_network_context_service.cc b/chrome/browser/net/profile_network_context_service.cc
 --- a/chrome/browser/net/profile_network_context_service.cc
 +++ b/chrome/browser/net/profile_network_context_service.cc
-@@ -1388,7 +1388,8 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
-     // access by sqlite3 implementation in the network service.
-     //
-     // TODO(crbug.com/377642763): See if we can remove this flag.
--    network_context_params->enable_locking_cookie_database = true;
+@@ -1361,6 +1361,14 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
+     network_context_params->file_paths->cookie_database_name =
+         base::FilePath(chrome::kCookieFilename);
+ 
++#if BUILDFLAG(IS_WIN)
++    // The cookie database used by this profile will be locked for exclusive
++    // access by sqlite3 implementation in the network service.
++    //
 +    network_context_params->enable_locking_cookie_database =
 +        base::FeatureList::IsEnabled(features::kLockProfileCookieDatabase);
- #endif  // BUILDFLAG(IS_WIN)
- 
++#endif  // BUILDFLAG(IS_WIN)
++
      g_browser_process->system_network_context_manager()
+         ->AddCookieEncryptionManagerToNetworkContextParams(
+             network_context_params);
 diff --git a/cromite_flags/chrome/browser/browser_features_cc/Lock-Profile-Cookie-Database.inc b/cromite_flags/chrome/browser/browser_features_cc/Lock-Profile-Cookie-Database.inc
 new file mode 100644
 --- /dev/null
@@ -46,4 +53,34 @@ new file mode 100644
 +BASE_DECLARE_FEATURE(kLockProfileCookieDatabase);
 +
 +#endif
+diff --git a/services/network/network_context.cc b/services/network/network_context.cc
+--- a/services/network/network_context.cc
++++ b/services/network/network_context.cc
+@@ -3070,7 +3070,7 @@ NetworkContext::MakeSessionCleanupCookieStore() const {
+ 
+ #if BUILDFLAG(IS_WIN)
+   const bool enable_exclusive_access =
+-      network_service()->exclusive_cookie_database_locking();
++      params_->enable_locking_cookie_database.value_or(true);
+ #else
+   const bool enable_exclusive_access = false;
+ #endif  // BUILDFLAG(IS_WIN)
+diff --git a/services/network/public/mojom/network_context.mojom b/services/network/public/mojom/network_context.mojom
+--- a/services/network/public/mojom/network_context.mojom
++++ b/services/network/public/mojom/network_context.mojom
+@@ -352,6 +352,14 @@ struct NetworkContextParams {
+   // If true, cookies will be stored encrypted.
+   bool enable_encrypted_cookies = true;
+ 
++  // On Windows, whether or not the cookie database should be opened with
++  // the sqlite3 flag `exclusive=true` which asks the sqlite VFS to open them
++  // without file sharing enabled. This has the consequence that other processes
++  // should not be able to open the cookie database file. If left unspecified
++  // then a feature-determined default value will be used.
++  [EnableIf=is_win]
++  bool? enable_locking_cookie_database;
++
+   // If the cookie file is given, this controls whether previously written
+   // session cookies are restored. Otherwise it should be false.
+   bool restore_old_session_cookies = false;
 --

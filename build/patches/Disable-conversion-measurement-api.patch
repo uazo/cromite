@@ -26,8 +26,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../origin_trials/features.cc                 |   1 +
  .../render_view_context_menu_base.cc          |   3 -
  .../aggregatable_report_sender.cc             |  15 +-
- .../attribution_data_host_manager_impl.cc     |   2 +
- .../attribution_reporting/attribution_host.cc |   1 +
+ .../attribution_data_host_manager_impl.cc     |   8 +-
+ .../attribution_reporting/attribution_host.cc |   3 +-
+ .../attribution_manager_impl.cc               |   4 -
  .../attribution_os_level_manager.cc           |   3 +-
  .../attribution_report_network_sender.cc      |   9 +
  .../attribution_storage_sql.cc                |   8 +-
@@ -38,21 +39,22 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../public/browser/content_browser_client.cc  |   7 +-
  .../public/browser/navigation_controller.cc   |   1 -
  .../Disable-conversion-measurement-api.inc    |   1 +
- .../Disable-conversion-measurement-api.inc    |   8 +
+ .../Disable-conversion-measurement-api.inc    |  10 +
  .../attribution/request_headers_internal.cc   |   1 +
- services/network/network_context.cc           |   2 +
+ services/network/network_context.cc           |  20 -
  .../network/public/cpp/attribution_utils.cc   |   2 +
+ .../core/frame/attribution_src_loader.cc      |   2 -
  third_party/blink/renderer/core/page/page.cc  |   2 +-
- .../platform/runtime_enabled_features.json5   |  14 +-
+ .../platform/runtime_enabled_features.json5   |  20 +-
  ui/events/android/motion_event_android.cc     |   8 +-
- 34 files changed, 96 insertions(+), 395 deletions(-)
+ 36 files changed, 101 insertions(+), 430 deletions(-)
  create mode 100644 cromite_flags/services/network/public/cpp/features_cc/Disable-conversion-measurement-api.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc
 
 diff --git a/android_webview/browser/aw_content_browser_client.cc b/android_webview/browser/aw_content_browser_client.cc
 --- a/android_webview/browser/aw_content_browser_client.cc
 +++ b/android_webview/browser/aw_content_browser_client.cc
-@@ -1298,6 +1298,7 @@ network::mojom::AttributionSupport
+@@ -1302,6 +1302,7 @@ network::mojom::AttributionSupport
  AwContentBrowserClient::GetAttributionSupport(
      AttributionReportingOsApiState state,
      bool client_os_disabled) {
@@ -60,7 +62,7 @@ diff --git a/android_webview/browser/aw_content_browser_client.cc b/android_webv
    // WebView only supports OS-level attribution and not web-attribution.
    switch (state) {
      case AttributionReportingOsApiState::kDisabled:
-@@ -1316,6 +1317,8 @@ bool AwContentBrowserClient::IsAttributionReportingOperationAllowed(
+@@ -1320,6 +1321,8 @@ bool AwContentBrowserClient::IsAttributionReportingOperationAllowed(
      const url::Origin* destination_origin,
      const url::Origin* reporting_origin,
      bool* can_bypass) {
@@ -112,7 +114,7 @@ diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/Andro
      <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>
      <uses-permission-sdk-23 android:name="android.permission.BLUETOOTH_CONNECT"/>
      <!--
-@@ -1135,9 +1134,6 @@ by a child template that "extends" this file.
+@@ -1149,9 +1148,6 @@ by a child template that "extends" this file.
              android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize" >
          </activity>
  
@@ -125,7 +127,7 @@ diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/Andro
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ChromeSiteSettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ChromeSiteSettingsDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ChromeSiteSettingsDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/site_settings/ChromeSiteSettingsDelegate.java
-@@ -152,6 +152,8 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
+@@ -151,6 +151,8 @@ public class ChromeSiteSettingsDelegate implements SiteSettingsDelegate {
                  // not great to dynamically remove the preference in this way.
              case SiteSettingsCategory.Type.ADS:
                  return SiteSettingsCategory.adsCategoryEnabled();
@@ -164,7 +166,7 @@ diff --git a/chrome/browser/resources/settings/privacy_page/privacy_page.html b/
 diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
 --- a/chrome/browser/resources/settings/route.ts
 +++ b/chrome/browser/resources/settings/route.ts
-@@ -92,7 +92,7 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
+@@ -94,7 +94,7 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
          r.SITE_SETTINGS.createChild('smartCardReaders');
    }
    // </if>
@@ -199,8 +201,8 @@ diff --git a/components/attribution_reporting/aggregatable_trigger_config.cc b/c
 diff --git a/components/attribution_reporting/features.cc b/components/attribution_reporting/features.cc
 --- a/components/attribution_reporting/features.cc
 +++ b/components/attribution_reporting/features.cc
-@@ -17,4 +17,5 @@ BASE_FEATURE(kAttributionAggregatableNamedBudgets,
-              "AttributionAggregatableNamedBudgets",
+@@ -13,4 +13,5 @@ BASE_FEATURE(kConversionMeasurement,
+              "ConversionMeasurement",
               base::FEATURE_ENABLED_BY_DEFAULT);
  
 +SET_CROMITE_FEATURE_DISABLED(kConversionMeasurement);
@@ -273,7 +275,21 @@ diff --git a/content/browser/aggregation_service/aggregatable_report_sender.cc b
 diff --git a/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc b/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc
 --- a/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc
 +++ b/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc
-@@ -1151,6 +1151,8 @@ void AttributionDataHostManagerImpl::ParseHeader(
+@@ -758,11 +758,9 @@ class AttributionDataHostManagerImpl::PendingRegistrationData {
+         headers->GetNormalizedHeader(
+             attribution_reporting::kAttributionReportingRegisterTriggerHeader);
+ 
+-    std::optional<std::string> os_source_header = headers->GetNormalizedHeader(
+-        attribution_reporting::kAttributionReportingRegisterOsSourceHeader);
++    std::optional<std::string> os_source_header;
+ 
+-    std::optional<std::string> os_trigger_header = headers->GetNormalizedHeader(
+-        attribution_reporting::kAttributionReportingRegisterOsTriggerHeader);
++    std::optional<std::string> os_trigger_header;
+ 
+     const bool has_source =
+         web_source_header.has_value() || os_source_header.has_value();
+@@ -1121,6 +1119,8 @@ void AttributionDataHostManagerImpl::ParseHeader(
      Registrations& registrations,
      HeaderPendingDecode pending_decode,
      Registrar registrar) {
@@ -285,7 +301,16 @@ diff --git a/content/browser/attribution_reporting/attribution_data_host_manager
 diff --git a/content/browser/attribution_reporting/attribution_host.cc b/content/browser/attribution_reporting/attribution_host.cc
 --- a/content/browser/attribution_reporting/attribution_host.cc
 +++ b/content/browser/attribution_reporting/attribution_host.cc
-@@ -315,6 +315,7 @@ void AttributionHost::NotifyNavigationRegistrationData(
+@@ -119,8 +119,6 @@ AttributionHost::AttributionHost(WebContents* web_contents)
+       attribution_reporting::features::kConversionMeasurement));
+ 
+ #if BUILDFLAG(IS_ANDROID)
+-  input_event_tracker_android_ =
+-      std::make_unique<AttributionInputEventTrackerAndroid>(web_contents);
+ #endif
+ }
+ 
+@@ -318,6 +316,7 @@ void AttributionHost::NotifyNavigationRegistrationData(
      return;
    }
  
@@ -293,6 +318,21 @@ diff --git a/content/browser/attribution_reporting/attribution_host.cc b/content
    auto* attribution_manager =
        AttributionManager::FromWebContents(web_contents());
    DCHECK(attribution_manager);
+diff --git a/content/browser/attribution_reporting/attribution_manager_impl.cc b/content/browser/attribution_reporting/attribution_manager_impl.cc
+--- a/content/browser/attribution_reporting/attribution_manager_impl.cc
++++ b/content/browser/attribution_reporting/attribution_manager_impl.cc
+@@ -573,11 +573,7 @@ bool IsOperationAllowed(
+ }
+ 
+ std::unique_ptr<AttributionOsLevelManager> CreateOsLevelManager() {
+-#if BUILDFLAG(IS_ANDROID)
+-  return std::make_unique<AttributionOsLevelManagerAndroid>();
+-#else
+   return std::make_unique<NoOpAttributionOsLevelManager>();
+-#endif
+ }
+ 
+ // Returns new report time if any.
 diff --git a/content/browser/attribution_reporting/attribution_os_level_manager.cc b/content/browser/attribution_reporting/attribution_os_level_manager.cc
 --- a/content/browser/attribution_reporting/attribution_os_level_manager.cc
 +++ b/content/browser/attribution_reporting/attribution_os_level_manager.cc
@@ -361,13 +401,13 @@ diff --git a/content/browser/attribution_reporting/attribution_storage_sql.cc b/
 +    : path_to_database_(user_data_directory.empty() || g_run_in_memory
 +                             ? base::FilePath()
 +                             : DatabasePath(user_data_directory)),
-       db_(sql::DatabaseOptions{.page_size = 4096, .cache_size = 32},
+       db_(sql::DatabaseOptions().set_page_size(4096).set_cache_size(32),
            /*tag=*/"Conversions"),
        delegate_(delegate),
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
-@@ -9888,6 +9888,7 @@ bool RenderFrameHostImpl::IsFencedFrameReportingFromRendererAllowed(
+@@ -10241,6 +10241,7 @@ bool RenderFrameHostImpl::IsFencedFrameReportingFromRendererAllowed(
      return false;
    }
  
@@ -375,14 +415,14 @@ diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/b
    if (!IsActive()) {
      // reportEvent is not allowed when this RenderFrameHost or one of its
      // ancestors is not active.
-@@ -13641,6 +13642,16 @@ void RenderFrameHostImpl::BindTrustTokenQueryAnswerer(
+@@ -14045,6 +14046,16 @@ void RenderFrameHostImpl::BindTrustTokenQueryAnswerer(
      return;
    }
  
 +  // flags are enforced in benign renderers by the
 +  // RuntimeEnabled=PrivateStateTokens IDL attribute (the base::Feature's value
 +  // is tied to the RuntimeEnabledFeature's).
-+  if ((false)) {
++  if ((true)) {
 +    mojo::ReportBadMessage(
 +        "Attempted to get a TrustTokenQueryAnswerer with Private State Tokens "
 +        "disabled.");
@@ -395,7 +435,7 @@ diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/b
 diff --git a/content/browser/storage_partition_impl.cc b/content/browser/storage_partition_impl.cc
 --- a/content/browser/storage_partition_impl.cc
 +++ b/content/browser/storage_partition_impl.cc
-@@ -1484,15 +1484,6 @@ void StoragePartitionImpl::Initialize(
+@@ -1482,15 +1482,6 @@ void StoragePartitionImpl::Initialize(
  
    bucket_manager_ = std::make_unique<BucketManager>(this);
  
@@ -411,7 +451,7 @@ diff --git a/content/browser/storage_partition_impl.cc b/content/browser/storage
    if (base::FeatureList::IsEnabled(blink::features::kInterestGroupStorage)) {
      // Auction worklets on non-Android use dedicated processes; on Android due
      // to high cost of process launch they try to reuse renderers.
-@@ -1544,9 +1535,6 @@ void StoragePartitionImpl::Initialize(
+@@ -1542,9 +1533,6 @@ void StoragePartitionImpl::Initialize(
  
    font_access_manager_ = FontAccessManager::Create();
  
@@ -424,7 +464,7 @@ diff --git a/content/browser/storage_partition_impl.cc b/content/browser/storage
 diff --git a/content/public/android/BUILD.gn b/content/public/android/BUILD.gn
 --- a/content/public/android/BUILD.gn
 +++ b/content/public/android/BUILD.gn
-@@ -197,8 +197,6 @@ android_library("content_full_java") {
+@@ -203,8 +203,6 @@ android_library("content_full_java") {
      "//third_party/androidx:androidx_appcompat_appcompat_resources_java",
      "//third_party/androidx:androidx_collection_collection_java",
      "//third_party/androidx:androidx_core_core_java",
@@ -898,7 +938,7 @@ diff --git a/content/public/android/java/src/org/chromium/content/browser/Attrib
 diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -586,6 +586,7 @@ void ContentBrowserClient::OnAuctionComplete(
+@@ -601,6 +601,7 @@ void ContentBrowserClient::OnAuctionComplete(
  network::mojom::AttributionSupport ContentBrowserClient::GetAttributionSupport(
      AttributionReportingOsApiState state,
      bool client_os_disabled) {
@@ -906,7 +946,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
    switch (state) {
      case AttributionReportingOsApiState::kDisabled:
        return network::mojom::AttributionSupport::kWeb;
-@@ -603,13 +604,13 @@ bool ContentBrowserClient::IsAttributionReportingOperationAllowed(
+@@ -618,13 +619,13 @@ bool ContentBrowserClient::IsAttributionReportingOperationAllowed(
      const url::Origin* destination_origin,
      const url::Origin* reporting_origin,
      bool* can_bypass) {
@@ -922,7 +962,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
  }
  
  bool ContentBrowserClient::IsAttributionReportingAllowedForContext(
-@@ -617,7 +618,7 @@ bool ContentBrowserClient::IsAttributionReportingAllowedForContext(
+@@ -632,7 +633,7 @@ bool ContentBrowserClient::IsAttributionReportingAllowedForContext(
      content::RenderFrameHost* rfh,
      const url::Origin& context_origin,
      const url::Origin& reporting_origin) {
@@ -947,12 +987,12 @@ new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/services/network/public/cpp/features_cc/Disable-conversion-measurement-api.inc
 @@ -0,0 +1 @@
-+SET_CROMITE_FEATURE_DISABLED(kAttributionReportingCrossAppWeb);
++// none
 diff --git a/cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc b/cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc
 new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,10 @@
 +SET_CROMITE_FEATURE_DISABLED(kAdAuctionSignals);
 +SET_CROMITE_FEATURE_DISABLED(kBrowsingTopics);
 +SET_CROMITE_FEATURE_DISABLED(kBrowsingTopicsDocumentAPI);
@@ -961,6 +1001,8 @@ new file mode 100644
 +SET_CROMITE_FEATURE_DISABLED(kFledgeBiddingAndAuctionServer);
 +SET_CROMITE_FEATURE_DISABLED(kInterestGroupStorage);
 +SET_CROMITE_FEATURE_DISABLED(kPrivateAggregationApi);
++SET_CROMITE_FEATURE_DISABLED(kBiddingAndScoringDebugReportingAPI);
++SET_CROMITE_FEATURE_DISABLED(kAllowURNsInIframes);
 diff --git a/services/network/attribution/request_headers_internal.cc b/services/network/attribution/request_headers_internal.cc
 --- a/services/network/attribution/request_headers_internal.cc
 +++ b/services/network/attribution/request_headers_internal.cc
@@ -975,19 +1017,30 @@ diff --git a/services/network/attribution/request_headers_internal.cc b/services
 diff --git a/services/network/network_context.cc b/services/network/network_context.cc
 --- a/services/network/network_context.cc
 +++ b/services/network/network_context.cc
-@@ -2647,6 +2647,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
-     builder.SetCookieStore(std::move(cookie_store));
+@@ -2637,26 +2637,6 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
+     builder.set_network_quality_estimator(
+         network_service_->network_quality_estimator());
    }
- 
-+  if ((false)) {
-     trust_token_store_ = std::make_unique<PendingTrustTokenStore>();
- 
-     base::FilePath trust_token_path;
-@@ -2667,6 +2668,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
-           std::make_unique<ExpiryInspectingRecordExpiryDelegate>(
-               network_service()->trust_token_key_commitments())));
-     }
-+  }
+-  trust_token_store_ = std::make_unique<PendingTrustTokenStore>();
+-
+-  base::FilePath trust_token_path;
+-  if (GetFullDataFilePath(
+-          params_->file_paths,
+-          &network::mojom::NetworkContextFilePaths::trust_token_database_name,
+-          trust_token_path)) {
+-    SQLiteTrustTokenPersister::CreateForFilePath(
+-        base::ThreadPool::CreateSequencedTaskRunner(
+-            {base::MayBlock(), kTrustTokenDatabaseTaskPriority,
+-             base::TaskShutdownBehavior::BLOCK_SHUTDOWN}),
+-        trust_token_path, kTrustTokenWriteBufferingWindow,
+-        base::BindOnce(&NetworkContext::FinishConstructingTrustTokenStore,
+-                       weak_factory_.GetWeakPtr()));
+-  } else {
+-    trust_token_store_->OnStoreReady(std::make_unique<TrustTokenStore>(
+-        std::make_unique<InMemoryTrustTokenPersister>(),
+-        std::make_unique<ExpiryInspectingRecordExpiryDelegate>(
+-            network_service()->trust_token_key_commitments())));
+-  }
  
    std::unique_ptr<net::StaticHttpUserAgentSettings> user_agent_settings =
        std::make_unique<net::StaticHttpUserAgentSettings>(
@@ -1010,10 +1063,22 @@ diff --git a/services/network/public/cpp/attribution_utils.cc b/services/network
    switch (attribution_support) {
      case mojom::AttributionSupport::kWeb:
      case mojom::AttributionSupport::kWebAndOs:
+diff --git a/third_party/blink/renderer/core/frame/attribution_src_loader.cc b/third_party/blink/renderer/core/frame/attribution_src_loader.cc
+--- a/third_party/blink/renderer/core/frame/attribution_src_loader.cc
++++ b/third_party/blink/renderer/core/frame/attribution_src_loader.cc
+@@ -209,8 +209,6 @@ struct AttributionSrcLoader::AttributionHeaders {
+                      uint64_t request_id)
+       : web_source(map.Get(http_names::kAttributionReportingRegisterSource)),
+         web_trigger(map.Get(http_names::kAttributionReportingRegisterTrigger)),
+-        os_source(map.Get(http_names::kAttributionReportingRegisterOSSource)),
+-        os_trigger(map.Get(http_names::kAttributionReportingRegisterOSTrigger)),
+         request_url(request_url),
+         request_id(request_id) {}
+ 
 diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/renderer/core/page/page.cc
 --- a/third_party/blink/renderer/core/page/page.cc
 +++ b/third_party/blink/renderer/core/page/page.cc
-@@ -1574,7 +1574,7 @@ void Page::UpdateBrowsingContextGroup(
+@@ -1575,7 +1575,7 @@ void Page::UpdateBrowsingContextGroup(
  
  void Page::SetAttributionSupport(
      network::mojom::AttributionSupport attribution_support) {
@@ -1025,34 +1090,29 @@ diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/re
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -281,7 +281,7 @@
+@@ -286,8 +286,8 @@
+     },
      {
        // Interest Group JS API/runtimeflag.
-       name: "AdInterestGroupAPI",
+-      name: "AdInterestGroupAPI",
 -      status: "stable",
-+      status: "experimental",
++      name: "AdInterestGroupAPI", // keep disabled
++      status: "experimental",     // keep disabled
        origin_trial_feature_name: "AdInterestGroupAPI",
        implied_by: ["Fledge", "Parakeet"],
        public: true,
-@@ -444,15 +444,15 @@
+@@ -464,8 +464,8 @@
+       name: "AtomicMoveRangePreservation",
      },
      {
-       name: "AttributionReporting",
+-      name: "AttributionReporting",
 -      status: "stable",
-+      status: "experimental",
++      name: "AttributionReporting", // keep disabled
++      status: "experimental",       // keep disabled
        base_feature: "none",
        public: true,
      },
-     {
-       name: "AttributionReportingCrossAppWeb",
-+      status: "experimental",
-       base_feature: "none",
-       public: true,
--      status: "stable",
-     },
-     {
-       // This only exists so we can use RuntimeEnabled in the IDL file
-@@ -3425,8 +3425,8 @@
+@@ -3445,8 +3445,8 @@
        base_feature: "none",
      },
      {
@@ -1063,18 +1123,21 @@ diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 
        base_feature: "none",
        public: true,
      },
-@@ -4314,15 +4314,15 @@
+@@ -4356,16 +4356,16 @@
+       status: "experimental",
      },
      {
-       name: "TopicsAPI",
-+      status: "experimental",
+-      name: "TopicsAPI",
++      name: "TopicsAPI",       // keep disabled
++      status: "experimental",  // keep disabled
        base_feature: "none",
        public: true,
 -      status: "stable",
      },
      {
-       name: "TopicsDocumentAPI",
-+      status: "experimental",
+-      name: "TopicsDocumentAPI",
++      name: "TopicsDocumentAPI", // keep disabled
++      status: "experimental",    // keep disabled
        base_feature: "none",
        public: true,
 -      status: "stable",
@@ -1084,7 +1147,7 @@ diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 
 diff --git a/ui/events/android/motion_event_android.cc b/ui/events/android/motion_event_android.cc
 --- a/ui/events/android/motion_event_android.cc
 +++ b/ui/events/android/motion_event_android.cc
-@@ -390,8 +390,12 @@ MotionEventAndroid::ToolType MotionEventAndroid::FromAndroidToolType(
+@@ -394,8 +394,12 @@ MotionEventAndroid::ToolType MotionEventAndroid::FromAndroidToolType(
  #undef TOOL_TYPE_CASE
  
  base::TimeTicks MotionEventAndroid::FromAndroidTime(base::TimeTicks time) {
