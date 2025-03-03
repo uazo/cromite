@@ -15,7 +15,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../chrome_browser_interface_binders.cc       |  12 +
  chrome/browser/resources/BUILD.gn             |   6 +
  chrome/browser/resources/settings/BUILD.gn    |   2 +-
- .../resources/settings/page_visibility.ts     |  30 +-
+ .../resources/settings/page_visibility.ts     |  43 ++-
  .../search_engine_edit_dialog.html            |   6 +
  .../search_engine_edit_dialog.ts              |   6 +-
  .../search_engines_browser_proxy.ts           |   8 +-
@@ -42,7 +42,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../webui/settings/search_engines_handler.cc  |  28 +-
  .../webui/settings/search_engines_handler.h   |   3 +-
  .../settings_localized_strings_provider.cc    |   8 +
- ...ings_localized_strings_provider_android.cc | 198 +++++++++++++
+ ...ings_localized_strings_provider_android.cc | 200 ++++++++++++++
  ...tings_localized_strings_provider_android.h |  19 ++
  .../ui/webui/settings/settings_ui_android.cc  | 126 +++++++++
  .../ui/webui/settings/settings_ui_android.h   | 112 ++++++++
@@ -61,7 +61,8 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  third_party/polymer/v3_0/BUILD.gn             |  12 +-
  ui/base/template_expressions.cc               |  21 +-
  ui/webui/BUILD.gn                             |   7 +
- ui/webui/resources/BUILD.gn                   |  20 ++
+ ui/webui/resources/BUILD.gn                   |  22 ++
+ .../cr_components/cr_shortcut_input/BUILD.gn  |   2 +-
  .../customize_color_scheme_mode/BUILD.gn      |   2 +-
  .../cr_components/help_bubble/BUILD.gn        |   2 +-
  .../cr_components/localized_link/BUILD.gn     |   2 +-
@@ -75,7 +76,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ui/webui/resources/images/BUILD.gn            |   2 +-
  ui/webui/resources/js/BUILD.gn                |   2 +-
  ui/webui/resources/js/load_time_data.ts       |  17 +-
- 68 files changed, 1130 insertions(+), 67 deletions(-)
+ 69 files changed, 1148 insertions(+), 68 deletions(-)
  create mode 100644 chrome/app/settings_strings_android.grdp
  create mode 100644 chrome/browser/search_engines/android/java/res/layout/search_engine_layout.xml
  create mode 100644 chrome/browser/ui/webui/settings/settings_localized_strings_provider_android.cc
@@ -416,7 +417,7 @@ new file mode 100644
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -3495,6 +3495,9 @@ static_library("browser") {
+@@ -3496,6 +3496,9 @@ static_library("browser") {
          "//components/user_scripts/android",
        ]
      }
@@ -486,14 +487,21 @@ diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resourc
 diff --git a/chrome/browser/resources/settings/page_visibility.ts b/chrome/browser/resources/settings/page_visibility.ts
 --- a/chrome/browser/resources/settings/page_visibility.ts
 +++ b/chrome/browser/resources/settings/page_visibility.ts
-@@ -43,8 +43,36 @@ export interface PrivacyPageVisibility {
+@@ -43,8 +43,49 @@ export interface PrivacyPageVisibility {
    searchPrediction: boolean;
  }
  
 +const isAndroid = (loadTimeData.getString('chromeAndroid') !== "");
 +if (isAndroid) {
 +  // @ts-expect-error
-+  chrome.autofillPrivate = {};
++  chrome.autofillPrivate = {
++    isUserEligibleForAutofillImprovements(): Promise<boolean> {
++      return Promise.resolve(false);
++    },
++    hasUserAnnotationsEntries(): Promise<boolean> {
++      return Promise.resolve(false);
++    }
++  };
 +
 +  // @ts-expect-error
 +  chrome.languageSettingsPrivate = {};
@@ -512,6 +520,12 @@ diff --git a/chrome/browser/resources/settings/page_visibility.ts b/chrome/brows
 +      var obj = {};
 +      (obj as any).then = function() {};
 +      return obj;
++    },
++    PrefType: {
++      BOOLEAN: 0
++    },
++    getDefaultZoom(): Promise<number> {
++      return Promise.resolve(100);
 +    }
 +  }
 +  // @ts-expect-error
@@ -1362,7 +1376,7 @@ diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provide
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider_android.cc
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,200 @@
 +#include "chrome/browser/ui/webui/settings/settings_localized_strings_provider.h"
 +
 +#include <string>
@@ -1557,6 +1571,8 @@ new file mode 100644
 +  AddSearchInSettingsStrings(html_source);
 +  html_source->AddString("check_notfound", "false");
 +  html_source->AddInteger("br_cs_count", 0);
++  html_source->AddString("presetZoomFactors",
++    "[0.25,0.3333333333333333,0.5,0.6666666666666666,0.75,0.8,0.9,1.0,1.1,1.25,1.5,1.75,2.0,2.5,3.0,4.0,5.0]");
 +  html_source->UseStringsJs();
 +}
 +
@@ -2139,13 +2155,14 @@ diff --git a/ui/webui/BUILD.gn b/ui/webui/BUILD.gn
 diff --git a/ui/webui/resources/BUILD.gn b/ui/webui/resources/BUILD.gn
 --- a/ui/webui/resources/BUILD.gn
 +++ b/ui/webui/resources/BUILD.gn
-@@ -50,6 +50,26 @@ generate_grd("build_grd") {
+@@ -50,6 +50,28 @@ generate_grd("build_grd") {
      "$target_gen_dir/mojo/resources.grdp",
    ]
  
 +  if (is_android) {
 +    public_deps += [
 +      "cr_components/customize_color_scheme_mode:build_grdp",
++      "cr_components/cr_shortcut_input:build_grdp",
 +      "cr_components/help_bubble:build_grdp",
 +      "cr_components/localized_link:build_grdp",
 +      "cr_components/managed_dialog:build_grdp",
@@ -2155,6 +2172,7 @@ diff --git a/ui/webui/resources/BUILD.gn b/ui/webui/resources/BUILD.gn
 +    ]
 +    grdp_files += [
 +      "$target_gen_dir/cr_components/customize_color_scheme_mode/resources.grdp",
++      "$target_gen_dir/cr_components/cr_shortcut_input/resources.grdp",
 +      "$target_gen_dir/cr_components/help_bubble/resources.grdp",
 +      "$target_gen_dir/cr_components/localized_link/resources.grdp",
 +      "$target_gen_dir/cr_components/managed_dialog/resources.grdp",
@@ -2166,6 +2184,18 @@ diff --git a/ui/webui/resources/BUILD.gn b/ui/webui/resources/BUILD.gn
    if (!is_android && !is_ios) {
      public_deps += [
        "cr_components/app_management:build_grdp",
+diff --git a/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn b/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn
+--- a/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn
++++ b/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert(!is_android && !is_ios)
++#assert(!is_android && !is_ios)
+ 
+ build_webui("build") {
+   grd_prefix = "cr_components_cr_shortcut_input"
 diff --git a/ui/webui/resources/cr_components/customize_color_scheme_mode/BUILD.gn b/ui/webui/resources/cr_components/customize_color_scheme_mode/BUILD.gn
 --- a/ui/webui/resources/cr_components/customize_color_scheme_mode/BUILD.gn
 +++ b/ui/webui/resources/cr_components/customize_color_scheme_mode/BUILD.gn

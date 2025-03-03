@@ -57,9 +57,9 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../chromium/product_logo_white.png           | Bin 2512 -> 6790 bytes
  .../webui/version/resources/about_version.ts  |   2 +-
  .../resources/about_version_mobile.css        |   9 ++
- content/child/runtime_features.cc             |  23 ++---
+ content/child/runtime_features.cc             |  44 ++++-----
  tools/grit/grit/grd_reader.py                 |  35 +++++++
- 55 files changed, 188 insertions(+), 118 deletions(-)
+ 55 files changed, 200 insertions(+), 127 deletions(-)
 
 diff --git a/build/BUILD.gn b/build/BUILD.gn
 --- a/build/BUILD.gn
@@ -18948,7 +18948,7 @@ diff --git a/components/webui/version/resources/about_version_mobile.css b/compo
 diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.cc
 --- a/content/child/runtime_features.cc
 +++ b/content/child/runtime_features.cc
-@@ -564,7 +564,7 @@ void ResolveInvalidConfigurations() {
+@@ -564,19 +564,22 @@ void ResolveInvalidConfigurations() {
         base::FeatureList::IsEnabled(
             features::kPrivacySandboxAdsAPIsM1Override)) &&
        !base::FeatureList::IsEnabled(blink::features::kFencedFrames)) {
@@ -18957,7 +18957,13 @@ diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.
          << "Fenced frames cannot be enabled in this configuration. Use --"
          << switches::kEnableFeatures << "="
          << blink::features::kFencedFrames.name << " instead.";
-@@ -574,9 +574,8 @@ void ResolveInvalidConfigurations() {
+     WebRuntimeFeatures::EnableFencedFrames(false);
+   }
++  CHECK(!base::FeatureList::IsEnabled(features::kPrivacySandboxAdsAPIsOverride))
++    << "kPrivacySandboxAdsAPIsOverride is enabled!";
++  CHECK(!base::FeatureList::IsEnabled(features::kPrivacySandboxAdsAPIsM1Override))
++    << "kPrivacySandboxAdsAPIsM1Override is enabled!";
+ 
    if (!base::FeatureList::IsEnabled(blink::features::kFencedFrames) &&
        base::FeatureList::IsEnabled(
            blink::features::kFencedFramesLocalUnpartitionedDataAccess)) {
@@ -18969,7 +18975,14 @@ diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.
          << "Fenced frames must be enabled in order to enable local "
             "unpartitioned "
          << "data access. Use --" << switches::kEnableFeatures << "="
-@@ -589,7 +588,7 @@ void ResolveInvalidConfigurations() {
+@@ -584,12 +587,14 @@ void ResolveInvalidConfigurations() {
+     WebRuntimeFeatures::EnableFeatureFromString(
+         "FencedFramesLocalUnpartitionedDataAccess", false);
+   }
++  CHECK(!base::FeatureList::IsEnabled(blink::features::kFencedFrames))
++    << "kFencedFrames is enabled!";
+ 
+   // Topics API cannot be enabled without the support of the browser process.
    // The Document API should be additionally gated by the
    // `kBrowsingTopicsDocumentAPI` feature.
    if (!base::FeatureList::IsEnabled(blink::features::kBrowsingTopics)) {
@@ -18978,16 +18991,21 @@ diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.
          << "Topics cannot be enabled in this configuration. Use --"
          << switches::kEnableFeatures << "="
          << blink::features::kBrowsingTopics.name << " in addition.";
-@@ -599,7 +598,7 @@ void ResolveInvalidConfigurations() {
+@@ -597,30 +602,23 @@ void ResolveInvalidConfigurations() {
+     WebRuntimeFeatures::EnableTopicsDocumentAPI(false);
+     WebRuntimeFeatures::EnableTopicsImgAPI(false);
    } else {
-     if (!base::FeatureList::IsEnabled(
-             blink::features::kBrowsingTopicsDocumentAPI)) {
+-    if (!base::FeatureList::IsEnabled(
+-            blink::features::kBrowsingTopicsDocumentAPI)) {
 -      LOG_IF(WARNING, WebRuntimeFeatures::IsTopicsDocumentAPIEnabled())
-+      CHECK(!WebRuntimeFeatures::IsTopicsDocumentAPIEnabled())
-           << "Topics Document API cannot be enabled in this configuration. Use "
-              "--"
-           << switches::kEnableFeatures << "="
-@@ -610,8 +609,8 @@ void ResolveInvalidConfigurations() {
+-          << "Topics Document API cannot be enabled in this configuration. Use "
+-             "--"
+-          << switches::kEnableFeatures << "="
+-          << blink::features::kBrowsingTopicsDocumentAPI.name
+-          << " in addition.";
+-      WebRuntimeFeatures::EnableTopicsDocumentAPI(false);
+-    }
++    CHECK(false) << "kBrowsingTopics is enabled!";
    }
  
    if (!base::FeatureList::IsEnabled(blink::features::kSharedStorageAPI)) {
@@ -18998,7 +19016,10 @@ diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.
             "configuration. Use --"
          << switches::kEnableFeatures << "="
          << blink::features::kSharedStorageAPI.name << " in addition.";
-@@ -620,7 +619,7 @@ void ResolveInvalidConfigurations() {
+     WebRuntimeFeatures::EnableSharedStorageAPI(false);
++  } else {
++    CHECK(false) << "kSharedStorageAPI is enabled!";
+   }
  
    if (!base::FeatureList::IsEnabled(
            attribution_reporting::features::kConversionMeasurement)) {
@@ -19007,8 +19028,12 @@ diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.
          << "AttributionReporting cannot be enabled in this "
             "configuration. Use --"
          << switches::kEnableFeatures << "="
-@@ -630,8 +629,7 @@ void ResolveInvalidConfigurations() {
+@@ -628,23 +626,25 @@ void ResolveInvalidConfigurations() {
+         << " in addition.";
+     WebRuntimeFeatures::EnableAttributionReporting(false);
    }
++  CHECK(!base::FeatureList::IsEnabled(attribution_reporting::features::kConversionMeasurement))
++    << "kConversionMeasurement is enabled!";
  
    if (!base::FeatureList::IsEnabled(blink::features::kInterestGroupStorage)) {
 -    LOG_IF(WARNING,
@@ -19017,7 +19042,13 @@ diff --git a/content/child/runtime_features.cc b/content/child/runtime_features.
          << "AdInterestGroupAPI cannot be enabled in this "
             "configuration. Use --"
          << switches::kEnableFeatures << "="
-@@ -643,8 +641,7 @@ void ResolveInvalidConfigurations() {
+         << blink::features::kInterestGroupStorage.name << " in addition.";
+     WebRuntimeFeatures::EnableAdInterestGroupAPI(false);
+     WebRuntimeFeatures::EnableFledge(false);
++  } else {
++    CHECK(false) << "kInterestGroupStorage is enabled!";
+   }
+ 
    // PermissionElement cannot be enabled without the support of the
    // browser process.
    if (!base::FeatureList::IsEnabled(blink::features::kPermissionElement)) {

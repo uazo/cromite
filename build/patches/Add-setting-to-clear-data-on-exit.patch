@@ -5,34 +5,40 @@ Subject: Add setting to clear data on exit
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
  chrome/android/chrome_java_sources.gni        |  1 +
+ .../java/res/xml/privacy_preferences.xml      |  5 ++
  .../chrome/browser/ChromeTabbedActivity.java  |  7 +-
- .../ClearBrowsingDataFragment.java            | 12 +++
- .../ClearBrowsingDataFragmentAtStart.java     | 74 +++++++++++++++++++
+ .../browsing_data/BrowsingDataBridge.java     | 12 +--
+ .../ClearBrowsingDataFragment.java            | 31 ++++++--
+ .../ClearBrowsingDataFragmentAtStart.java     | 79 +++++++++++++++++++
  chrome/app/settings_strings.grdp              | 10 +++
+ .../browsing_data/browsing_data_bridge.cc     | 17 +++-
  .../chrome_browsing_data_lifetime_manager.cc  | 22 +++++-
  .../chrome_browsing_data_remover_delegate.cc  | 15 ++++
- .../api/settings_private/prefs_util.cc        | 17 +++++
+ .../api/settings_private/prefs_util.cc        | 17 ++++
  .../browser/profiles/ProfileManagerUtils.java |  5 ++
  .../profiles/android/profile_manager_utils.cc |  5 ++
  chrome/browser/profiles/profile_manager.cc    | 15 +++-
  chrome/browser/profiles/profile_manager.h     |  2 +
  .../clear_browsing_data_dialog.html           | 44 +++++++++++
  .../clear_browsing_data_dialog.ts             |  2 +
- .../strings/android_chrome_strings.grd        |  5 +-
+ .../strings/android_chrome_strings.grd        |  3 +
+ .../Add-setting-to-clear-data-on-exit.grdp    |  9 +++
  .../settings_localized_strings_provider.cc    |  1 +
  .../content/browsing_data_helper.cc           |  9 ++-
+ components/browsing_data/core/BUILD.gn        |  5 ++
  .../core/browsing_data_policies_utils.cc      | 20 ++---
  .../core/browsing_data_policies_utils.h       | 11 +++
  .../browsing_data/core/browsing_data_utils.cc | 31 ++++++++
- .../core/clear_browsing_data_tab.h            |  2 +-
- components/browsing_data/core/pref_names.cc   | 17 +++++
+ .../core/clear_browsing_data_tab.h            |  3 +-
+ components/browsing_data/core/pref_names.cc   | 17 ++++
  components/browsing_data/core/pref_names.h    | 10 +++
  .../search_engines/template_url_service.cc    |  1 +
  content/browser/dips/dips_service_impl.cc     |  2 +-
  content/browser/storage_partition_impl.cc     |  1 +
  .../public/browser/browsing_data_remover.h    |  7 +-
- 27 files changed, 328 insertions(+), 20 deletions(-)
+ 32 files changed, 386 insertions(+), 33 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp
 
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
@@ -45,6 +51,21 @@ diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java
    "java/src/org/chromium/chrome/browser/browsing_data/ConfirmImportantSitesDialogFragment.java",
    "java/src/org/chromium/chrome/browser/browsing_data/OtherFormsOfHistoryDialogFragment.java",
    "java/src/org/chromium/chrome/browser/browsing_data/UrlFilter.java",
+diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
+--- a/chrome/android/java/res/xml/privacy_preferences.xml
++++ b/chrome/android/java/res/xml/privacy_preferences.xml
+@@ -19,6 +19,11 @@ found in the LICENSE file.
+         android:title="@string/clear_browsing_data_title"
+         android:summary="@string/clear_browsing_data_summary"
+         android:fragment="org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragment" />
++    <Preference
++        android:key="clear_browsing_data_advanced"
++        android:title="@string/clear_browsing_data_at_start_title"
++        android:summary="@string/clear_browsing_data_at_start_summary"
++        android:fragment="org.chromium.chrome.browser.browsing_data.ClearBrowsingDataFragmentAtStart" />
+     <Preference
+         android:key="privacy_guide"
+         app:isPreferenceVisible="false"
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -69,6 +90,44 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
  
              String PREF_CLOSE_TABS_ON_EXIT = "close_tabs_on_exit";
              boolean noRestoreState =
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/BrowsingDataBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/BrowsingDataBridge.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/BrowsingDataBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/BrowsingDataBridge.java
+@@ -218,8 +218,8 @@ public final class BrowsingDataBridge implements Destroyable {
+      *     BrowsingDataType}).
+      * @return The state of the corresponding deletion preference.
+      */
+-    public boolean getBrowsingDataDeletionPreference(int dataType) {
+-        return BrowsingDataBridgeJni.get().getBrowsingDataDeletionPreference(mProfile, dataType);
++    public boolean getBrowsingDataDeletionPreference(int dataType, int clearBrowsingDataTab) {
++        return BrowsingDataBridgeJni.get().getBrowsingDataDeletionPreference(mProfile, dataType, clearBrowsingDataTab);
+     }
+ 
+     /**
+@@ -229,8 +229,8 @@ public final class BrowsingDataBridge implements Destroyable {
+      *     BrowsingDataType}).
+      * @param value The state to be set.
+      */
+-    public void setBrowsingDataDeletionPreference(int dataType, boolean value) {
+-        BrowsingDataBridgeJni.get().setBrowsingDataDeletionPreference(mProfile, dataType, value);
++    public void setBrowsingDataDeletionPreference(int dataType, int clearBrowsingDataTab, boolean value) {
++        BrowsingDataBridgeJni.get().setBrowsingDataDeletionPreference(mProfile, dataType, clearBrowsingDataTab, value);
+     }
+ 
+     /**
+@@ -338,10 +338,10 @@ public final class BrowsingDataBridge implements Destroyable {
+                 @JniType("Profile*") Profile profile, @JniType("std::string") String origin);
+ 
+         boolean getBrowsingDataDeletionPreference(
+-                @JniType("Profile*") Profile profile, int dataType);
++                @JniType("Profile*") Profile profile, int dataType, int clearBrowsingDataTab);
+ 
+         void setBrowsingDataDeletionPreference(
+-                @JniType("Profile*") Profile profile, int dataType, boolean value);
++                @JniType("Profile*") Profile profile, int dataType, int clearBrowsingDataTab, boolean value);
+ 
+         int getBrowsingDataDeletionTimePeriod(@JniType("Profile*") Profile profile);
+ 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragment.java b/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragment.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragment.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragment.java
@@ -85,7 +144,47 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/C
              return true;
          }
  
-@@ -485,6 +491,10 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+@@ -255,7 +261,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+     private @TimePeriod int mLastSelectedTimePeriod;
+     private boolean mShouldShowPostDeleteFeedback;
+ 
+-    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
++    protected final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
+ 
+     /**
+      * @return All available {@link DialogOption} entries.
+@@ -361,7 +367,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+     }
+ 
+     /** Called when browsing data is about to be cleared. */
+-    private void onClearBrowsingData() {
++    protected void onClearBrowsingData() {
+         RecordUserAction.record("ClearBrowsingData_AdvancedTab");
+ 
+         if (ChromeFeatureList.sClearBrowsingDataAndroidSurvey.isEnabled()) {
+@@ -451,6 +457,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+             BrowsingDataBridge.getForProfile(getProfile())
+                     .setBrowsingDataDeletionPreference(
+                             ClearBrowsingDataFragment.getDataType(item.getOption()),
++                            getClearBrowsingDataTabType(),
+                             item.isSelected());
+         }
+ 
+@@ -458,8 +465,12 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+                 .setBrowsingDataDeletionTimePeriod(mLastSelectedTimePeriod);
+     }
+ 
++    protected int getClearBrowsingDataTabType() {
++        return ClearBrowsingDataTab.ADVANCED;
++    }
++
+     /** Returns the list of supported {@link DialogOption}. */
+-    private List<Integer> getDialogOptions(Bundle fragmentArgs) {
++    protected List<Integer> getDialogOptions(Bundle fragmentArgs) {
+         String referrer =
+                 fragmentArgs.getString(
+                         ClearBrowsingDataFragment.CLEAR_BROWSING_DATA_REFERRER, null);
+@@ -485,6 +496,10 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
                  DialogOption.CLEAR_SITE_SETTINGS);
      }
  
@@ -96,7 +195,16 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/C
      /**
       * Decides whether a given dialog option should be selected when the dialog is initialized.
       *
-@@ -561,6 +571,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+@@ -493,7 +508,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+      */
+     private boolean isOptionSelectedByDefault(@DialogOption int option) {
+         return BrowsingDataBridge.getForProfile(getProfile())
+-                .getBrowsingDataDeletionPreference(getDataType(option));
++                .getBrowsingDataDeletionPreference(getDataType(option), getClearBrowsingDataTabType());
+     }
+ 
+     /**
+@@ -561,6 +576,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
       * options.
       */
      private void onClearButtonClicked() {
@@ -104,7 +212,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/C
          if (shouldShowImportantSitesDialog()) {
              showImportantDialogThenClear();
              return;
-@@ -591,6 +602,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+@@ -591,6 +607,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
          Button clearButton = (Button) getView().findViewById(R.id.clear_button);
          boolean isEnabled = !getSelectedOptions().isEmpty();
          clearButton.setEnabled(isEnabled);
@@ -112,11 +220,33 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/C
      }
  
      private int getSpinnerIndex(
+@@ -666,7 +683,7 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+                             .getBoolean(Pref.ALLOW_DELETING_BROWSER_HISTORY)) {
+                 enabled = false;
+                 browsingDataBridge.setBrowsingDataDeletionPreference(
+-                        getDataType(DialogOption.CLEAR_HISTORY), false);
++                        getDataType(DialogOption.CLEAR_HISTORY), getClearBrowsingDataTabType(), false);
+             }
+ 
+             // Disable tabs closure if the user is in multi-window mode.
+@@ -696,8 +713,12 @@ public class ClearBrowsingDataFragment extends ChromeBaseSettingsFragment
+         mSigninManager.addSignInStateObserver(this);
+ 
+         setHasOptionsMenu(true);
++
++        onCustomizePreferences(savedInstanceState, rootKey);
+     }
+ 
++    protected void onCustomizePreferences(Bundle savedInstanceState, String rootKey) {}
++
+     @Override
+     public ObservableSupplier<String> getPageTitle() {
+         return mPageTitle;
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java b/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,79 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -171,6 +301,11 @@ new file mode 100644
 +    }
 +
 +    @Override
++    protected void onCustomizePreferences(Bundle savedInstanceState, String rootKey) {
++        mPageTitle.set(getString(R.string.clear_browsing_data_at_start_title));
++    }
++
++    @Override
 +    protected int getClearBrowsingDataTabType() {
 +        return ClearBrowsingDataTab.AT_START;
 +    }
@@ -183,7 +318,7 @@ new file mode 100644
 +    }
 +
 +    @Override
-+    protected void onClearBrowsingData() {
++    public void onClearBrowsingData() {
 +    }
 +
 +    @Override
@@ -211,6 +346,61 @@ diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
    <message name="IDS_SETTINGS_CLEAR_DATA_DESCRIPTION" desc="Description for delete browsing data button in Privacy options. 'History' refers to browsing history. 'Cookies' refers to the technical meaning of a cookie, i.e. data saved by a website on the user's computer, as in when a website saves your preferences.">
      Delete history, cookies, cache, and more
    </message>
+diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chrome/browser/android/browsing_data/browsing_data_bridge.cc
+--- a/chrome/browser/android/browsing_data/browsing_data_bridge.cc
++++ b/chrome/browser/android/browsing_data/browsing_data_bridge.cc
+@@ -70,6 +70,15 @@ PrefService* GetPrefService(Profile* profile) {
+   return profile->GetOriginalProfile()->GetPrefs();
+ }
+ 
++browsing_data::ClearBrowsingDataTab ToTabEnum(jint clear_browsing_data_tab) {
++  DCHECK_GE(clear_browsing_data_tab, 0);
++  DCHECK_LE(clear_browsing_data_tab,
++            static_cast<int>(browsing_data::ClearBrowsingDataTab::MAX_VALUE));
++
++  return static_cast<browsing_data::ClearBrowsingDataTab>(
++      clear_browsing_data_tab);
++}
++
+ void OnBrowsingDataModelBuilt(JNIEnv* env,
+                               const ScopedJavaGlobalRef<jobject>& java_callback,
+                               std::unique_ptr<BrowsingDataModel> model) {
+@@ -222,7 +231,8 @@ static void JNI_BrowsingDataBridge_MarkOriginAsImportantForTesting(
+ static jboolean JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
+     JNIEnv* env,
+     Profile* profile,
+-    jint data_type) {
++    jint data_type,
++    jint clear_browsing_data_tab) {
+   DCHECK_GE(data_type, 0);
+   DCHECK_LE(data_type,
+             static_cast<int>(browsing_data::BrowsingDataType::MAX_VALUE));
+@@ -234,7 +244,7 @@ static jboolean JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
+   std::string pref;
+   if (!browsing_data::GetDeletionPreferenceFromDataType(
+           static_cast<browsing_data::BrowsingDataType>(data_type),
+-          browsing_data::ClearBrowsingDataTab::ADVANCED, &pref)) {
++          ToTabEnum(clear_browsing_data_tab), &pref)) {
+     return false;
+   }
+ 
+@@ -245,6 +255,7 @@ static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
+     JNIEnv* env,
+     Profile* profile,
+     jint data_type,
++    jint clear_browsing_data_tab,
+     jboolean value) {
+   DCHECK_GE(data_type, 0);
+   DCHECK_LE(data_type,
+@@ -253,7 +264,7 @@ static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
+   std::string pref;
+   if (!browsing_data::GetDeletionPreferenceFromDataType(
+           static_cast<browsing_data::BrowsingDataType>(data_type),
+-          browsing_data::ClearBrowsingDataTab::ADVANCED, &pref)) {
++          ToTabEnum(clear_browsing_data_tab), &pref)) {
+     return;
+   }
+ 
 diff --git a/chrome/browser/browsing_data/chrome_browsing_data_lifetime_manager.cc b/chrome/browser/browsing_data/chrome_browsing_data_lifetime_manager.cc
 --- a/chrome/browser/browsing_data/chrome_browsing_data_lifetime_manager.cc
 +++ b/chrome/browser/browsing_data/chrome_browsing_data_lifetime_manager.cc
@@ -372,7 +562,7 @@ diff --git a/chrome/browser/profiles/profile_manager.cc b/chrome/browser/profile
  }
  
 +void ProfileManager::RemoveBrowsingDataAtStart() {
-+  base::ranges::for_each(
++  std::ranges::for_each(
 +      GetLoadedProfiles(),
 +      [](Profile* profile) {
 +        auto* browsing_data_lifetime_manager =
@@ -484,15 +674,6 @@ diff --git a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -1458,7 +1458,7 @@ For example, some websites may respond to this request by showing you ads that a
-         Delete browsing data
-       </message>
-       <message name="IDS_CLEAR_BROWSING_DATA_SUMMARY" desc="Summary of the settings item that opens the Delete Browsing Data dialog.">
--        Delete history, cookies, site data, cache…
-+        Delete immediately or choose when to delete browsing data
-       </message>
-       <message name="IDS_CLEAR_BROWSING_DATA_HISTORY_DIALOG_TITLE" desc="Title of a dialog that is shown after the deletion of browsing history finished.">
-         Deleted Chrome data
 @@ -1570,6 +1570,9 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_ANDROID_APP_HISTORY_OPEN_FULL_OTHER_FORMS" desc="The informational message at the top of the history page letting users know that app-specific history may be missing some entries, followed by the info on the other forms of browing history.">
          Some of your history might not show up here. To see all your Chrome history, open full Chrome history. Also, your Google Account may have other forms of browsing history at <ph name="BEGIN_LINK">&lt;link&gt;</ph>myactivity.google.com<ph name="END_LINK">&lt;/link&gt;</ph>.
@@ -503,6 +684,20 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
        <message name="IDS_ANDROID_HISTORY_OTHER_FORMS_OF_HISTORY" desc="The notification at the top of the history page indicating that deleting Chrome browsing history will not delete other forms of history stored at Google My Activity.">
          Your Google Account may have other forms of browsing history at <ph name="BEGIN_LINK">&lt;link&gt;</ph>myactivity.google.com<ph name="END_LINK">&lt;/link&gt;</ph>.
        </message>
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CLEAR_BROWSING_DATA_AT_START_TITLE" desc="Title of the Delete Browsing Data screen at start.">
++        Clear the data at opening
++    </message>
++    <message name="IDS_CLEAR_BROWSING_DATA_AT_START_SUMMARY" desc="Summary of the settings item that opens the Delete Browsing Data dialog.">
++        Choose what to delete when the browser opens
++    </message>
++</grit-part>
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
@@ -533,6 +728,28 @@ diff --git a/components/browsing_data/content/browsing_data_helper.cc b/componen
    return predicate.Run(url);
  }
  
+diff --git a/components/browsing_data/core/BUILD.gn b/components/browsing_data/core/BUILD.gn
+--- a/components/browsing_data/core/BUILD.gn
++++ b/components/browsing_data/core/BUILD.gn
+@@ -62,6 +62,10 @@ if (is_android) {
+     visibility = [ ":*" ]
+     sources = [ "browsing_data_utils.h" ]
+   }
++  java_cpp_enum("clear_browsing_data_tab_javagen") {
++    visibility = [ ":*" ]
++    sources = [ "clear_browsing_data_tab.h" ]
++  }
+   java_cpp_enum("cookie_or_cache_deletion_choice_javagen") {
+     # External code should depend on ":java" instead.
+     visibility = [ ":*" ]
+@@ -71,6 +75,7 @@ if (is_android) {
+   android_library("java") {
+     srcjar_deps = [
+       ":browsing_data_utils_javagen",
++      ":clear_browsing_data_tab_javagen",
+       ":cookie_or_cache_deletion_choice_javagen",
+     ]
+     deps = [ "//third_party/androidx:androidx_annotation_annotation_java" ]
 diff --git a/components/browsing_data/core/browsing_data_policies_utils.cc b/components/browsing_data/core/browsing_data_policies_utils.cc
 --- a/components/browsing_data/core/browsing_data_policies_utils.cc
 +++ b/components/browsing_data/core/browsing_data_policies_utils.cc
@@ -633,11 +850,12 @@ diff --git a/components/browsing_data/core/browsing_data_utils.cc b/components/b
 diff --git a/components/browsing_data/core/clear_browsing_data_tab.h b/components/browsing_data/core/clear_browsing_data_tab.h
 --- a/components/browsing_data/core/clear_browsing_data_tab.h
 +++ b/components/browsing_data/core/clear_browsing_data_tab.h
-@@ -13,7 +13,7 @@ namespace browsing_data {
+@@ -13,7 +13,8 @@ namespace browsing_data {
  // value for dialogs without separate tabs is advanced.
  // TODO(dullweber): Maybe rename "ADVANCED" to "DEFAULT" because it is used in
  //   multiple places without a differentiation between advanced and basic.
 -enum class ClearBrowsingDataTab { BASIC, ADVANCED, MAX_VALUE = ADVANCED };
++// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.browsing_data
 +enum class ClearBrowsingDataTab { BASIC, ADVANCED, AT_START, MAX_VALUE = AT_START };
  
  }  // namespace browsing_data

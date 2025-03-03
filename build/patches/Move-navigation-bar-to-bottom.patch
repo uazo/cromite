@@ -26,9 +26,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../TabListEmptyCoordinator.java              |  17 +-
  .../browser/feed/FeedSurfaceCoordinator.java  |   4 +
  .../ChromeAccessibilitySettingsDelegate.java  |  70 ++++++++
- .../chrome/browser/app/ChromeActivity.java    |   3 +
  .../compositor/CompositorViewHolder.java      |   7 +
- .../layouts/LayoutManagerChrome.java          |  17 +-
+ .../layouts/LayoutManagerChrome.java          |  12 +-
  .../layouts/LayoutManagerChromeTablet.java    |   4 +-
  .../layouts/ToolbarSwipeLayout.java           |  14 +-
  .../overlays/strip/ScrollDelegate.java        |   2 +-
@@ -67,12 +66,14 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/prefs/browser_prefs.cc         |   2 +-
  .../chrome/browser/ui/appmenu/AppMenu.java    |  40 ++++-
  .../ui/appmenu/AppMenuHandlerImpl.java        |  10 ++
- ...mniboxSuggestionsDropdownEmbedderImpl.java |  18 ++
- .../suggestions/AutocompleteCoordinator.java  |  13 ++
+ ...rredIMEWindowInsetApplicationCallback.java |   7 +
+ .../omnibox/LocationBarCoordinator.java       |   1 +
+ ...mniboxSuggestionsDropdownEmbedderImpl.java |  22 +++
+ .../suggestions/AutocompleteCoordinator.java  |  14 ++
  .../suggestions/AutocompleteMediator.java     |   6 +-
  .../DropdownItemViewInfoListManager.java      |   1 +
  .../OmniboxSuggestionsDropdown.java           |  11 +-
- .../OmniboxSuggestionsDropdownEmbedder.java   |   4 +
+ .../OmniboxSuggestionsDropdownEmbedder.java   |   6 +
  .../base/BaseSuggestionViewBinder.java        |   7 +
  .../strings/android_chrome_strings.grd        |   6 +
  chrome/browser/ui/android/toolbar/BUILD.gn    |   1 +
@@ -88,11 +89,11 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../top/TopToolbarOverlayProperties.java      |   8 +-
  .../toolbar/top/TopToolbarSceneLayer.java     |  10 +-
  .../res/xml/accessibility_preferences.xml     |   8 +
- .../accessibility/AccessibilitySettings.java  |  26 +++
+ .../accessibility/AccessibilitySettings.java  |  27 +++
  .../AccessibilitySettingsDelegate.java        |   8 +
  .../render_widget_host_view_android.cc        |   3 +
  .../Move-navigation-bar-to-bottom.inc         |  17 ++
- 79 files changed, 1013 insertions(+), 77 deletions(-)
+ 80 files changed, 1021 insertions(+), 77 deletions(-)
  create mode 100644 chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/ReversedLinearLayout.java
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Move-navigation-bar-to-bottom.inc
 
@@ -791,19 +792,6 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/s
      @Override
      public BrowserContextHandle getBrowserContextHandle() {
          return mProfile;
-diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
---- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-+++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
-@@ -248,6 +248,9 @@ import org.chromium.webapk.lib.client.WebApkNavigationClient;
- import java.util.ArrayList;
- import java.util.List;
- 
-+import android.widget.ImageView;
-+import android.view.ViewGroup.LayoutParams;
-+
- /**
-  * A {@link AsyncInitializationActivity} that builds and manages a {@link CompositorViewHolder} and
-  * associated classes.
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
@@ -839,19 +827,18 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layo
  
  import java.util.List;
  
-@@ -154,7 +155,10 @@ public class LayoutManagerChrome extends LayoutManagerImpl
+@@ -154,7 +155,9 @@ public class LayoutManagerChrome extends LayoutManagerImpl
  
      @Override
      public SwipeHandler createToolbarSwipeHandler(boolean supportsSwipeToShowTabSwitcher) {
 -        return new ToolbarSwipeHandler(supportsSwipeToShowTabSwitcher);
-+        boolean move_top_toolbar =
-+            ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled();
-+        return new ToolbarSwipeHandler(supportsSwipeToShowTabSwitcher && !move_top_toolbar,
-+                                       supportSwipeDown && move_top_toolbar);
++        return new ToolbarSwipeHandler(
++            supportsSwipeToShowTabSwitcher || ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled(),
++                !ChromeFeatureList.sDisableToolbarSwipeUp.isEnabled());
      }
  
      @Override
-@@ -364,9 +368,11 @@ public class LayoutManagerChrome extends LayoutManagerImpl
+@@ -364,9 +367,11 @@ public class LayoutManagerChrome extends LayoutManagerImpl
          private static final float SWIPE_RANGE_DEG = 25;
  
          private final boolean mSupportsSwipeToShowTabSwitcher;
@@ -864,24 +851,13 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layo
          }
  
          @Override
-@@ -394,6 +400,10 @@ public class LayoutManagerChrome extends LayoutManagerImpl
-             mScrollDirection = computeScrollDirection(dx, dy);
-             if (mScrollDirection == ScrollDirection.UNKNOWN) return;
- 
-+            } else if (mSupportSwipeUp
-+                       && mScrollDirection == ScrollDirection.UP
-+                       && !ChromeFeatureList.sDisableToolbarSwipeUp.isEnabled()) {
-+                showLayout(LayoutType.TAB_SWITCHER, true);
-             if (mScrollDirection == ScrollDirection.LEFT
-                     || mScrollDirection == ScrollDirection.RIGHT) {
-                 startShowing(mToolbarSwipeLayout, true);
-@@ -473,7 +483,8 @@ public class LayoutManagerChrome extends LayoutManagerImpl
+@@ -473,7 +478,8 @@ public class LayoutManagerChrome extends LayoutManagerImpl
  
              return direction == showTabSwitcherScrollDirection
                      || direction == ScrollDirection.LEFT
 -                    || direction == ScrollDirection.RIGHT;
 +                    || direction == ScrollDirection.RIGHT
-+                    || direction == ScrollDirection.UP;
++                    || (direction == ScrollDirection.UP && mSupportSwipeUp);
          }
      }
  
@@ -1755,7 +1731,7 @@ diff --git a/chrome/browser/android/compositor/scene_layer/tab_strip_scene_layer
 -  layer()->SetPosition(gfx::PointF(0, y_offset));
 +  if (base::FeatureList::IsEnabled(::features::kMoveTopToolbarToBottom)) {
 +    // do not move the whole layer (which also contains the contents) but only the tab strip layer
-+    tab_strip_layer_->SetPosition(gfx::PointF(0, y_offset));
++    background_layer_->SetPosition(gfx::PointF(0, y_offset));
 +  } else {
 +    layer()->SetPosition(gfx::PointF(0, y_offset));
 +  }
@@ -2243,6 +2219,53 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
          ContextThemeWrapper wrapper =
                  new ContextThemeWrapper(mContext, R.style.OverflowMenuThemeOverlay);
  
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/DeferredIMEWindowInsetApplicationCallback.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/DeferredIMEWindowInsetApplicationCallback.java
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/DeferredIMEWindowInsetApplicationCallback.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/DeferredIMEWindowInsetApplicationCallback.java
+@@ -32,6 +32,7 @@ public class DeferredIMEWindowInsetApplicationCallback
+     private static final int NO_DEFERRED_KEYBOARD_HEIGHT = -1;
+     private int mDeferredKeyboardHeight = NO_DEFERRED_KEYBOARD_HEIGHT;
+     private int mKeyboardHeight;
++    private int mSystemBarInsetsBottom;
+     private boolean mAnimationInProgress;
+     private WindowInsetsAnimationCompat mCurrentAnimation;
+     private InsetObserver mInsetObserver;
+@@ -86,6 +87,10 @@ public class DeferredIMEWindowInsetApplicationCallback
+         return mKeyboardHeight;
+     }
+ 
++    public int getSystemBarInsetsBottom() {
++        return mSystemBarInsetsBottom;
++    }
++
+     @Override
+     public void onPrepare(@NonNull WindowInsetsAnimationCompat animation) {
+         if ((animation.getTypeMask() & WindowInsetsCompat.Type.ime()) == 0) return;
+@@ -121,11 +126,13 @@ public class DeferredIMEWindowInsetApplicationCallback
+     public WindowInsetsCompat onApplyWindowInsets(
+             @NonNull View view, @NonNull WindowInsetsCompat windowInsetsCompat) {
+         int newKeyboardHeight = 0;
++        mSystemBarInsetsBottom = 0;
+         Insets imeInsets = windowInsetsCompat.getInsets(WindowInsetsCompat.Type.ime());
+         if (imeInsets.bottom > 0) {
+             Insets systemBarInsets =
+                     windowInsetsCompat.getInsets(WindowInsetsCompat.Type.systemBars());
+             newKeyboardHeight = imeInsets.bottom - systemBarInsets.bottom;
++            mSystemBarInsetsBottom = systemBarInsets.bottom;
+         }
+         // Keyboard going away or the change is not animated; apply immediately.
+         if (newKeyboardHeight < mKeyboardHeight || !mAnimationInProgress) {
+diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
+--- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
++++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarCoordinator.java
+@@ -206,6 +206,7 @@ public class LocationBarCoordinator
+                         uiOverrides.isForcedPhoneStyleOmnibox(),
+                         baseChromeLayout,
+                         deferredIMEWindowInsetApplicationCallback::getCurrentKeyboardHeight,
++                        deferredIMEWindowInsetApplicationCallback::getSystemBarInsetsBottom,
+                         bottomWindowPaddingSupplier);
+ 
+         mUrlBar = mLocationBarLayout.findViewById(R.id.url_bar);
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxSuggestionsDropdownEmbedderImpl.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxSuggestionsDropdownEmbedderImpl.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxSuggestionsDropdownEmbedderImpl.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/OmniboxSuggestionsDropdownEmbedderImpl.java
@@ -2262,7 +2285,30 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
  import org.chromium.ui.base.DeviceFormFactor;
  import org.chromium.ui.base.ViewUtils;
  import org.chromium.ui.base.WindowAndroid;
-@@ -108,6 +110,11 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -44,6 +46,7 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+     private final @NonNull View mAlignmentView;
+     private final boolean mForcePhoneStyleOmnibox;
+     private final Supplier<Integer> mKeyboardHeightSupplier;
++    private final Supplier<Integer> mSystemBarInsetsBottomSupplier;
+     private final Supplier<Integer> mBottomWindowPaddingSupplier;
+     private final @NonNull Context mContext;
+     // Reusable int array to pass to positioning methods that operate on a two element int array.
+@@ -82,12 +85,14 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+             boolean forcePhoneStyleOmnibox,
+             @Nullable View baseChromeLayout,
+             Supplier<Integer> keyboardHeightSupplier,
++            Supplier<Integer> systemBarInsetsBottomSupplier,
+             Supplier<Integer> bottomWindowPaddingSupplier) {
+         mWindowAndroid = windowAndroid;
+         mAnchorView = anchorView;
+         mAlignmentView = alignmentView;
+         mForcePhoneStyleOmnibox = forcePhoneStyleOmnibox;
+         mKeyboardHeightSupplier = keyboardHeightSupplier;
++        mSystemBarInsetsBottomSupplier = systemBarInsetsBottomSupplier;
+         mBottomWindowPaddingSupplier = bottomWindowPaddingSupplier;
+         mContext = mAnchorView.getContext();
+         mContext.registerComponentCallbacks(this);
+@@ -108,6 +113,11 @@ class OmniboxSuggestionsDropdownEmbedderImpl
          mOmniboxAlignmentSupplier.removeObserver(obs);
      }
  
@@ -2274,7 +2320,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
      @Nullable
      @Override
      public OmniboxAlignment getCurrentAlignment() {
-@@ -132,6 +139,9 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -132,6 +142,9 @@ class OmniboxSuggestionsDropdownEmbedderImpl
  
      @Override
      public void onDetachedFromWindow() {
@@ -2284,22 +2330,23 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          mAnchorView.removeOnLayoutChangeListener(this);
          mAlignmentView.removeOnLayoutChangeListener(this);
          mAnchorView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-@@ -218,6 +228,8 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -218,6 +231,9 @@ class OmniboxSuggestionsDropdownEmbedderImpl
  
          ViewUtils.getRelativeLayoutPosition(contentView, mAnchorView, mPositionArray);
          int top = mPositionArray[1] + mAnchorView.getMeasuredHeight() - contentView.getPaddingTop();
-+        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled())
++        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +            top -= mPositionArray[1];
++        }
          int left;
          int width;
          int paddingLeft;
-@@ -291,6 +303,12 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -291,6 +307,12 @@ class OmniboxSuggestionsDropdownEmbedderImpl
                          : contentView.getMeasuredHeight() - keyboardHeight;
          int height = Math.min(windowSpace, contentSpace) - top;
  
 +        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +            ViewCompat.setPaddingRelative(
-+                contentView, 0, 0, 0, keyboardHeight);
++                contentView, 0, 0, 0, keyboardHeight + mSystemBarInsetsBottomSupplier.get());
 +            top = 0;
 +        }
 +
@@ -2309,7 +2356,15 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java
-@@ -49,6 +49,7 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
+@@ -10,6 +10,7 @@ import android.view.KeyEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+ 
++import androidx.annotation.NonNull;
+ import androidx.annotation.ColorInt;
+ import androidx.annotation.VisibleForTesting;
+ import androidx.core.view.ViewCompat;
+@@ -49,6 +50,7 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
  import org.chromium.ui.modelutil.LazyConstructionPropertyMcp;
  import org.chromium.ui.modelutil.MVCListAdapter.ModelList;
  import org.chromium.ui.modelutil.PropertyModel;
@@ -2317,7 +2372,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
  
  import java.util.ArrayList;
  import java.util.List;
-@@ -68,6 +69,7 @@ public class AutocompleteCoordinator
+@@ -68,6 +70,7 @@ public class AutocompleteCoordinator
      private @Nullable OmniboxSuggestionsDropdown mDropdown;
      private ObserverList<OmniboxSuggestionsDropdownScrollListener> mScrollListenerList =
              new ObserverList<>();
@@ -2325,7 +2380,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
  
      /** An observer watching for changes to the visual state of the omnibox suggestions. */
      public interface OmniboxSuggestionsVisualStateObserver {
-@@ -102,6 +104,7 @@ public class AutocompleteCoordinator
+@@ -102,6 +105,7 @@ public class AutocompleteCoordinator
          Context context = parent.getContext();
  
          ModelList listItems = new ModelList();
@@ -2333,7 +2388,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          PropertyModel listModel =
                  new PropertyModel.Builder(SuggestionListProperties.ALL_KEYS)
                          .with(SuggestionListProperties.EMBEDDER, dropdownEmbedder)
-@@ -223,6 +226,16 @@ public class AutocompleteCoordinator
+@@ -223,6 +227,16 @@ public class AutocompleteCoordinator
  
                  dropdown.forcePhoneStyleOmnibox(forcePhoneStyleOmnibox);
                  dropdown.setAdapter(mAdapter);
@@ -2422,7 +2477,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/OmniboxSuggestionsDropdownEmbedder.java
-@@ -5,6 +5,7 @@
+@@ -5,11 +5,14 @@
  package org.chromium.chrome.browser.omnibox.suggestions;
  
  import android.annotation.SuppressLint;
@@ -2430,7 +2485,14 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
  
  import org.chromium.base.Callback;
  import org.chromium.build.annotations.NullMarked;
-@@ -118,6 +119,9 @@ public interface OmniboxSuggestionsDropdownEmbedder {
+ import org.chromium.build.annotations.Nullable;
+ 
++import androidx.annotation.NonNull;
++
+ import java.util.Objects;
+ 
+ /** Provider of capabilities required to embed the omnibox suggestion list into the UI. */
+@@ -118,6 +121,9 @@ public interface OmniboxSuggestionsDropdownEmbedder {
       */
      OmniboxAlignment getCurrentAlignment();
  
@@ -2910,7 +2972,7 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
          Preference captions = findPreference(PREF_CAPTIONS);
          captions.setOnPreferenceClickListener(
                  preference -> {
-@@ -187,6 +208,11 @@ public class AccessibilitySettings extends ChromeBaseSettingsFragment
+@@ -187,6 +208,12 @@ public class AccessibilitySettings extends ChromeBaseSettingsFragment
                      mDelegate.getBrowserContextHandle(), (Integer) newValue);
          } else if (PREF_PAGE_ZOOM_ALWAYS_SHOW.equals(preference.getKey())) {
              PageZoomUtils.setShouldAlwaysShowZoomMenuItem((Boolean) newValue);
@@ -2919,6 +2981,7 @@ diff --git a/components/browser_ui/accessibility/android/java/src/org/chromium/c
 +            mDelegate.requestRestart(getActivity());
 +        } else if (PREF_DISABLE_TOOLBAR_SWIPE_UP.equals(preference.getKey())) {
 +            mDisableToolbarSwipeUpDelegate.setValue((Boolean) newValue);
++            mDelegate.requestRestart(getActivity());
          } else if (PREF_PAGE_ZOOM_INCLUDE_OS_ADJUSTMENT.equals(preference.getKey())) {
              // TODO(mschillaci): Implement the override behavior for OS level.
          } else if (OmniboxFeatures.KEY_JUMP_START_OMNIBOX.equals(preference.getKey())) {

@@ -26,8 +26,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../origin_trials/features.cc                 |   1 +
  .../render_view_context_menu_base.cc          |   3 -
  .../aggregatable_report_sender.cc             |  15 +-
- .../attribution_data_host_manager_impl.cc     |   2 +
- .../attribution_reporting/attribution_host.cc |   1 +
+ .../attribution_data_host_manager_impl.cc     |   8 +-
+ .../attribution_reporting/attribution_host.cc |   3 +-
+ .../attribution_manager_impl.cc               |   4 -
  .../attribution_os_level_manager.cc           |   3 +-
  .../attribution_report_network_sender.cc      |   9 +
  .../attribution_storage_sql.cc                |   8 +-
@@ -38,7 +39,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../public/browser/content_browser_client.cc  |   7 +-
  .../public/browser/navigation_controller.cc   |   1 -
  .../Disable-conversion-measurement-api.inc    |   1 +
- .../Disable-conversion-measurement-api.inc    |   8 +
+ .../Disable-conversion-measurement-api.inc    |  10 +
  .../attribution/request_headers_internal.cc   |   1 +
  services/network/network_context.cc           |  20 -
  .../network/public/cpp/attribution_utils.cc   |   2 +
@@ -46,7 +47,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  third_party/blink/renderer/core/page/page.cc  |   2 +-
  .../platform/runtime_enabled_features.json5   |  20 +-
  ui/events/android/motion_event_android.cc     |   8 +-
- 35 files changed, 97 insertions(+), 420 deletions(-)
+ 36 files changed, 101 insertions(+), 430 deletions(-)
  create mode 100644 cromite_flags/services/network/public/cpp/features_cc/Disable-conversion-measurement-api.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc
 
@@ -274,7 +275,21 @@ diff --git a/content/browser/aggregation_service/aggregatable_report_sender.cc b
 diff --git a/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc b/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc
 --- a/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc
 +++ b/content/browser/attribution_reporting/attribution_data_host_manager_impl.cc
-@@ -1121,6 +1121,8 @@ void AttributionDataHostManagerImpl::ParseHeader(
+@@ -758,11 +758,9 @@ class AttributionDataHostManagerImpl::PendingRegistrationData {
+         headers->GetNormalizedHeader(
+             attribution_reporting::kAttributionReportingRegisterTriggerHeader);
+ 
+-    std::optional<std::string> os_source_header = headers->GetNormalizedHeader(
+-        attribution_reporting::kAttributionReportingRegisterOsSourceHeader);
++    std::optional<std::string> os_source_header;
+ 
+-    std::optional<std::string> os_trigger_header = headers->GetNormalizedHeader(
+-        attribution_reporting::kAttributionReportingRegisterOsTriggerHeader);
++    std::optional<std::string> os_trigger_header;
+ 
+     const bool has_source =
+         web_source_header.has_value() || os_source_header.has_value();
+@@ -1121,6 +1119,8 @@ void AttributionDataHostManagerImpl::ParseHeader(
      Registrations& registrations,
      HeaderPendingDecode pending_decode,
      Registrar registrar) {
@@ -286,7 +301,16 @@ diff --git a/content/browser/attribution_reporting/attribution_data_host_manager
 diff --git a/content/browser/attribution_reporting/attribution_host.cc b/content/browser/attribution_reporting/attribution_host.cc
 --- a/content/browser/attribution_reporting/attribution_host.cc
 +++ b/content/browser/attribution_reporting/attribution_host.cc
-@@ -318,6 +318,7 @@ void AttributionHost::NotifyNavigationRegistrationData(
+@@ -119,8 +119,6 @@ AttributionHost::AttributionHost(WebContents* web_contents)
+       attribution_reporting::features::kConversionMeasurement));
+ 
+ #if BUILDFLAG(IS_ANDROID)
+-  input_event_tracker_android_ =
+-      std::make_unique<AttributionInputEventTrackerAndroid>(web_contents);
+ #endif
+ }
+ 
+@@ -318,6 +316,7 @@ void AttributionHost::NotifyNavigationRegistrationData(
      return;
    }
  
@@ -294,6 +318,21 @@ diff --git a/content/browser/attribution_reporting/attribution_host.cc b/content
    auto* attribution_manager =
        AttributionManager::FromWebContents(web_contents());
    DCHECK(attribution_manager);
+diff --git a/content/browser/attribution_reporting/attribution_manager_impl.cc b/content/browser/attribution_reporting/attribution_manager_impl.cc
+--- a/content/browser/attribution_reporting/attribution_manager_impl.cc
++++ b/content/browser/attribution_reporting/attribution_manager_impl.cc
+@@ -573,11 +573,7 @@ bool IsOperationAllowed(
+ }
+ 
+ std::unique_ptr<AttributionOsLevelManager> CreateOsLevelManager() {
+-#if BUILDFLAG(IS_ANDROID)
+-  return std::make_unique<AttributionOsLevelManagerAndroid>();
+-#else
+   return std::make_unique<NoOpAttributionOsLevelManager>();
+-#endif
+ }
+ 
+ // Returns new report time if any.
 diff --git a/content/browser/attribution_reporting/attribution_os_level_manager.cc b/content/browser/attribution_reporting/attribution_os_level_manager.cc
 --- a/content/browser/attribution_reporting/attribution_os_level_manager.cc
 +++ b/content/browser/attribution_reporting/attribution_os_level_manager.cc
@@ -948,12 +987,12 @@ new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/services/network/public/cpp/features_cc/Disable-conversion-measurement-api.inc
 @@ -0,0 +1 @@
-+SET_CROMITE_FEATURE_DISABLED(kAttributionReportingCrossAppWeb);
++// none
 diff --git a/cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc b/cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc
 new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/third_party/blink/common/features_cc/Disable-conversion-measurement-api.inc
-@@ -0,0 +1,8 @@
+@@ -0,0 +1,10 @@
 +SET_CROMITE_FEATURE_DISABLED(kAdAuctionSignals);
 +SET_CROMITE_FEATURE_DISABLED(kBrowsingTopics);
 +SET_CROMITE_FEATURE_DISABLED(kBrowsingTopicsDocumentAPI);
@@ -962,6 +1001,8 @@ new file mode 100644
 +SET_CROMITE_FEATURE_DISABLED(kFledgeBiddingAndAuctionServer);
 +SET_CROMITE_FEATURE_DISABLED(kInterestGroupStorage);
 +SET_CROMITE_FEATURE_DISABLED(kPrivateAggregationApi);
++SET_CROMITE_FEATURE_DISABLED(kBiddingAndScoringDebugReportingAPI);
++SET_CROMITE_FEATURE_DISABLED(kAllowURNsInIframes);
 diff --git a/services/network/attribution/request_headers_internal.cc b/services/network/attribution/request_headers_internal.cc
 --- a/services/network/attribution/request_headers_internal.cc
 +++ b/services/network/attribution/request_headers_internal.cc

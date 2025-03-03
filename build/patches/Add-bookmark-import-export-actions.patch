@@ -26,9 +26,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../bookmarks/BookmarkToolbarViewBinder.java  |   6 +
  .../native_page/NativePageFactory.java        |  11 +-
  chrome/browser/BUILD.gn                       |  11 +-
- .../bookmarks/android/bookmark_bridge.cc      | 277 +++++++++++++++++
- .../bookmarks/android/bookmark_bridge.h       |  29 +-
- .../browser/bookmarks/bookmark_html_writer.cc |   3 +
+ .../bookmarks/android/bookmark_bridge.cc      | 267 ++++++++++++++++
+ .../bookmarks/android/bookmark_bridge.h       |  30 +-
  .../dialogs/DownloadLocationCustomView.java   |   8 +-
  .../DownloadLocationDialogCoordinator.java    |  10 +-
  .../flags/android/chrome_feature_list.cc      |   1 +
@@ -53,7 +52,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  ui/shell_dialogs/select_file_dialog_linux.cc  |   4 +
  ui/shell_dialogs/select_file_dialog_linux.h   |   2 +
  ui/shell_dialogs/select_file_dialog_win.cc    |   5 +
- 42 files changed, 900 insertions(+), 30 deletions(-)
+ 41 files changed, 888 insertions(+), 30 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_h/add-bookmark-import-export-actions.inc
@@ -871,7 +870,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
  // Must come after all headers that specialize FromJniType() / ToJniType().
  #include "chrome/android/chrome_jni_headers/BookmarkBridge_jni.h"
  
-@@ -84,12 +106,97 @@ using bookmarks::android::JavaBookmarkIdGetType;
+@@ -84,6 +106,57 @@ using bookmarks::android::JavaBookmarkIdGetType;
  using content::BrowserThread;
  using power_bookmarks::PowerBookmarkMeta;
  
@@ -910,7 +909,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
 +      }
 +    }
 +
-+    if (base::Contains(chrome::ChromeDebugURLs(), fixed_url)) {
++    if (base::Contains(chrome::ChromeDebugURLs(), fixed_url.spec())) {
 +      return true;
 +    }
 +
@@ -929,47 +928,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
  namespace {
  // The key used to connect the instance of the bookmark bridge to the bookmark
  // model.
- const char kBookmarkBridgeUserDataKey[] = "bookmark_bridge";
- 
- // Compares titles of different instance of BookmarkNode.
-+class FileBookmarksExportObserver: public BookmarksExportObserver {
-+  public:
-+  FileBookmarksExportObserver(
-+           const JavaParamRef<jobject>& obj,
-+           ui::WindowAndroid* window,
-+           const std::string& export_path) :
-+    obj_(ScopedJavaGlobalRef<jobject>(obj)),
-+    window_(window),
-+    export_path_(export_path) {}
-+
-+  void OnExportFinished(Result result) override {
-+    if (result == Result::kSuccess) {
-+      LOG(INFO) << "Bookmarks exported successfully to " << export_path_;
-+    } else if (result == Result::kCouldNotCreateFile) {
-+      LOG(ERROR) << "Bookmarks export: could not create file " << export_path_;
-+    } else if (result == Result::kCouldNotWriteHeader) {
-+      LOG(ERROR) << "Bookmarks export: could not write header";
-+    } else if (result == Result::kCouldNotWriteNodes) {
-+      LOG(ERROR) << "Bookmarks export: could not write nodes";
-+    }
-+
-+    JNIEnv* env = AttachCurrentThread();
-+    Java_BookmarkBridge_bookmarksExported(env, obj_, window_->GetJavaObject(),
-+                                          ConvertUTF8ToJavaString(env, export_path_),
-+                                          result == Result::kSuccess);
-+    delete this;
-+  }
-+
-+  private:
-+  const ScopedJavaGlobalRef<jobject> obj_;
-+  raw_ptr<ui::WindowAndroid> window_;
-+  const std::string export_path_;
-+};
-+
- class BookmarkTitleComparer {
-  public:
-   explicit BookmarkTitleComparer(BookmarkBridge* bookmark_bridge,
-@@ -231,6 +338,10 @@ BookmarkBridge::~BookmarkBridge() {
+@@ -231,6 +304,10 @@ BookmarkBridge::~BookmarkBridge() {
    partner_bookmarks_shim_observation_.Reset();
    bookmark_model_observation_.Reset();
    profile_observation_.Reset();
@@ -980,7 +939,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
  }
  
  void BookmarkBridge::Destroy(JNIEnv* env) {
-@@ -765,6 +876,172 @@ jint BookmarkBridge::GetTotalBookmarkCount(
+@@ -765,6 +842,196 @@ jint BookmarkBridge::GetTotalBookmarkCount(
    return count;
  }
  
@@ -1038,8 +997,32 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
 +    export_path_ = export_path_.Append(FILE_PATH_LITERAL("bookmarks.html"));
 +  }
 +
-+  observer_ = new FileBookmarksExportObserver(obj, window, export_path_.MaybeAsASCII());
-+  bookmark_html_writer::WriteBookmarks(profile_, export_path_, observer_);
++  bookmark_html_writer::WriteBookmarks(profile_, export_path_,
++    base::BindOnce(&BookmarkBridge::ExportBookmarksEnd,
++                   weak_ptr_factory_.GetWeakPtr(),
++                   base::android::ScopedJavaGlobalRef<jobject>(obj),
++                   window));
++}
++
++void BookmarkBridge::ExportBookmarksEnd(const ScopedJavaGlobalRef<jobject>& obj,
++                                        ui::WindowAndroid* window,
++                                        bookmark_html_writer::Result result) const
++{
++  auto export_path = export_path_.MaybeAsASCII();
++  if (result == bookmark_html_writer::Result::kSuccess) {
++    LOG(INFO) << "Bookmarks exported successfully to " << export_path;
++  } else if (result == bookmark_html_writer::Result::kCouldNotCreateFile) {
++    LOG(ERROR) << "Bookmarks export: could not create file " << export_path;
++  } else if (result == bookmark_html_writer::Result::kCouldNotWriteHeader) {
++    LOG(ERROR) << "Bookmarks export: could not write header";
++  } else if (result == bookmark_html_writer::Result::kCouldNotWriteNodes) {
++    LOG(ERROR) << "Bookmarks export: could not write nodes";
++  }
++
++  JNIEnv* env = AttachCurrentThread();
++  Java_BookmarkBridge_bookmarksExported(env, obj, window->GetJavaObject(),
++    base::android::ConvertUTF8ToJavaString(env, export_path),
++    result == bookmark_html_writer::Result::kSuccess);
 +}
 +
 +// Attempts to create a TemplateURL from the provided data. |title| is optional.
@@ -1196,7 +1179,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.h b/chrome/browser
    jboolean IsEditBookmarksEnabled(JNIEnv* env);
  
    void LoadEmptyPartnerBookmarkShimForTesting(JNIEnv* env);
-@@ -93,6 +103,15 @@ class BookmarkBridge : public ProfileObserver,
+@@ -93,6 +103,17 @@ class BookmarkBridge : public ProfileObserver,
                                                               jlong id,
                                                               jint type);
  
@@ -1208,21 +1191,22 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.h b/chrome/browser
 +                        const base::android::JavaParamRef<jobject>& obj,
 +                        const base::android::JavaParamRef<jobject>& java_window,
 +                        const base::android::JavaParamRef<jstring>& j_export_path);
++  void ExportBookmarksEnd(const base::android::ScopedJavaGlobalRef<jobject>& obj,
++                        ui::WindowAndroid* window, bookmark_html_writer::Result result) const;
 +
    void GetAllFoldersWithDepths(
        JNIEnv* env,
        const base::android::JavaParamRef<jobject>& j_folders_obj,
-@@ -362,6 +381,9 @@ class BookmarkBridge : public ProfileObserver,
+@@ -362,6 +383,8 @@ class BookmarkBridge : public ProfileObserver,
    void CreateOrDestroyAccountReadingListManagerIfNeeded();
  
    const raw_ptr<Profile> profile_;  // weak
 +  base::FilePath export_path_;
-+  raw_ptr<BookmarksExportObserver> observer_; // weak
 +
    base::android::ScopedJavaGlobalRef<jobject> java_bookmark_model_;
    const raw_ptr<bookmarks::BookmarkModel> bookmark_model_;  // weak
    const raw_ptr<bookmarks::ManagedBookmarkService>
-@@ -376,6 +398,7 @@ class BookmarkBridge : public ProfileObserver,
+@@ -376,6 +399,7 @@ class BookmarkBridge : public ProfileObserver,
    std::unique_ptr<bookmarks::ScopedGroupBookmarkActions>
        grouped_bookmark_actions_;
    PrefChangeRegistrar pref_change_registrar_;
@@ -1230,7 +1214,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.h b/chrome/browser
  
    // Information about the Partner bookmarks (must check for IsLoaded()).
    // This is owned by profile.
-@@ -407,6 +430,10 @@ class BookmarkBridge : public ProfileObserver,
+@@ -407,6 +431,10 @@ class BookmarkBridge : public ProfileObserver,
  
    bool suppress_observer_notifications_ = false;
  
@@ -1241,19 +1225,6 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.h b/chrome/browser
    // Weak pointers for creating callbacks that won't call into a destroyed
    // object.
    base::WeakPtrFactory<BookmarkBridge> weak_ptr_factory_;
-diff --git a/chrome/browser/bookmarks/bookmark_html_writer.cc b/chrome/browser/bookmarks/bookmark_html_writer.cc
---- a/chrome/browser/bookmarks/bookmark_html_writer.cc
-+++ b/chrome/browser/bookmarks/bookmark_html_writer.cc
-@@ -36,6 +36,9 @@
- #include "base/task/thread_pool.h"
- #include "base/time/time.h"
- #include "base/values.h"
-+#if BUILDFLAG(IS_ANDROID)
-+#include "base/android/content_uri_utils.h"
-+#endif
- #include "chrome/browser/bookmarks/bookmark_model_factory.h"
- #include "chrome/browser/favicon/favicon_service_factory.h"
- #include "chrome/browser/profiles/profile.h"
 diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationCustomView.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationCustomView.java
 --- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationCustomView.java
 +++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/dialogs/DownloadLocationCustomView.java
