@@ -24,6 +24,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../tab_management/TabGroupUiViewBinder.java  |   3 +
  .../tab_management/TabListCoordinator.java    | 162 +++++++++++++++++-
  .../TabListEmptyCoordinator.java              |  17 +-
+ .../tab_management/TabSwitcherPaneBase.java   |   9 +
  .../browser/feed/FeedSurfaceCoordinator.java  |   4 +
  .../ChromeAccessibilitySettingsDelegate.java  |  70 ++++++++
  .../compositor/CompositorViewHolder.java      |   7 +
@@ -68,7 +69,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../ui/appmenu/AppMenuHandlerImpl.java        |  10 ++
  ...rredIMEWindowInsetApplicationCallback.java |   7 +
  .../omnibox/LocationBarCoordinator.java       |   1 +
- ...mniboxSuggestionsDropdownEmbedderImpl.java |  22 +++
+ ...mniboxSuggestionsDropdownEmbedderImpl.java |  31 ++++
  .../suggestions/AutocompleteCoordinator.java  |  14 ++
  .../suggestions/AutocompleteMediator.java     |   6 +-
  .../DropdownItemViewInfoListManager.java      |   1 +
@@ -93,7 +94,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../AccessibilitySettingsDelegate.java        |   8 +
  .../render_widget_host_view_android.cc        |   3 +
  .../Move-navigation-bar-to-bottom.inc         |  17 ++
- 80 files changed, 1021 insertions(+), 77 deletions(-)
+ 81 files changed, 1039 insertions(+), 77 deletions(-)
  create mode 100644 chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/ReversedLinearLayout.java
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Move-navigation-bar-to-bottom.inc
 
@@ -677,6 +678,39 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
          }
          setEmptyViewVisibility(View.GONE);
      }
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabSwitcherPaneBase.java
+@@ -40,6 +40,7 @@ import org.chromium.base.task.PostTask;
+ import org.chromium.base.task.TaskTraits;
+ import org.chromium.build.BuildConfig;
+ import org.chromium.chrome.browser.compositor.CompositorViewHolder;
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.hub.DisplayButtonData;
+ import org.chromium.chrome.browser.hub.FadeHubLayoutAnimationFactory;
+ import org.chromium.chrome.browser.hub.FullButtonData;
+@@ -152,6 +153,7 @@ public abstract class TabSwitcherPaneBase implements Pane, TabSwitcher, TabSwitc
+     private boolean mNativeInitialized;
+     private @Nullable PaneHubController mPaneHubController;
+     private @Nullable Long mWaitForTabStateInitializedStartTimeMs;
++    private boolean isFirstRequest = true;
+ 
+     /**
+      * @param context The activity context.
+@@ -396,6 +398,13 @@ public abstract class TabSwitcherPaneBase implements Pane, TabSwitcher, TabSwitc
+                         Log.d(TAG, "Geometry not ready using fallback animation.");
+                         useFallbackAnimation = true;
+                     }
++                    if (isFirstRequest) {
++                        isFirstRequest = false;
++                        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
++                            // skip first tab animation since rects are fake
++                            return;
++                        }
++                    }
+                     // Ignore left offset and just ensure the width is correct. See crbug/1502437.
+                     initialRect.offset(-leftOffset, -initialTopOffset);
+                     finalRect.offset(-leftOffset, -finalTopOffset);
 diff --git a/chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/FeedSurfaceCoordinator.java b/chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/FeedSurfaceCoordinator.java
 --- a/chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/FeedSurfaceCoordinator.java
 +++ b/chrome/android/feed/core/java/src/org/chromium/chrome/browser/feed/FeedSurfaceCoordinator.java
@@ -2320,17 +2354,18 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
      @Nullable
      @Override
      public OmniboxAlignment getCurrentAlignment() {
-@@ -132,6 +142,9 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -132,6 +142,10 @@ class OmniboxSuggestionsDropdownEmbedderImpl
  
      @Override
      public void onDetachedFromWindow() {
 +        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +            recalculateOmniboxAlignment();
++            detachKeyboardAlignment();
 +        }
          mAnchorView.removeOnLayoutChangeListener(this);
          mAlignmentView.removeOnLayoutChangeListener(this);
          mAnchorView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
-@@ -218,6 +231,9 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -218,6 +232,9 @@ class OmniboxSuggestionsDropdownEmbedderImpl
  
          ViewUtils.getRelativeLayoutPosition(contentView, mAnchorView, mPositionArray);
          int top = mPositionArray[1] + mAnchorView.getMeasuredHeight() - contentView.getPaddingTop();
@@ -2340,7 +2375,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          int left;
          int width;
          int paddingLeft;
-@@ -291,6 +307,12 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+@@ -291,6 +308,12 @@ class OmniboxSuggestionsDropdownEmbedderImpl
                          : contentView.getMeasuredHeight() - keyboardHeight;
          int height = Math.min(windowSpace, contentSpace) - top;
  
@@ -2353,6 +2388,21 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          // TODO(pnoland@, https://crbug.com/1416985): avoid pushing changes that are identical to
          // the previous alignment value.
          OmniboxAlignment omniboxAlignment =
+@@ -299,6 +322,14 @@ class OmniboxSuggestionsDropdownEmbedderImpl
+         mOmniboxAlignmentSupplier.set(omniboxAlignment);
+     }
+ 
++    private void detachKeyboardAlignment() {
++        View contentView = mBaseChromeLayout;
++        if (contentView == null) {
++            contentView = mAnchorView.getRootView().findViewById(android.R.id.content);
++        }
++        ViewCompat.setPaddingRelative(contentView, 0, 0, 0, 0);
++    }
++
+     /**
+      * Returns whether the given view's position in the window has changed since the last call to
+      * offsetInWindowChanged().
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/AutocompleteCoordinator.java
