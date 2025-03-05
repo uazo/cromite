@@ -50,10 +50,6 @@ The following files will be present for each release:
 - [arm_ChromePublic.apk](https://github.com/uazo/cromite/releases/latest/download/arm_ChromePublic.apk)
 - [x64_ChromePublic.apk](https://github.com/uazo/cromite/releases/latest/download/x64_ChromePublic.apk)
 
-#### Cromite System WebView apk for android:
-- [arm64_SystemWebView.apk](https://github.com/uazo/cromite/releases/latest/download/arm64_SystemWebView.apk)
-- [x64_SystemWebView.apk](https://github.com/uazo/cromite/releases/latest/download/x64_SystemWebView.apk)
-
 #### Linux package:
 - [chrome-lin64.tar.gz](https://github.com/uazo/cromite/releases/latest/download/chrome-lin64.tar.gz)
 
@@ -72,6 +68,10 @@ The following files will be present for each release:
 - updateurl.txt
 
 Additional files are also available: please note that these files are created by an [additional build](https://github.com/uazo/cromite/actions/workflows/build_additional_targets.yaml) separate from the release process, and therefore may not be immediately available.
+
+#### Cromite System WebView apk for android:
+- arm64_SystemWebView.apk
+- x64_SystemWebView.apk
 
 #### Vanilla Chromium for android (used for tests):
 - arm64_VanillaChromium.apk
