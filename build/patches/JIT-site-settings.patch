@@ -22,8 +22,12 @@ Require: Content-settings-infrastructure.patch
  .../javascript_jit.grdp                       |  21 ++++
  .../javascript_jit.inc                        |  12 +++
  .../core/browser/content_settings_registry.cc |   2 +-
+ .../renderer_host/navigation_request.cc       |   7 +-
  .../renderer_host/render_process_host_impl.cc |   3 +
- 10 files changed, 130 insertions(+), 1 deletion(-)
+ content/browser/site_info.cc                  |   7 ++
+ content/browser/url_info.cc                   |   6 ++
+ content/browser/url_info.h                    |   3 +
+ 14 files changed, 152 insertions(+), 2 deletions(-)
  create mode 100644 components/browser_ui/site_settings/android/java/res/drawable-hdpi/permission_javascript_jit.png
  create mode 100644 components/browser_ui/site_settings/android/java/res/drawable-mdpi/permission_javascript_jit.png
  create mode 100644 components/browser_ui/site_settings/android/java/res/drawable-xhdpi/permission_javascript_jit.png
@@ -284,6 +288,28 @@ diff --git a/components/content_settings/core/browser/content_settings_registry.
             /*allowlisted_primary_schemes=*/{},
             /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
             WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -4059,12 +4059,17 @@ UrlInfo NavigationRequest::GetUrlInfo() {
+   // Compute the WebExposedIsolationInfo that will be bundled into UrlInfo.
+   auto web_exposed_isolation_info = ComputeWebExposedIsolationInfo();
+ 
++  url::Origin top_origin = frame_tree_node_
++    ->current_frame_host()
++    ->GetMainFrame()->GetLastCommittedOrigin();
++
+   UrlInfoInit url_info_init(GetURL());
+   url_info_init.WithOriginIsolationRequest(isolation_request)
+       .WithCOOPSiteIsolation(ShouldRequestSiteIsolationForCOOP())
+       .WithWebExposedIsolationInfo(web_exposed_isolation_info)
+       .WithCrossOriginIsolationKey(cross_origin_isolation_key)
+-      .WithIsPdf(is_pdf_);
++      .WithIsPdf(is_pdf_)
++      .WithTopOrigin(top_origin);
+ 
+   // Records in the UrlInfo if COOP: same-origin or COOP: restrict-properties
+   // was set, and from which origin.
 diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content/browser/renderer_host/render_process_host_impl.cc
 --- a/content/browser/renderer_host/render_process_host_impl.cc
 +++ b/content/browser/renderer_host/render_process_host_impl.cc
@@ -297,4 +323,71 @@ diff --git a/content/browser/renderer_host/render_process_host_impl.cc b/content
    } else if (AreV8OptimizationsDisabled()) {
      command_line->AppendSwitchASCII(blink::switches::kJavaScriptFlags,
                                      "--disable-optimizing-compilers");
+diff --git a/content/browser/site_info.cc b/content/browser/site_info.cc
+--- a/content/browser/site_info.cc
++++ b/content/browser/site_info.cc
+@@ -265,6 +265,13 @@ SiteInfo SiteInfo::CreateInternal(const IsolationContext& isolation_context,
+     is_jitless =
+         is_jitless || GetContentClient()->browser()->IsJitDisabledForSite(
+                           browser_context, lock_url);
++    if (url_info.top_origin.has_value()) {
++      GURL top_origin = url_info.top_origin->GetURL();
++      if (!GetContentClient()->browser()->IsJitDisabledForSite(
++              browser_context, top_origin)) {
++        is_jitless = false;
++      }
++    }
+     are_v8_optimizations_disabled =
+         GetContentClient()->browser()->AreV8OptimizationsDisabledForSite(
+             browser_context, lock_url);
+diff --git a/content/browser/url_info.cc b/content/browser/url_info.cc
+--- a/content/browser/url_info.cc
++++ b/content/browser/url_info.cc
+@@ -24,6 +24,7 @@ UrlInfo::UrlInfo(const UrlInfoInit& init)
+       is_prefetch_with_cross_site_contamination(
+           init.is_prefetch_with_cross_site_contamination_),
+       origin(init.origin_),
++      top_origin(init.top_origin_),
+       is_sandboxed(init.is_sandboxed_),
+       unique_sandbox_id(init.unique_sandbox_id_),
+       storage_partition_config(init.storage_partition_config_),
+@@ -138,6 +139,11 @@ UrlInfoInit& UrlInfoInit::WithOrigin(const url::Origin& origin) {
+   return *this;
+ }
+ 
++UrlInfoInit& UrlInfoInit::WithTopOrigin(const url::Origin& origin) {
++  top_origin_ = origin;
++  return *this;
++}
++
+ UrlInfoInit& UrlInfoInit::WithSandbox(bool is_sandboxed) {
+   is_sandboxed_ = is_sandboxed;
+   return *this;
+diff --git a/content/browser/url_info.h b/content/browser/url_info.h
+--- a/content/browser/url_info.h
++++ b/content/browser/url_info.h
+@@ -168,6 +168,7 @@ struct CONTENT_EXPORT UrlInfo {
+   // and origin checks that require a UrlInfo.  Investigate whether there's a
+   // cleaner way to organize these checks.  See https://crbug.com/1320402.
+   std::optional<url::Origin> origin;
++  std::optional<url::Origin> top_origin;
+ 
+   // If url is being loaded in a frame that is in a origin-restricted sandboxed,
+   // then this flag will be true.
+@@ -244,6 +245,7 @@ class CONTENT_EXPORT UrlInfoInit {
+   UrlInfoInit& WithCOOPSiteIsolation(bool requests_coop_isolation);
+   UrlInfoInit& WithCrossSitePrefetchContamination(bool contaminated);
+   UrlInfoInit& WithOrigin(const url::Origin& origin);
++  UrlInfoInit& WithTopOrigin(const url::Origin& origin);
+   UrlInfoInit& WithSandbox(bool is_sandboxed);
+   UrlInfoInit& WithUniqueSandboxId(int unique_sandbox_id);
+   UrlInfoInit& WithStoragePartitionConfig(
+@@ -269,6 +271,7 @@ class CONTENT_EXPORT UrlInfoInit {
+   bool requests_coop_isolation_ = false;
+   bool is_prefetch_with_cross_site_contamination_ = false;
+   std::optional<url::Origin> origin_;
++  std::optional<url::Origin> top_origin_;
+   bool is_sandboxed_ = false;
+   int64_t unique_sandbox_id_ = UrlInfo::kInvalidUniqueSandboxId;
+   std::optional<StoragePartitionConfig> storage_partition_config_;
 --
