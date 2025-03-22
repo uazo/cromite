@@ -21,6 +21,32 @@ do
   pushd filters
   
   KO=0
+  curl -O https://easylist-downloads.adblockplus.org/abpindo.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/abpvn.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/bulgarian_list.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/dandelion_sprouts_nordic_filters.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistchina.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistczechslovak.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistdutch.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistgermany.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/israellist.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/hufilter.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistitaly.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistlithuania.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistpolish.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistportuguese.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/easylistspanish.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/global-filters.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/indianlist.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/japanese-filters.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/koreanlist.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/latvianlist.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/liste_ar.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/liste_fr.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/rolist.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/ruadlist.txt || KO=1
+  curl -O https://easylist-downloads.adblockplus.org/turkish-filters.txt || KO=1
+
   curl -O https://easylist-downloads.adblockplus.org/abp-filters-anti-cv.txt || KO=1
   curl -O https://easylist-downloads.adblockplus.org/easylist.txt || KO=1
   curl -O https://easylist-downloads.adblockplus.org/abpindo+easylist.txt || KO=1
