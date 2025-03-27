@@ -69,14 +69,14 @@
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/browser_plugin/browser_plugin_embedder.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
+#include "content/browser/btm/btm_bounce_detector.h"
+#include "content/browser/btm/btm_navigation_flow_detector.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/closewatcher/close_listener_manager.h"
 #include "content/browser/compositor/surface_utils.h"
 #include "content/browser/device_posture/device_posture_provider_impl.h"
 #include "content/browser/devtools/protocol/page_handler.h"
 #include "content/browser/devtools/render_frame_devtools_agent_host.h"
-#include "content/browser/dips/dips_bounce_detector.h"
-#include "content/browser/dips/dips_navigation_flow_detector.h"
 #include "content/browser/display_cutout/display_cutout_host_impl.h"
 #include "content/browser/dom_storage/dom_storage_context_wrapper.h"
 #include "content/browser/dom_storage/session_storage_namespace_impl.h"
@@ -177,6 +177,7 @@
 #include "partition_alloc/buildflags.h"
 #include "ppapi/buildflags/buildflags.h"
 #include "services/device/public/mojom/wake_lock.mojom.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/request_destination.h"
 #include "services/network/public/cpp/web_sandbox_flags.h"
 #include "services/network/public/mojom/network_context.mojom.h"
@@ -709,6 +710,14 @@ void RecordRendererUnresponsiveMetrics(
   base::UmaHistogramEnumeration(
       "Renderer.Unresponsive.WidgetVisible.RenderProcessHostPriority",
       rph_priority);
+}
+
+// Helper function to simplify getting the correct HostZoomMapImpl for a
+// RenderFrameHost. Implemented here to be close to its only consumer,
+// GetPendingZoomLevel().
+HostZoomMapImpl* HostZoomMapForRenderFrameHost(const RenderFrameHost* rfh) {
+  return static_cast<HostZoomMapImpl*>(
+      HostZoomMap::Get(rfh->GetSiteInstance()));
 }
 
 }  // namespace
@@ -1311,16 +1320,29 @@ WebContentsImpl::WebContentsImpl(BrowserContext* browser_context)
       std::make_unique<ScreenChangeMonitor>(base::BindRepeating(
           &WebContentsImpl::OnScreensChange, base::Unretained(this)));
 
-  if (base::FeatureList::IsEnabled(blink::features::kSharedStorageAPI)) {
+  if (base::FeatureList::IsEnabled(network::features::kSharedStorageAPI)) {
     SharedStorageBudgetCharger::CreateForWebContents(this);
   }
 
   if (input::IsTransferInputToVizSupported()) {
-    GetHostFrameSinkManager()->SetupRenderInputRouterDelegateConnection(
-        compositor_frame_sink_grouping_id_,
-        rir_delegate_client_receiver_.BindNewPipeAndPassRemote(),
-        rir_delegate_remote_.BindNewPipeAndPassReceiver());
+    SetupRenderInputRouterDelegateConnection();
   }
+}
+
+void WebContentsImpl::SetupRenderInputRouterDelegateConnection() {
+  // Handles setting up GPU mojo endpoint connections. In general, the number of
+  // retries for setting up these mojo connections is capped by the maximum
+  // number of attempts to restart the GPU process, see
+  // GpuProcessHost::GetFallbackCrashLimit().
+  rir_delegate_client_receiver_.reset();
+  rir_delegate_remote_.reset();
+  GetHostFrameSinkManager()->SetupRenderInputRouterDelegateConnection(
+      compositor_frame_sink_grouping_id_,
+      rir_delegate_client_receiver_.BindNewPipeAndPassRemote(),
+      rir_delegate_remote_.BindNewPipeAndPassReceiver());
+  rir_delegate_client_receiver_.set_disconnect_handler(
+      base::BindOnce(&WebContentsImpl::SetupRenderInputRouterDelegateConnection,
+                     weak_factory_.GetWeakPtr()));
 }
 
 WebContentsImpl::~WebContentsImpl() {
@@ -2243,12 +2265,9 @@ void WebContentsImpl::UpdateZoomIfNecessary(const std::string& scheme,
                                             RenderFrameHostImpl* rfh) {
   OPTIONAL_TRACE_EVENT2("content", "WebContentsImpl::UpdateZoomIfNecessary",
                         "scheme", scheme, "host", host);
-  NavigationEntry* entry = rfh->GetController().GetLastCommittedEntry();
-  if (!entry) {
-    return;
-  }
 
-  GURL url = HostZoomMap::GetURLFromEntry(entry);
+  // The following code expects that rfh has its own independent zoom.
+  GURL url = HostZoomMap::GetURLForRenderFrameHost(rfh->GetGlobalId());
   if (host != net::GetHostOrSpecFromURL(url) ||
       (!scheme.empty() && !url.SchemeIs(scheme))) {
     return;
@@ -3502,6 +3521,18 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
 
 #if BUILDFLAG(IS_ANDROID)
   prefs.long_press_link_select_text = long_press_link_select_text_;
+
+  if (base::FeatureList::IsEnabled(
+          features::kRestrictOrientationLockToPhones)) {
+    // Only lock fullscreen orientation if the provider allows it, and if the
+    // prefs currently want to do so.  While current behavior happens to match
+    // exactly with the provider claiming to support orientation lock, we still
+    // want to give the cache the opportunity to turn it off for other reasons.
+    // For example, if a foldable is folded, then the prefs cache should notify
+    // us that the behavior may have changed.
+    prefs.video_fullscreen_orientation_lock_enabled &=
+        screen_orientation_provider_->IsOrientationLockSupported();
+  }
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -3726,7 +3757,7 @@ void WebContentsImpl::OnVibrate(RenderFrameHostImpl* rfh) {
   observers_.NotifyObservers(&WebContentsObserver::VibrationRequested);
 }
 
-std::optional<blink::ParsedPermissionsPolicy>
+std::optional<network::ParsedPermissionsPolicy>
 WebContentsImpl::GetPermissionsPolicyForIsolatedWebApp(
     RenderFrameHostImpl* source) {
   WebExposedIsolationInfo weii =
@@ -4085,6 +4116,12 @@ void WebContentsImpl::RenderWidgetWasResized(
 
   observers_.NotifyObservers(&WebContentsObserver::PrimaryMainFrameWasResized,
                              width_changed);
+}
+
+bool WebContentsImpl::PreHandleMouseEvent(const blink::WebMouseEvent& event) {
+  OPTIONAL_TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("content.verbose"),
+                        "WebContentsImpl::PreHandleMouseEvent");
+  return delegate_ ? delegate_->PreHandleMouseEvent(this, event) : false;
 }
 
 KeyboardEventProcessingResult WebContentsImpl::PreHandleKeyboardEvent(
@@ -7151,6 +7188,15 @@ void WebContentsImpl::OnFirstContentfulPaintInPrimaryMainFrame() {
       &WebContentsObserver::OnFirstContentfulPaintInPrimaryMainFrame);
 }
 
+gfx::NativeWindow WebContentsImpl::GetOwnerNativeWindow() {
+  return GetTopLevelNativeWindow();
+}
+
+media::PictureInPictureEventsInfo::AutoPipReason
+WebContentsImpl::GetAutoPipReason() const {
+  return GetContentClient()->browser()->GetAutoPipReason(*this);
+}
+
 void WebContentsImpl::NotifyChangedNavigationState(
     InvalidateTypes changed_flags) {
   NotifyNavigationStateChanged(changed_flags);
@@ -8656,15 +8702,35 @@ void WebContentsImpl::RunFileChooser(
 }
 
 double WebContentsImpl::GetPendingZoomLevel(RenderWidgetHostImpl* rwh) {
-  // TODO(372932834): This needs to be modified for the PDF-in-OOPIF case, as
-  // while the PDF will have its own RenderWidgetHost, the associated
-  // RenderFrameHost won't always be at the root of a FrameTree (and the
-  // FrameTree won't be of type kGuest).
-  // Note: this could involve (something like) detecting that the rfh for `rwh`
-  // is *not* a frame-tree root, but *does* have a temporary zoom level set in
-  // HostZoomMap.
-  RenderFrameHostImpl* rfh =
-      rwh->frame_tree()->root()->current_frame_host()->GetOutermostMainFrame();
+  RenderFrameHostImpl* rfh = nullptr;
+  // Find the RenderFrameHost for `rwh`.
+  ForEachRenderFrameHostImplWithAction(
+      [rwh, &rfh](RenderFrameHostImpl* render_frame_host) {
+        if (render_frame_host->GetRenderWidgetHost() == rwh) {
+          rfh = render_frame_host;
+          return RenderFrameHost::FrameIterationAction::kStop;
+        }
+        return RenderFrameHost::FrameIterationAction::kContinue;
+      });
+
+  if (rfh) {
+    // Find nearest ancestor that has independent zoom.
+    // Use GetParentOrOuterDocument() instead of GetParent() in order
+    // to "step out of" any fenced frames that are encountered.
+    while (!HostZoomMapForRenderFrameHost(rfh)->IsIndependentZoomFrameTreeNode(
+               rfh->GetFrameTreeNodeId()) &&
+           rfh->GetParentOrOuterDocument()) {
+      rfh = rfh->GetParentOrOuterDocument();
+    }
+  } else {
+    // Not finding a `rfh` suggests that `rwh` is still in the process of being
+    // set up, or is for a newly created RenderWidgetHost without a
+    // RenderFrameHost (e.g. for a <select> tag popup>), and that this function
+    // will be called again when there is a findable `rfh` for `rwh`. For now,
+    // just return the zoom level of this WebContents, as that will most often
+    // be right.
+    return HostZoomMap::GetZoomLevel(this);
+  }
 
   GURL url;
   if (rfh->IsInBackForwardCache()) {
@@ -8680,21 +8746,28 @@ double WebContentsImpl::GetPendingZoomLevel(RenderWidgetHostImpl* rwh) {
     // and All/FencedFrameAutomaticBeaconBrowserTest.MessageExceedsLengthLimit/
     // fencedframe.
     url = rfh->GetLastCommittedURL();
-  } else {
+  } else if (!rfh->GetParent()) {
+    // Only use the pending entry if `rfh` is a main frame, otherwise the
+    // resulting url is from outside the independently zoomed subtree, and
+    // may result in the wrong zoom level.
     NavigationEntry* pending_entry = rfh->GetController().GetPendingEntry();
     if (!pending_entry) {
       return HostZoomMap::GetZoomLevel(this, rfh->GetGlobalId());
     }
     url = pending_entry->GetURL();
+  } else {
+    // In this case `rfh` is for an independently-zoomed subframe. Call
+    // GetZoomLevel(WebContents*, RenderFrameHost*) in case `rfh` uses temporary
+    // zoom.
+    return HostZoomMap::GetZoomLevel(this, rfh->GetGlobalId());
   }
 #if BUILDFLAG(IS_ANDROID)
-  return HostZoomMap::GetForWebContents(this)
+  return HostZoomMapForRenderFrameHost(rfh)
       ->GetZoomLevelForHostAndSchemeAndroid(url.scheme(),
                                             net::GetHostOrSpecFromURL(url));
 #else
-  return HostZoomMap::Get(rfh->GetSiteInstance())
-      ->GetZoomLevelForHostAndScheme(url.scheme(),
-                                     net::GetHostOrSpecFromURL(url));
+  return HostZoomMapForRenderFrameHost(rfh)->GetZoomLevelForHostAndScheme(
+      url.scheme(), net::GetHostOrSpecFromURL(url));
 #endif
 }
 
@@ -11406,8 +11479,8 @@ void WebContentsImpl::CancelPreviewByMojoBinderPolicy(
   }
 }
 
-void WebContentsImpl::OnCanResizeFromWebAPIChanged() {
-  delegate_->OnCanResizeFromWebAPIChanged();
+void WebContentsImpl::OnWebApiWindowResizableChanged() {
+  delegate_->OnWebApiWindowResizableChanged();
 }
 
 FrameTreeNodeId WebContentsImpl::GetOuterDelegateFrameTreeNodeId() {
@@ -11656,7 +11729,8 @@ std::unique_ptr<PrerenderHandle> WebContentsImpl::StartPrerendering(
       should_warm_up_compositor, should_prepare_paint_tree,
       std::move(url_match_predicate),
       std::move(prerender_navigation_handle_callback),
-      base::MakeRefCounted<PreloadPipelineInfo>());
+      base::MakeRefCounted<PreloadPipelineInfo>(
+          /*planned_max_preloading_type=*/PreloadingType::kPrerender));
 #if BUILDFLAG(IS_ANDROID)
   attributes.additional_headers = std::move(additional_headers);
 #else
@@ -11810,12 +11884,6 @@ void WebContentsImpl::SetLongPressLinkSelectText(bool enabled) {
 
 net::handles::NetworkHandle WebContentsImpl::GetTargetNetwork() {
   return target_network_;
-}
-
-void WebContentsImpl::DisconnectFileSelectListenerIfAny() {
-  if (active_file_chooser_) {
-    active_file_chooser_->FileSelectionCanceled();
-  }
 }
 
 // static

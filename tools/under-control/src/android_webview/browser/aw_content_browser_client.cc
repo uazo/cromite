@@ -215,7 +215,7 @@ std::string GetUserAgent() {
   // "Version/4.0" had been hardcoded in the legacy WebView.
   std::string product = "Version/4.0 " + GetProduct();
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kUseMobileUserAgent)) {
+          embedder_support::kUseMobileUserAgent)) {
     product += " Mobile";
   }
 
@@ -870,7 +870,7 @@ AwContentBrowserClient::CreateLoginDelegate(
     scoped_refptr<net::HttpResponseHeaders> response_headers,
     bool first_auth_attempt,
     content::GuestPageHolder* guest,
-    LoginAuthRequiredCallback auth_required_callback) {
+    content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback) {
   return std::make_unique<AwHttpAuthHandler>(auth_info, web_contents,
                                              first_auth_attempt,
                                              std::move(auth_required_callback));
