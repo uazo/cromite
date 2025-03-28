@@ -35,11 +35,11 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../omaha/inline/InlineUpdateController.java  |  57 ++++
  .../safety_hub/SafetyHubFetchService.java     |   5 -
  .../strings/android_chrome_strings.grd        |  23 +-
- .../endpoint_fetcher/endpoint_fetcher.cc      | 125 ++++++--
- .../endpoint_fetcher/endpoint_fetcher.h       |  23 +-
+ .../endpoint_fetcher/endpoint_fetcher.cc      | 120 ++++++--
+ .../endpoint_fetcher/endpoint_fetcher.h       |  22 ++
  .../Bromite-auto-updater.inc                  |   3 +
  .../Bromite-auto-updater.inc                  |   1 +
- 31 files changed, 1226 insertions(+), 98 deletions(-)
+ 31 files changed, 1223 insertions(+), 95 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/CromiteUpdateStatusProvider.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/BromiteInlineUpdateController.java
  create mode 100644 chrome/browser/endpoint_fetcher/BUILD.gn
@@ -81,7 +81,7 @@ diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -870,6 +870,8 @@ chrome_java_sources = [
+@@ -802,6 +802,8 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/omaha/OmahaBase.java",
    "java/src/org/chromium/chrome/browser/omaha/OmahaDelegate.java",
    "java/src/org/chromium/chrome/browser/omaha/OmahaDelegateBase.java",
@@ -672,7 +672,7 @@ new file mode 100644
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2525,6 +2525,12 @@ static_library("browser") {
+@@ -2546,6 +2546,12 @@ static_library("browser") {
    }
  
    if (is_android) {
@@ -1096,7 +1096,7 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
 --- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
 +++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
-@@ -373,6 +373,7 @@ public abstract class ChromeFeatureList {
+@@ -380,6 +380,7 @@ public abstract class ChromeFeatureList {
      public static final String HISTORY_PANE_ANDROID = "HistoryPaneAndroid";
      public static final String HTTPS_FIRST_BALANCED_MODE = "HttpsFirstBalancedMode";
      public static final String INCOGNITO_SCREENSHOT = "IncognitoScreenshot";
@@ -1120,17 +1120,18 @@ diff --git a/chrome/browser/omaha/android/BUILD.gn b/chrome/browser/omaha/androi
 diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/OmahaPrefUtils.java b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/OmahaPrefUtils.java
 --- a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/OmahaPrefUtils.java
 +++ b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/OmahaPrefUtils.java
-@@ -7,7 +7,9 @@ package org.chromium.chrome.browser.omaha;
+@@ -7,8 +7,10 @@ package org.chromium.chrome.browser.omaha;
  import android.content.Context;
  import android.content.SharedPreferences;
  
 +import org.chromium.base.Log;
  import org.chromium.base.ContextUtils;
+ import org.chromium.build.annotations.NullMarked;
 +import org.chromium.base.version_info.VersionInfo;
  
+ @NullMarked
  public class OmahaPrefUtils {
-     // Flags for retrieving the OmahaClient's state after it's written to disk.
-@@ -22,7 +24,55 @@ public class OmahaPrefUtils {
+@@ -24,7 +26,55 @@ public class OmahaPrefUtils {
      static final String PREF_TIMESTAMP_FOR_NEW_REQUEST = "timestampForNewRequest";
      static final String PREF_TIMESTAMP_FOR_NEXT_POST_ATTEMPT = "timestampForNextPostAttempt";
      static final String PREF_TIMESTAMP_OF_INSTALL = "timestampOfInstall";
@@ -1190,15 +1191,15 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
 diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateConfigs.java b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateConfigs.java
 --- a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateConfigs.java
 +++ b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateConfigs.java
-@@ -11,6 +11,7 @@ import androidx.annotation.IntDef;
- import androidx.annotation.Nullable;
- 
+@@ -12,6 +12,7 @@ import androidx.annotation.IntDef;
  import org.chromium.base.CommandLine;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
 +import org.chromium.chrome.browser.flags.ChromeFeatureList;
  import org.chromium.chrome.browser.flags.ChromeSwitches;
  import org.chromium.chrome.browser.omaha.UpdateStatusProvider.UpdateState;
  import org.chromium.components.variations.VariationsAssociatedData;
-@@ -36,10 +37,12 @@ public class UpdateConfigs {
+@@ -38,10 +39,12 @@ public class UpdateConfigs {
      private static final String UPDATE_AVAILABLE_SWITCH_VALUE = "update_available";
      private static final String UNSUPPORTED_OS_VERSION_SWITCH_VALUE = "unsupported_os_version";
  
@@ -1212,7 +1213,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      @Retention(RetentionPolicy.SOURCE)
      public @interface UpdateFlowConfiguration {
          /** Turns off all update indicators. */
-@@ -49,6 +52,12 @@ public class UpdateConfigs {
+@@ -51,6 +54,12 @@ public class UpdateConfigs {
           * Requires Omaha to say an update is available, and only ever Intents out to Play Store.
           */
          int INTENT_ONLY = 2;
@@ -1225,7 +1226,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      }
  
      /**
-@@ -124,6 +133,13 @@ public class UpdateConfigs {
+@@ -126,6 +135,13 @@ public class UpdateConfigs {
          return DEFAULT_UPDATE_ATTRIBUTION_WINDOW_MS;
      }
  
@@ -1239,7 +1240,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      /**
       * Gets a String VariationsAssociatedData parameter. Also checks for a command-line switch
       * with the same name, for easy local testing.
-@@ -137,4 +153,13 @@ public class UpdateConfigs {
+@@ -139,4 +155,13 @@ public class UpdateConfigs {
          }
          return value;
      }
@@ -1256,18 +1257,18 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
 diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateStatusProvider.java b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateStatusProvider.java
 --- a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateStatusProvider.java
 +++ b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/UpdateStatusProvider.java
-@@ -4,6 +4,7 @@
+@@ -6,6 +6,7 @@ package org.chromium.chrome.browser.omaha;
  
- package org.chromium.chrome.browser.omaha;
+ import static org.chromium.build.NullUtil.assumeNonNull;
  
 +import android.app.Activity;
  import android.content.ActivityNotFoundException;
  import android.content.Context;
  import android.content.Intent;
-@@ -15,9 +16,11 @@ import android.text.TextUtils;
+@@ -15,9 +16,11 @@ import android.os.StatFs;
+ import android.text.TextUtils;
+ 
  import androidx.annotation.IntDef;
- import androidx.annotation.NonNull;
- import androidx.annotation.Nullable;
 +import androidx.annotation.VisibleForTesting;
  
 -import com.google.android.gms.common.GooglePlayServicesUtil;
@@ -1278,15 +1279,15 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
  import org.chromium.base.BuildInfo;
  import org.chromium.base.Callback;
  import org.chromium.base.ObserverList;
-@@ -27,6 +30,7 @@ import org.chromium.base.task.AsyncTask;
- import org.chromium.base.task.AsyncTask.Status;
- import org.chromium.base.task.PostTask;
- import org.chromium.base.task.TaskTraits;
+@@ -30,6 +33,7 @@ import org.chromium.base.task.TaskTraits;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.build.annotations.RequiresNonNull;
 +import org.chromium.chrome.browser.omaha.inline.InlineUpdateController;
  import org.chromium.chrome.browser.omaha.metrics.UpdateSuccessMetrics;
  import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
  import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
-@@ -36,30 +40,37 @@ import java.io.File;
+@@ -39,6 +43,11 @@ import java.io.File;
  import java.lang.annotation.Retention;
  import java.lang.annotation.RetentionPolicy;
  
@@ -1298,9 +1299,10 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
  /**
   * Provides the current update state for Chrome.  This update state is asynchronously determined and
   * can change as Chrome runs.
-  *
+@@ -46,24 +55,26 @@ import java.lang.annotation.RetentionPolicy;
   * For manually testing this functionality, see {@link UpdateConfigs}.
   */
+ @NullMarked
 -public class UpdateStatusProvider {
 +public abstract class UpdateStatusProvider implements ActivityStateListener {
      /**
@@ -1332,7 +1334,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      }
  
      /** A set of properties that represent the current update state for Chrome. */
-@@ -93,6 +104,12 @@ public class UpdateStatusProvider {
+@@ -97,6 +108,12 @@ public class UpdateStatusProvider {
           */
          private boolean mIsSimulated;
  
@@ -1345,7 +1347,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
          public UpdateStatus() {}
  
          UpdateStatus(UpdateStatus other) {
-@@ -101,11 +118,13 @@ public class UpdateStatusProvider {
+@@ -105,11 +122,13 @@ public class UpdateStatusProvider {
              latestVersion = other.latestVersion;
              latestUnsupportedVersion = other.latestUnsupportedVersion;
              mIsSimulated = other.mIsSimulated;
@@ -1359,7 +1361,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      private final UpdateQuery mOmahaQuery;
      private final UpdateSuccessMetrics mMetrics;
      private @Nullable UpdateStatus mStatus;
-@@ -113,11 +132,6 @@ public class UpdateStatusProvider {
+@@ -117,11 +136,6 @@ public class UpdateStatusProvider {
      /** Whether or not we've recorded the initial update status yet. */
      private boolean mRecordedInitialStatus;
  
@@ -1371,7 +1373,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      /**
       * Adds {@code observer} to notify about update state changes.  It is safe to call this multiple
       * times with the same {@code observer}.  This method will always notify {@code observer} of the
-@@ -173,6 +187,30 @@ public class UpdateStatusProvider {
+@@ -177,6 +191,30 @@ public class UpdateStatusProvider {
          pingObservers();
      }
  
@@ -1402,7 +1404,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
      /**
       * Starts the intent update process, if possible
       * @param context An {@link Context} that will be used to fire off the update intent.
-@@ -180,12 +218,11 @@ public class UpdateStatusProvider {
+@@ -184,12 +222,11 @@ public class UpdateStatusProvider {
       * @return        Whether or not the update intent was sent and had a valid handler.
       */
      public boolean startIntentUpdate(Context context, boolean newTask) {
@@ -1416,7 +1418,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
              Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(mStatus.updateUrl));
              if (newTask) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
              context.startActivity(intent);
-@@ -196,9 +233,15 @@ public class UpdateStatusProvider {
+@@ -200,9 +237,15 @@ public class UpdateStatusProvider {
          return true;
      }
  
@@ -1433,8 +1435,8 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
 +        ApplicationStatus.registerStateListenerForAllActivities(this);
      }
  
-     private void pingObservers() {
-@@ -206,35 +249,52 @@ public class UpdateStatusProvider {
+     @RequiresNonNull("mStatus")
+@@ -211,35 +254,52 @@ public class UpdateStatusProvider {
      }
  
      private void resolveStatus() {
@@ -1444,10 +1446,10 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
          }
  
          // We pull the Omaha result once as it will never change.
-         if (mStatus == null) mStatus = new UpdateStatus(mOmahaQuery.getResult());
+         if (mStatus == null) mStatus = new UpdateStatus(assumeNonNull(mOmahaQuery.getResult()));
  
 -        if (!mStatus.mIsSimulated) {
--            mStatus.updateState = mOmahaQuery.getResult().updateState;
+-            mStatus.updateState = assumeNonNull(mOmahaQuery.getResult()).updateState;
 +        if (mStatus.mIsSimulated) { // used only during tests
 +            if (mStatus.mIsInlineSimulated) {
 +                @UpdateState
@@ -1455,7 +1457,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
 +                String updateUrl = mInlineController.getUpdateUrl();
 +
 +                if (inlineState == UpdateState.NONE) {
-+                    mStatus.updateState = mOmahaQuery.getResult().updateState;
++                    mStatus.updateState = assumeNonNull(mOmahaQuery.getResult()).updateState;
 +                } else {
 +                    mStatus.updateState = inlineState;
 +                    mStatus.updateUrl = updateUrl;
@@ -1488,15 +1490,15 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
  
          private @Nullable UpdateStatus mStatus;
  
--        public UpdateQuery(@NonNull Runnable resultReceiver) {
+-        public UpdateQuery(Runnable resultReceiver) {
 +        private InlineUpdateController mInlineController;
 +
-+        public UpdateQuery(InlineUpdateController inlineController, @NonNull Runnable resultReceiver) {
++        public UpdateQuery(InlineUpdateController inlineController, Runnable resultReceiver) {
 +            mInlineController = inlineController;
              mCallback = resultReceiver;
          }
  
-@@ -246,7 +306,7 @@ public class UpdateStatusProvider {
+@@ -251,7 +311,7 @@ public class UpdateStatusProvider {
          protected UpdateStatus doInBackground() {
              UpdateStatus testStatus = getTestStatus();
              if (testStatus != null) return testStatus;
@@ -1505,7 +1507,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
          }
  
          @Override
-@@ -264,6 +324,8 @@ public class UpdateStatusProvider {
+@@ -269,6 +329,8 @@ public class UpdateStatusProvider {
              status.mIsSimulated = true;
              status.updateState = forcedUpdateState;
  
@@ -1514,7 +1516,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
              // Push custom configurations for certain update states.
              switch (forcedUpdateState) {
                  case UpdateState.UPDATE_AVAILABLE:
-@@ -281,31 +343,33 @@ public class UpdateStatusProvider {
+@@ -286,31 +348,33 @@ public class UpdateStatusProvider {
              return status;
          }
  
@@ -1574,7 +1576,7 @@ diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/o
 diff --git a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/VersionNumberGetter.java b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/VersionNumberGetter.java
 --- a/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/VersionNumberGetter.java
 +++ b/chrome/browser/omaha/android/java/src/org/chromium/chrome/browser/omaha/VersionNumberGetter.java
-@@ -22,8 +22,8 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+@@ -24,8 +24,8 @@ import org.chromium.chrome.browser.flags.ChromeFeatureList;
  public class VersionNumberGetter {
      private static VersionNumberGetter sInstance = new VersionNumberGetter();
  
@@ -1650,9 +1652,9 @@ new file mode 100644
 diff --git a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFetchService.java b/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFetchService.java
 --- a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFetchService.java
 +++ b/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/browser/safety_hub/SafetyHubFetchService.java
-@@ -78,9 +78,6 @@ public class SafetyHubFetchService implements SigninManager.SignInStateObserver,
-             mSigninManager.addSignInStateObserver(this);
-         }
+@@ -82,9 +82,6 @@ public class SafetyHubFetchService implements SigninManager.SignInStateObserver,
+         mLocalPasswordsFetchService =
+                 new SafetyHubPasswordsFetchService(passwordManagerHelper, prefService, null);
  
 -        // Fetch latest update status.
 -        UpdateStatusProvider.getInstance().addObserver(mUpdateCallback);
@@ -1660,7 +1662,7 @@ diff --git a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/brow
          recordMetricForUnusedSitePermissionsSettingState();
      }
  
-@@ -109,8 +106,6 @@ public class SafetyHubFetchService implements SigninManager.SignInStateObserver,
+@@ -113,8 +110,6 @@ public class SafetyHubFetchService implements SigninManager.SignInStateObserver,
          if (mSigninManager != null) {
              mSigninManager.removeSignInStateObserver(this);
          }
@@ -1672,7 +1674,7 @@ diff --git a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -2360,6 +2360,12 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -2397,6 +2397,12 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_DEPRECATION_WARNING" desc="Warning about Chrome updates no longer being supported">
          Chrome updates are no longer supported for this version of Android
        </message>
@@ -1685,7 +1687,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
  
        <!-- Account management UI strings. -->
        <message name="IDS_ACCOUNT_MANAGEMENT_TITLE" desc="Header title for the account management screen. [CHAR_LIMIT=32]">
-@@ -4298,7 +4304,10 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4332,7 +4338,10 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
  
        <!-- Main menu items -->
        <message name="IDS_MENU_UPDATE" desc="Menu item for updating chrome. [CHAR_LIMIT=24]">
@@ -1697,7 +1699,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
        </message>
        <message name="IDS_MENU_UPDATE_SUMMARY_DEFAULT" desc="Summary string for update menu item explaining that a newer version of Chrome is available. [CHAR_LIMIT=30]">
          Newer version is available
-@@ -4309,6 +4318,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4343,6 +4352,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_MENU_UPDATE_UNSUPPORTED_SUMMARY_DEFAULT" desc="Summary string for update menu item explaining that the Android version on the device is unsupported. [CHAR_LIMIT=30]">
          Android version is unsupported
        </message>
@@ -1719,8 +1721,8 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoint_fetcher/endpoint_fetcher.cc
 --- a/components/endpoint_fetcher/endpoint_fetcher.cc
 +++ b/components/endpoint_fetcher/endpoint_fetcher.cc
-@@ -20,6 +20,11 @@
- #include "services/network/public/cpp/simple_url_loader.h"
+@@ -21,6 +21,11 @@
+ #include "services/network/public/mojom/referrer_policy.mojom-shared.h"
  #include "services/network/public/mojom/url_response_head.mojom.h"
  
 +// used for the Bromite customization
@@ -1731,47 +1733,25 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  namespace {
  const char kContentTypeKey[] = "Content-Type";
  const char kDeveloperKey[] = "X-Developer-Key";
-@@ -83,6 +88,7 @@ EndpointFetcher::EndpointFetcher(
-       http_method_(http_method),
-       content_type_(content_type),
-       timeout_(timeout),
+@@ -30,6 +35,7 @@ constexpr base::TimeDelta kDefaultTimeOut = base::Milliseconds(30000);
+ std::string GetHttpMethodString(const HttpMethod& http_method) {
+   switch (http_method) {
+     case HttpMethod::kGet:
 +      intercept_redirect_(false),
-       post_data_(post_data),
-       headers_(headers),
-       cors_exempt_headers_(cors_exempt_headers),
-@@ -103,6 +109,7 @@ EndpointFetcher::EndpointFetcher(
-       http_method_("GET"),
-       content_type_(std::string()),
-       timeout_(base::Milliseconds(0)),
-+      intercept_redirect_(false),
-       post_data_(std::string()),
-       annotation_tag_(annotation_tag),
-       url_loader_factory_(url_loader_factory),
-@@ -128,6 +135,7 @@ EndpointFetcher::EndpointFetcher(
-       http_method_(http_method),
-       content_type_(content_type),
-       timeout_(timeout),
-+      intercept_redirect_(false),
-       post_data_(post_data),
-       annotation_tag_(annotation_tag),
-       url_loader_factory_(url_loader_factory),
-@@ -155,6 +163,7 @@ EndpointFetcher::EndpointFetcher(
-       http_method_(http_method),
-       content_type_(content_type),
-       timeout_(timeout),
-+      intercept_redirect_(false),
-       post_data_(post_data),
-       headers_(headers),
-       cors_exempt_headers_(cors_exempt_headers),
-@@ -167,11 +176,29 @@ EndpointFetcher::EndpointFetcher(
+       return "GET";
+     case HttpMethod::kPost:
+       return "POST";
+@@ -207,6 +213,7 @@ EndpointFetcher::EndpointFetcher(
  EndpointFetcher::EndpointFetcher(
      const net::NetworkTrafficAnnotationTag& annotation_tag)
-     : timeout_(kDefaultTimeOut),
+     : identity_manager_(nullptr),
 +      intercept_redirect_(false),
-       annotation_tag_(annotation_tag),
-       identity_manager_(nullptr),
        consent_level_(std::nullopt),
-       sanitize_response_(true) {}
+       sanitize_response_(true),
+       request_params_(
+@@ -215,6 +222,23 @@ EndpointFetcher::EndpointFetcher(
+               .SetTimeout(kDefaultTimeOut)
+               .Build()) {}
  
 +// constructor used by Bromite
 +EndpointFetcher::EndpointFetcher(
@@ -1793,22 +1773,23 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  EndpointFetcher::~EndpointFetcher() = default;
  
  void EndpointFetcher::Fetch(EndpointFetcherCallback endpoint_fetcher_callback) {
-@@ -229,11 +256,9 @@ void EndpointFetcher::PerformRequest(
+@@ -272,12 +296,9 @@ void EndpointFetcher::PerformRequest(
    auto resource_request = std::make_unique<network::ResourceRequest>();
-   resource_request->method = http_method_;
-   resource_request->url = url_;
+   resource_request->method = GetHttpMethodString(request_params_.http_method());
+   resource_request->url = request_params_.url();
 -  resource_request->credentials_mode = GetCredentialsMode();
 -  if (GetSetSiteForCookies()) {
--    resource_request->site_for_cookies = net::SiteForCookies::FromUrl(url_);
+-    resource_request->site_for_cookies =
+-        net::SiteForCookies::FromUrl(request_params_.url());
 -  }
 -
 +  resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
 +  resource_request->load_flags = net::LOAD_BYPASS_CACHE | net::LOAD_DISABLE_CACHE
 +                                  | net::LOAD_DO_NOT_SAVE_COOKIES;
-   if (base::EqualsCaseInsensitiveASCII(http_method_, "POST")) {
-     resource_request->headers.SetHeader(kContentTypeKey, content_type_);
-   }
-@@ -261,10 +286,27 @@ void EndpointFetcher::PerformRequest(
+   if (request_params_.http_method() == HttpMethod::kPost) {
+     resource_request->headers.SetHeader(kContentTypeKey,
+                                         request_params_.content_type());
+@@ -305,10 +326,27 @@ void EndpointFetcher::PerformRequest(
      default:
        break;
    }
@@ -1821,7 +1802,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
    // TODO(crbug.com/40641804) Make simple_url_loader_ local variable passed to
    // callback
    simple_url_loader_ = network::SimpleURLLoader::Create(
-       std::move(resource_request), annotation_tag_);
+       std::move(resource_request), request_params_.annotation_tag());
 +  simple_url_loader_->SetTimeoutDuration(timeout_);
 +  simple_url_loader_->SetAllowHttpErrorResults(true);
 +
@@ -1834,13 +1815,13 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
 +      &EndpointFetcher::OnSimpleLoaderRedirect, base::Unretained(this)));
 +  }
  
-   if (base::EqualsCaseInsensitiveASCII(http_method_, "POST")) {
-     simple_url_loader_->AttachStringForUpload(post_data_, content_type_);
-@@ -275,15 +317,23 @@ void EndpointFetcher::PerformRequest(
+   if (request_params_.http_method() == HttpMethod::kPost) {
+     simple_url_loader_->AttachStringForUpload(
+@@ -320,15 +358,23 @@ void EndpointFetcher::PerformRequest(
    }
    simple_url_loader_->SetRetryOptions(GetMaxRetries(),
                                        network::SimpleURLLoader::RETRY_ON_5XX);
--  simple_url_loader_->SetTimeoutDuration(timeout_);
+-  simple_url_loader_->SetTimeoutDuration(request_params_.timeout());
 -  simple_url_loader_->SetAllowHttpErrorResults(true);
 -  network::SimpleURLLoader::BodyAsStringCallbackDeprecated
 +  LOG(INFO) << "performing " << http_method_ << " request to " << url_;
@@ -1866,18 +1847,15 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  }
  
  void EndpointFetcher::OnResponseFetched(
-@@ -361,24 +411,6 @@ void EndpointFetcher::OnSanitizationResult(
+@@ -406,21 +452,6 @@ void EndpointFetcher::OnSanitizationResult(
    std::move(endpoint_fetcher_callback).Run(std::move(response));
  }
  
--network::mojom::CredentialsMode EndpointFetcher::GetCredentialsMode() {
--  if (!request_params_.has_value()) {
+-network::mojom::CredentialsMode EndpointFetcher::GetCredentialsMode() const {
+-  if (!request_params_.credentials_mode.has_value()) {
 -    return network::mojom::CredentialsMode::kOmit;
 -  }
--  if (!request_params_.value().credentials_mode.has_value()) {
--    return network::mojom::CredentialsMode::kOmit;
--  }
--  switch (request_params_.value().credentials_mode.value()) {
+-  switch (request_params_.credentials_mode.value()) {
 -    case CredentialsMode::kOmit:
 -      return network::mojom::CredentialsMode::kOmit;
 -    case CredentialsMode::kInclude:
@@ -1885,15 +1863,15 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
 -  }
 -  DCHECK(0) << base::StringPrintf(
 -      "Credentials mode %d not currently supported by EndpointFetcher\n",
--      static_cast<int>(request_params_.value().credentials_mode.value()));
+-      static_cast<int>(request_params_.credentials_mode.value()));
 -}
 -
- int EndpointFetcher::GetMaxRetries() {
-   if (!request_params_.has_value()) {
+ int EndpointFetcher::GetMaxRetries() const {
+   if (!request_params_.max_retries.has_value()) {
      return kNumRetries;
-@@ -412,3 +444,38 @@ UploadProgressCallback EndpointFetcher::GetUploadProgressCallback() {
+@@ -445,3 +476,38 @@ UploadProgressCallback EndpointFetcher::GetUploadProgressCallback() const {
  std::string EndpointFetcher::GetUrlForTesting() {
-   return url_.spec();
+   return request_params_.url().spec();
  }
 +
 +void EndpointFetcher::OnSimpleLoaderRedirect(
@@ -1942,7 +1920,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
  
  namespace network {
  struct ResourceRequest;
-@@ -58,6 +60,8 @@ enum class FetchErrorType {
+@@ -76,6 +78,8 @@ enum AuthType {
  
  struct EndpointResponse {
    std::string response;
@@ -1951,7 +1929,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
    int http_status_code{-1};
    std::optional<FetchErrorType> error_type;
  };
-@@ -175,6 +179,14 @@ class EndpointFetcher {
+@@ -304,6 +308,14 @@ class EndpointFetcher {
        const GURL& url,
        const net::NetworkTrafficAnnotationTag& annotation_tag);
  
@@ -1966,7 +1944,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
    // Used for tests. Can be used if caller constructs their own
    // url_loader_factory and identity_manager.
    EndpointFetcher(
-@@ -231,6 +243,11 @@ class EndpointFetcher {
+@@ -360,6 +372,11 @@ class EndpointFetcher {
    void OnSanitizationResult(std::unique_ptr<EndpointResponse> response,
                              EndpointFetcherCallback endpoint_fetcher_callback,
                              data_decoder::JsonSanitizer::Result result);
@@ -1976,22 +1954,18 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
 +                              const network::mojom::URLResponseHead& response_head,
 +                              std::vector<std::string>* removed_headers);
  
-   network::mojom::CredentialsMode GetCredentialsMode();
-   int GetMaxRetries();
-@@ -243,10 +260,11 @@ class EndpointFetcher {
-   // Members set in constructor to be passed to network::ResourceRequest or
+   network::mojom::CredentialsMode GetCredentialsMode() const;
+   int GetMaxRetries() const;
+@@ -370,6 +387,8 @@ class EndpointFetcher {
    // network::SimpleURLLoader.
    const std::string oauth_consumer_name_;
--  const GURL url_;
+   signin::ScopeSet oauth_scopes_;
 +  GURL url_;
-   const std::string http_method_;
-   const std::string content_type_;
-   base::TimeDelta timeout_;
 +  const bool intercept_redirect_;
-   const std::string post_data_;
-   const std::vector<std::string> headers_;
-   const std::vector<std::string> cors_exempt_headers_;
-@@ -270,6 +288,9 @@ class EndpointFetcher {
+ 
+   // Members set in constructor
+   const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
+@@ -388,6 +407,9 @@ class EndpointFetcher {
        access_token_fetcher_;
    std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
  
