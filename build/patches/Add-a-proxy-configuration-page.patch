@@ -29,7 +29,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/resources/proxy_config.html    |  77 ++++
  chrome/browser/resources/proxy_config.js      | 278 +++++++++++++
  chrome/browser/ui/BUILD.gn                    |   2 +
- .../browser/ui/webui/chrome_web_ui_configs.cc |   4 +
+ .../browser/ui/webui/chrome_web_ui_configs.cc |   5 +-
  chrome/browser/ui/webui/proxy_config_ui.cc    | 389 ++++++++++++++++++
  chrome/browser/ui/webui/proxy_config_ui.h     |  41 ++
  chrome/common/webui_url_constants.cc          |   2 +
@@ -40,7 +40,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../proxy_config/proxy_policy_handler.cc      |   2 +-
  net/proxy_resolution/proxy_config.cc          |  51 ++-
  net/proxy_resolution/proxy_config.h           |   3 +
- 25 files changed, 984 insertions(+), 17 deletions(-)
+ 25 files changed, 984 insertions(+), 18 deletions(-)
  create mode 100644 chrome/browser/resources/proxy_config.css
  create mode 100644 chrome/browser/resources/proxy_config.html
  create mode 100644 chrome/browser/resources/proxy_config.js
@@ -106,7 +106,7 @@ diff --git a/chrome/browser/browser_resources.grd b/chrome/browser/browser_resou
 +      <!-- Bromite Proxy Configuration UI -->
 +      <include name="IDR_PROXY_CONFIG_HTML" file="resources\proxy_config.html" flattenhtml="true" type="BINDATA" compress="gzip" />
 +      <include name="IDR_PROXY_CONFIG_JS" file="resources\proxy_config.js" type="BINDATA" compress="gzip" />
-       <if expr="not is_android">
+       <if expr="not is_android or enable_extensions_core">
          <!-- Page not available for guest. -->
          <include name="IDR_PAGE_NOT_AVAILABLE_FOR_GUEST_APP_HTML" file="resources\page_not_available_for_guest\app.html" type="BINDATA" />
 diff --git a/chrome/browser/extensions/api/proxy/proxy_api_helpers.cc b/chrome/browser/extensions/api/proxy/proxy_api_helpers.cc
@@ -196,16 +196,16 @@ diff --git a/chrome/browser/net/proxy_service_factory.h b/chrome/browser/net/pro
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -200,6 +200,8 @@
+@@ -196,6 +196,8 @@
  #include "printing/buildflags/buildflags.h"
  #include "rlz/buildflags/buildflags.h"
  
 +#include "chrome/browser/net/proxy_service_factory.h"
 +
  #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
- #include "chrome/browser/background/background_mode_manager.h"
+ #include "chrome/browser/background/extensions/background_mode_manager.h"
  #endif
-@@ -1644,6 +1646,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+@@ -1561,6 +1563,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
    component_updater::RegisterPrefs(registry);
    domain_reliability::RegisterPrefs(registry);
    embedder_support::OriginTrialPrefs::RegisterPrefs(registry);
@@ -217,7 +217,7 @@ diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browse
 diff --git a/chrome/browser/prefs/chrome_command_line_pref_store.cc b/chrome/browser/prefs/chrome_command_line_pref_store.cc
 --- a/chrome/browser/prefs/chrome_command_line_pref_store.cc
 +++ b/chrome/browser/prefs/chrome_command_line_pref_store.cc
-@@ -157,7 +157,7 @@ void ChromeCommandLinePrefStore::ApplyProxyMode() {
+@@ -156,7 +156,7 @@ void ChromeCommandLinePrefStore::ApplyProxyMode() {
          command_line()->GetSwitchValueASCII(switches::kProxyBypassList);
      SetValue(proxy_config::prefs::kProxy,
               base::Value(ProxyConfigDictionary::CreateFixedServers(
@@ -660,7 +660,7 @@ new file mode 100644
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -222,6 +222,8 @@ static_library("ui") {
+@@ -224,6 +224,8 @@ static_library("ui") {
      "webui/metrics_internals/metrics_internals_ui.h",
      "webui/net_export_ui.cc",
      "webui/net_export_ui.h",
@@ -672,7 +672,7 @@ diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -55,6 +55,9 @@
+@@ -54,6 +54,9 @@
  #include "extensions/buildflags/buildflags.h"
  #include "printing/buildflags/buildflags.h"
  
@@ -682,12 +682,15 @@ diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/u
  #if BUILDFLAG(ENABLE_NACL)
  #include "chrome/browser/ui/webui/nacl_ui.h"
  #endif
-@@ -388,4 +391,5 @@ void RegisterChromeWebUIConfigs() {
- #if BUILDFLAG(ENABLE_GLIC)
+@@ -391,7 +394,7 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(std::make_unique<glic::GlicUIConfig>());
+   map.AddWebUIConfig(std::make_unique<glic::GlicFreUIConfig>());
  #endif
+-
 +  map.AddWebUIConfig(std::make_unique<ProxyConfigUIConfig>());
- }
+ #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   map.AddWebUIConfig(
+       std::make_unique<safe_browsing::ChromeSafeBrowsingUIConfig>());
 diff --git a/chrome/browser/ui/webui/proxy_config_ui.cc b/chrome/browser/ui/webui/proxy_config_ui.cc
 new file mode 100644
 --- /dev/null
@@ -1150,7 +1153,7 @@ diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_cons
 diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
 --- a/chrome/common/webui_url_constants.h
 +++ b/chrome/common/webui_url_constants.h
-@@ -160,6 +160,8 @@ inline constexpr char kChromeUINetExportHost[] = "net-export";
+@@ -161,6 +161,8 @@ inline constexpr char kChromeUINetExportHost[] = "net-export";
  inline constexpr char kChromeUINetInternalsHost[] = "net-internals";
  inline constexpr char kChromeUINetInternalsURL[] = "chrome://net-internals/";
  inline constexpr char kChromeUINewTabHost[] = "newtab";

@@ -37,7 +37,7 @@ diff --git a/chrome/browser/ssl/https_upgrades_interceptor.cc b/chrome/browser/s
 +      tentative_resource_request.trusted_params->isolation_info.network_anonymization_key(),
        tentative_resource_request.url.host(),
        tentative_resource_request.trusted_params->isolation_info
-           .IsMainFrameRequest(),
+           .IsOutermostMainFrameRequest(),
 diff --git a/chrome/browser/ui/webui/net_internals/net_internals_ui.cc b/chrome/browser/ui/webui/net_internals/net_internals_ui.cc
 --- a/chrome/browser/ui/webui/net_internals/net_internals_ui.cc
 +++ b/chrome/browser/ui/webui/net_internals/net_internals_ui.cc
@@ -92,7 +92,7 @@ diff --git a/components/password_manager/core/browser/hsts_query.cc b/components
 diff --git a/content/browser/web_package/signed_exchange_handler.cc b/content/browser/web_package/signed_exchange_handler.cc
 --- a/content/browser/web_package/signed_exchange_handler.cc
 +++ b/content/browser/web_package/signed_exchange_handler.cc
-@@ -95,6 +95,7 @@ using VerifyCallback =
+@@ -96,6 +96,7 @@ using VerifyCallback =
  
  void VerifyCert(const scoped_refptr<net::X509Certificate>& certificate,
                  const GURL& url,
@@ -100,16 +100,16 @@ diff --git a/content/browser/web_package/signed_exchange_handler.cc b/content/br
                  const std::string& ocsp_result,
                  const std::string& sct_list,
                  FrameTreeNodeId frame_tree_node_id,
-@@ -116,7 +117,7 @@ void VerifyCert(const scoped_refptr<net::X509Certificate>& certificate,
+@@ -117,7 +118,7 @@ void VerifyCert(const scoped_refptr<net::X509Certificate>& certificate,
    }
  
    network_context->VerifyCertForSignedExchange(
--      certificate, url, ocsp_result, sct_list, std::move(wrapped_callback));
-+      certificate, url, network_anonymization_key, ocsp_result, sct_list, std::move(wrapped_callback));
+-      certificate, net::HostPortPair::FromURL(url), ocsp_result, sct_list,
++      certificate, net::HostPortPair::FromURL(url), network_anonymization_key, ocsp_result, sct_list,
+       std::move(wrapped_callback));
  }
  
- std::string OCSPErrorToString(const bssl::OCSPVerifyResult& ocsp_result) {
-@@ -177,6 +178,7 @@ SignedExchangeHandler::SignedExchangeHandler(
+@@ -179,6 +180,7 @@ SignedExchangeHandler::SignedExchangeHandler(
      std::unique_ptr<net::SourceStream> body,
      ExchangeHeadersCallback headers_callback,
      std::unique_ptr<SignedExchangeCertFetcherFactory> cert_fetcher_factory,
@@ -117,7 +117,7 @@ diff --git a/content/browser/web_package/signed_exchange_handler.cc b/content/br
      std::optional<net::IsolationInfo> outer_request_isolation_info,
      int load_flags,
      const net::IPEndPoint& remote_endpoint,
-@@ -190,6 +192,7 @@ SignedExchangeHandler::SignedExchangeHandler(
+@@ -192,6 +194,7 @@ SignedExchangeHandler::SignedExchangeHandler(
        source_(std::move(body)),
        cert_fetcher_factory_(std::move(cert_fetcher_factory)),
        devtools_proxy_(std::move(devtools_proxy)),
@@ -125,7 +125,7 @@ diff --git a/content/browser/web_package/signed_exchange_handler.cc b/content/br
        outer_request_isolation_info_(std::move(outer_request_isolation_info)),
        load_flags_(load_flags),
        remote_endpoint_(remote_endpoint),
-@@ -531,7 +534,7 @@ void SignedExchangeHandler::OnCertReceived(
+@@ -533,7 +536,7 @@ void SignedExchangeHandler::OnCertReceived(
    //   property, or
    const std::string& stapled_ocsp_response = unverified_cert_chain_->ocsp();
  
@@ -733,7 +733,7 @@ diff --git a/net/spdy/spdy_session.h b/net/spdy/spdy_session.h
 diff --git a/net/url_request/url_request_context_builder.cc b/net/url_request/url_request_context_builder.cc
 --- a/net/url_request/url_request_context_builder.cc
 +++ b/net/url_request/url_request_context_builder.cc
-@@ -407,20 +407,6 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
+@@ -400,20 +400,6 @@ std::unique_ptr<URLRequestContext> URLRequestContextBuilder::Build() {
  
    context->set_transport_security_state(
        std::make_unique<TransportSecurityState>(hsts_policy_bypass_list_));
@@ -757,15 +757,15 @@ diff --git a/net/url_request/url_request_context_builder.cc b/net/url_request/ur
 diff --git a/net/url_request/url_request_http_job.cc b/net/url_request/url_request_http_job.cc
 --- a/net/url_request/url_request_http_job.cc
 +++ b/net/url_request/url_request_http_job.cc
-@@ -343,6 +343,7 @@ std::unique_ptr<URLRequestJob> URLRequestHttpJob::Create(URLRequest* request) {
+@@ -357,6 +357,7 @@ std::unique_ptr<URLRequestJob> URLRequestHttpJob::Create(URLRequest* request) {
    if (TransportSecurityState* hsts =
            request->context()->transport_security_state()) {
      upgrade_decision = hsts->GetSSLUpgradeDecision(
 +        request->isolation_info().network_anonymization_key(),
          url.host(),
-         /*is_top_level_nav=*/request->isolation_info().IsMainFrameRequest(),
-         request->net_log());
-@@ -1207,7 +1208,7 @@ void URLRequestHttpJob::ProcessStrictTransportSecurityHeader() {
+         /*is_top_level_nav=*/
+         request->isolation_info().IsOutermostMainFrameRequest(),
+@@ -1246,7 +1247,7 @@ void URLRequestHttpJob::ProcessStrictTransportSecurityHeader() {
    std::optional<std::string_view> value;
    if ((value =
             headers->EnumerateHeader(nullptr, "Strict-Transport-Security"))) {
@@ -774,7 +774,7 @@ diff --git a/net/url_request/url_request_http_job.cc b/net/url_request/url_reque
    }
  }
  
-@@ -1278,7 +1279,7 @@ void URLRequestHttpJob::OnStartCompleted(int result) {
+@@ -1317,7 +1318,7 @@ void URLRequestHttpJob::OnStartCompleted(int result) {
      TransportSecurityState* state = context->transport_security_state();
      NotifySSLCertificateError(
          result, transaction_->GetResponseInfo()->ssl_info,
@@ -786,23 +786,23 @@ diff --git a/net/url_request/url_request_http_job.cc b/net/url_request/url_reque
 diff --git a/services/network/network_context.cc b/services/network/network_context.cc
 --- a/services/network/network_context.cc
 +++ b/services/network/network_context.cc
-@@ -2023,6 +2023,7 @@ void NetworkContext::CreateHostResolver(
- void NetworkContext::VerifyCertForSignedExchange(
+@@ -2046,6 +2046,7 @@ void NetworkContext::CreateHostResolver(
+ void NetworkContext::VerifyCertInternal(
      const scoped_refptr<net::X509Certificate>& certificate,
-     const GURL& url,
+     const net::HostPortPair& host_port,
 +    const net::NetworkAnonymizationKey& network_anonymization_key,
      const std::string& ocsp_result,
      const std::string& sct_list,
-     VerifyCertForSignedExchangeCallback callback) {
-@@ -2033,6 +2034,7 @@ void NetworkContext::VerifyCertForSignedExchange(
+     CTVerificationMode ct_verification_mode,
+@@ -2057,6 +2058,7 @@ void NetworkContext::VerifyCertInternal(
    pending_cert_verify->result = std::make_unique<net::CertVerifyResult>();
    pending_cert_verify->certificate = certificate;
-   pending_cert_verify->url = url;
+   pending_cert_verify->host_port = host_port;
 +  pending_cert_verify->network_anonymization_key = network_anonymization_key;
    pending_cert_verify->ocsp_result = ocsp_result;
    pending_cert_verify->sct_list = sct_list;
-   net::CertVerifier* cert_verifier =
-@@ -2077,17 +2079,19 @@ void NetworkContext::SetCorsOriginAccessListsForOrigin(
+   pending_cert_verify->ct_verification_mode = ct_verification_mode;
+@@ -2121,17 +2123,19 @@ void NetworkContext::SetCorsOriginAccessListsForOrigin(
    std::move(callback).Run();
  }
  
@@ -825,7 +825,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
                                           bool is_top_level_nav,
                                           IsHSTSActiveForHostCallback callback) {
    net::TransportSecurityState* security_state =
-@@ -2099,10 +2103,10 @@ void NetworkContext::IsHSTSActiveForHost(const std::string& host,
+@@ -2143,10 +2147,10 @@ void NetworkContext::IsHSTSActiveForHost(const std::string& host,
    }
  
    std::move(callback).Run(
@@ -838,7 +838,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
                                    GetHSTSStateCallback callback) {
    base::Value::Dict result;
  
-@@ -2140,10 +2144,10 @@ void NetworkContext::GetHSTSState(const std::string& domain,
+@@ -2184,10 +2188,10 @@ void NetworkContext::GetHSTSState(const std::string& domain,
        net::TransportSecurityState::STSState dynamic_sts_state;
        net::TransportSecurityState::PKPState dynamic_pkp_state;
        bool found_sts_dynamic = transport_security_state->GetDynamicSTSState(
@@ -851,7 +851,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
        if (found_sts_dynamic) {
          result.Set("dynamic_upgrade_mode",
                     static_cast<int>(dynamic_sts_state.upgrade_mode));
-@@ -2181,6 +2185,7 @@ void NetworkContext::GetHSTSState(const std::string& domain,
+@@ -2225,6 +2229,7 @@ void NetworkContext::GetHSTSState(const std::string& domain,
  }
  
  void NetworkContext::DeleteDynamicDataForHost(
@@ -859,7 +859,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
      const std::string& host,
      DeleteDynamicDataForHostCallback callback) {
    net::TransportSecurityState* transport_security_state =
-@@ -2191,7 +2196,7 @@ void NetworkContext::DeleteDynamicDataForHost(
+@@ -2235,7 +2240,7 @@ void NetworkContext::DeleteDynamicDataForHost(
    }
  
    std::move(callback).Run(
@@ -868,7 +868,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
  }
  
  void NetworkContext::EnableStaticKeyPinningForTesting(
-@@ -2235,7 +2240,7 @@ void NetworkContext::PreconnectSockets(
+@@ -2279,7 +2284,7 @@ void NetworkContext::PreconnectSockets(
    DCHECK(!require_network_anonymization_key_ ||
           !network_anonymization_key.IsEmpty());
  
@@ -877,7 +877,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
  
    // |PreconnectSockets| may receive arguments from the renderer, which is not
    // guaranteed to validate them.
-@@ -3042,7 +3047,9 @@ void NetworkContext::OnConnectionError() {
+@@ -3092,7 +3097,9 @@ void NetworkContext::OnConnectionError() {
    }
  }
  
@@ -888,7 +888,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
    // TODO(lilyhoughton) This needs to be gotten rid of once explicit
    // construction with a URLRequestContext is no longer supported.
  
-@@ -3068,6 +3075,7 @@ GURL NetworkContext::GetHSTSRedirectForPreconnect(const GURL& original_url) {
+@@ -3118,6 +3125,7 @@ GURL NetworkContext::GetHSTSRedirectForPreconnect(const GURL& original_url) {
    // top-level navigation so we need to disallow HSTS upgrades for every
    // preconnect.
    if (!url_request_context_->transport_security_state()->ShouldUpgradeToSSL(
@@ -896,9 +896,9 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
            original_url.host(), /*is_top_level_nav=*/false)) {
      RecordHSTSPreconnectUpgradeReason(
          HSTSRedirectUpgradeReason::kNotUpgradedNoHSTSPin);
-@@ -3119,7 +3127,8 @@ void NetworkContext::OnVerifyCertForSignedExchangeComplete(
+@@ -3167,7 +3175,8 @@ void NetworkContext::OnVerifyCertComplete(uint64_t cert_verify_id, int result) {
          url_request_context_->transport_security_state()->CheckPublicKeyPins(
-             pending_cert_verify->url.host(),
+             pending_cert_verify->host_port.host(),
              pending_cert_verify->result->is_issued_by_known_root,
 -            pending_cert_verify->result->public_key_hashes);
 +            pending_cert_verify->result->public_key_hashes,
@@ -909,14 +909,14 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
 diff --git a/services/network/network_context.h b/services/network/network_context.h
 --- a/services/network/network_context.h
 +++ b/services/network/network_context.h
-@@ -409,19 +409,22 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+@@ -414,19 +414,22 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
    void VerifyCertForSignedExchange(
        const scoped_refptr<net::X509Certificate>& certificate,
-       const GURL& url,
+       const net::HostPortPair& host_port,
 +      const net::NetworkAnonymizationKey& network_anonymization_key,
        const std::string& ocsp_result,
        const std::string& sct_list,
-       VerifyCertForSignedExchangeCallback callback) override;
+       VerifyCertCallback callback) override;
 -  void AddHSTS(const std::string& host,
 +  void AddHSTS(const net::NetworkAnonymizationKey& nak,
 +               const std::string& host,
@@ -935,7 +935,7 @@ diff --git a/services/network/network_context.h b/services/network/network_conte
        const std::string& host,
        DeleteDynamicDataForHostCallback callback) override;
    void SetCorsOriginAccessListsForOrigin(
-@@ -755,7 +758,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+@@ -769,7 +772,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
        mojo::PendingRemote<mojom::CookieAccessObserver> cookie_observer,
        net::FirstPartySetMetadata first_party_set_metadata);
  
@@ -945,21 +945,21 @@ diff --git a/services/network/network_context.h b/services/network/network_conte
  
  #if BUILDFLAG(IS_P2P_ENABLED)
    void DestroySocketManager(P2PSocketManager* socket_manager);
-@@ -954,6 +958,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
-     VerifyCertForSignedExchangeCallback callback;
+@@ -975,6 +979,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+     VerifyCertCallback callback;
      scoped_refptr<net::X509Certificate> certificate;
-     GURL url;
+     net::HostPortPair host_port;
 +    net::NetworkAnonymizationKey network_anonymization_key;
      std::string ocsp_result;
      std::string sct_list;
-   };
+     CTVerificationMode ct_verification_mode;
 diff --git a/services/network/public/mojom/network_context.mojom b/services/network/public/mojom/network_context.mojom
 --- a/services/network/public/mojom/network_context.mojom
 +++ b/services/network/public/mojom/network_context.mojom
-@@ -1520,24 +1520,25 @@ interface NetworkContext {
-   // implementation is currently specific for use by Signed Exchange.
+@@ -1530,24 +1530,25 @@ interface NetworkContext {
+   // This implementation is specific for use by Signed Exchange.
    VerifyCertForSignedExchange(X509Certificate certificate,
-                               url.mojom.Url url,
+                               HostPortPair host_port,
 +                              NetworkAnonymizationKey network_anonymization_key,
                                string ocsp_response,
                                string sct_list)
@@ -985,7 +985,7 @@ diff --git a/services/network/public/mojom/network_context.mojom b/services/netw
  
    // Sets allowed and blocked origins respectively for the URLLoaderFactory
    // consumers to access beyond the same-origin policy. The list is managed per
-@@ -1556,7 +1557,7 @@ interface NetworkContext {
+@@ -1566,7 +1567,7 @@ interface NetworkContext {
    // Deletes any dynamic data stored for |host| from the transport
    // security state. Returns true iff an entry was deleted.
    // See net::TransportSecurityState::DeleteDynamicDataForHost for more detail.
