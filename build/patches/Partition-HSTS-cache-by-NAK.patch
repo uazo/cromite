@@ -13,6 +13,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../web_package/signed_exchange_loader.h      |   2 +
  .../signed_exchange_prefetch_handler.cc       |   2 +-
  .../signed_exchange_request_handler.cc        |   1 +
+ .../Partition-HSTS-cache-by-NAK.inc           |   1 +
  net/http/transport_security_state.cc          | 103 ++++++++++++------
  net/http/transport_security_state.h           |  39 ++++---
  net/quic/crypto/proof_verifier_chromium.cc    |   5 +-
@@ -22,10 +23,11 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  net/spdy/spdy_session.h                       |   3 +-
  .../url_request_context_builder.cc            |  14 ---
  net/url_request/url_request_http_job.cc       |   5 +-
- services/network/network_context.cc           |  31 ++++--
- services/network/network_context.h            |  13 ++-
- .../public/mojom/network_context.mojom        |   9 +-
- 21 files changed, 173 insertions(+), 102 deletions(-)
+ services/network/network_context.cc           |  37 ++++---
+ services/network/network_context.h            |  15 ++-
+ .../public/mojom/network_context.mojom        |  10 +-
+ 22 files changed, 181 insertions(+), 104 deletions(-)
+ create mode 100644 cromite_flags/net/base/features_cc/Partition-HSTS-cache-by-NAK.inc
 
 diff --git a/chrome/browser/ssl/https_upgrades_interceptor.cc b/chrome/browser/ssl/https_upgrades_interceptor.cc
 --- a/chrome/browser/ssl/https_upgrades_interceptor.cc
@@ -217,6 +219,12 @@ diff --git a/content/browser/web_package/signed_exchange_request_handler.cc b/co
        frame_tree_node_id_, accept_langs_,
        false /* keep_entry_for_prefetch_cache */);
  
+diff --git a/cromite_flags/net/base/features_cc/Partition-HSTS-cache-by-NAK.inc b/cromite_flags/net/base/features_cc/Partition-HSTS-cache-by-NAK.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/net/base/features_cc/Partition-HSTS-cache-by-NAK.inc
+@@ -0,0 +1 @@
++SET_CROMITE_FEATURE_DISABLED(kHstsTopLevelNavigationsOnly);
 diff --git a/net/http/transport_security_state.cc b/net/http/transport_security_state.cc
 --- a/net/http/transport_security_state.cc
 +++ b/net/http/transport_security_state.cc
@@ -802,7 +810,32 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
    pending_cert_verify->ocsp_result = ocsp_result;
    pending_cert_verify->sct_list = sct_list;
    pending_cert_verify->ct_verification_mode = ct_verification_mode;
-@@ -2121,17 +2123,19 @@ void NetworkContext::SetCorsOriginAccessListsForOrigin(
+@@ -2082,20 +2084,22 @@ void NetworkContext::VerifyCertInternal(
+ void NetworkContext::VerifyCert(
+     const scoped_refptr<net::X509Certificate>& certificate,
+     const net::HostPortPair& host_port,
++    const net::NetworkAnonymizationKey& network_anonymization_key,
+     const std::string& ocsp_result,
+     const std::string& sct_list,
+     VerifyCertCallback callback) {
+-  VerifyCertInternal(certificate, host_port, ocsp_result, sct_list,
++  VerifyCertInternal(certificate, host_port, network_anonymization_key, ocsp_result, sct_list,
+                      CTVerificationMode::kTlsCertificate, std::move(callback));
+ }
+ 
+ void NetworkContext::VerifyCertForSignedExchange(
+     const scoped_refptr<net::X509Certificate>& certificate,
+     const net::HostPortPair& host_port,
++    const net::NetworkAnonymizationKey& network_anonymization_key,
+     const std::string& ocsp_result,
+     const std::string& sct_list,
+     VerifyCertCallback callback) {
+-  VerifyCertInternal(certificate, host_port, ocsp_result, sct_list,
++  VerifyCertInternal(certificate, host_port, network_anonymization_key, ocsp_result, sct_list,
+                      CTVerificationMode::kSignedExchange, std::move(callback));
+ }
+ 
+@@ -2121,17 +2125,19 @@ void NetworkContext::SetCorsOriginAccessListsForOrigin(
    std::move(callback).Run();
  }
  
@@ -825,7 +858,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
                                           bool is_top_level_nav,
                                           IsHSTSActiveForHostCallback callback) {
    net::TransportSecurityState* security_state =
-@@ -2143,10 +2147,10 @@ void NetworkContext::IsHSTSActiveForHost(const std::string& host,
+@@ -2143,10 +2149,10 @@ void NetworkContext::IsHSTSActiveForHost(const std::string& host,
    }
  
    std::move(callback).Run(
@@ -838,7 +871,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
                                    GetHSTSStateCallback callback) {
    base::Value::Dict result;
  
-@@ -2184,10 +2188,10 @@ void NetworkContext::GetHSTSState(const std::string& domain,
+@@ -2184,10 +2190,10 @@ void NetworkContext::GetHSTSState(const std::string& domain,
        net::TransportSecurityState::STSState dynamic_sts_state;
        net::TransportSecurityState::PKPState dynamic_pkp_state;
        bool found_sts_dynamic = transport_security_state->GetDynamicSTSState(
@@ -851,7 +884,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
        if (found_sts_dynamic) {
          result.Set("dynamic_upgrade_mode",
                     static_cast<int>(dynamic_sts_state.upgrade_mode));
-@@ -2225,6 +2229,7 @@ void NetworkContext::GetHSTSState(const std::string& domain,
+@@ -2225,6 +2231,7 @@ void NetworkContext::GetHSTSState(const std::string& domain,
  }
  
  void NetworkContext::DeleteDynamicDataForHost(
@@ -859,7 +892,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
      const std::string& host,
      DeleteDynamicDataForHostCallback callback) {
    net::TransportSecurityState* transport_security_state =
-@@ -2235,7 +2240,7 @@ void NetworkContext::DeleteDynamicDataForHost(
+@@ -2235,7 +2242,7 @@ void NetworkContext::DeleteDynamicDataForHost(
    }
  
    std::move(callback).Run(
@@ -868,7 +901,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
  }
  
  void NetworkContext::EnableStaticKeyPinningForTesting(
-@@ -2279,7 +2284,7 @@ void NetworkContext::PreconnectSockets(
+@@ -2279,7 +2286,7 @@ void NetworkContext::PreconnectSockets(
    DCHECK(!require_network_anonymization_key_ ||
           !network_anonymization_key.IsEmpty());
  
@@ -877,7 +910,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
  
    // |PreconnectSockets| may receive arguments from the renderer, which is not
    // guaranteed to validate them.
-@@ -3092,7 +3097,9 @@ void NetworkContext::OnConnectionError() {
+@@ -3092,7 +3099,9 @@ void NetworkContext::OnConnectionError() {
    }
  }
  
@@ -888,7 +921,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
    // TODO(lilyhoughton) This needs to be gotten rid of once explicit
    // construction with a URLRequestContext is no longer supported.
  
-@@ -3118,6 +3125,7 @@ GURL NetworkContext::GetHSTSRedirectForPreconnect(const GURL& original_url) {
+@@ -3118,6 +3127,7 @@ GURL NetworkContext::GetHSTSRedirectForPreconnect(const GURL& original_url) {
    // top-level navigation so we need to disallow HSTS upgrades for every
    // preconnect.
    if (!url_request_context_->transport_security_state()->ShouldUpgradeToSSL(
@@ -896,7 +929,7 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
            original_url.host(), /*is_top_level_nav=*/false)) {
      RecordHSTSPreconnectUpgradeReason(
          HSTSRedirectUpgradeReason::kNotUpgradedNoHSTSPin);
-@@ -3167,7 +3175,8 @@ void NetworkContext::OnVerifyCertComplete(uint64_t cert_verify_id, int result) {
+@@ -3167,7 +3177,8 @@ void NetworkContext::OnVerifyCertComplete(uint64_t cert_verify_id, int result) {
          url_request_context_->transport_security_state()->CheckPublicKeyPins(
              pending_cert_verify->host_port.host(),
              pending_cert_verify->result->is_issued_by_known_root,
@@ -909,7 +942,14 @@ diff --git a/services/network/network_context.cc b/services/network/network_cont
 diff --git a/services/network/network_context.h b/services/network/network_context.h
 --- a/services/network/network_context.h
 +++ b/services/network/network_context.h
-@@ -414,19 +414,22 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+@@ -408,25 +408,29 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+       mojo::PendingReceiver<mojom::HostResolver> receiver) override;
+   void VerifyCert(const scoped_refptr<net::X509Certificate>& certificate,
+                   const net::HostPortPair& host_port,
++                  const net::NetworkAnonymizationKey& network_anonymization_key,
+                   const std::string& ocsp_result,
+                   const std::string& sct_list,
+                   VerifyCertCallback callback) override;
    void VerifyCertForSignedExchange(
        const scoped_refptr<net::X509Certificate>& certificate,
        const net::HostPortPair& host_port,
@@ -935,7 +975,7 @@ diff --git a/services/network/network_context.h b/services/network/network_conte
        const std::string& host,
        DeleteDynamicDataForHostCallback callback) override;
    void SetCorsOriginAccessListsForOrigin(
-@@ -769,7 +772,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+@@ -769,7 +773,8 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
        mojo::PendingRemote<mojom::CookieAccessObserver> cookie_observer,
        net::FirstPartySetMetadata first_party_set_metadata);
  
@@ -945,7 +985,15 @@ diff --git a/services/network/network_context.h b/services/network/network_conte
  
  #if BUILDFLAG(IS_P2P_ENABLED)
    void DestroySocketManager(P2PSocketManager* socket_manager);
-@@ -975,6 +979,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+@@ -781,6 +786,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
+   void VerifyCertInternal(
+       const scoped_refptr<net::X509Certificate>& certificate,
+       const net::HostPortPair& host_port,
++      const net::NetworkAnonymizationKey& network_anonymization_key,
+       const std::string& ocsp_result,
+       const std::string& sct_list,
+       CTVerificationMode ct_verification_mode,
+@@ -975,6 +981,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) NetworkContext
      VerifyCertCallback callback;
      scoped_refptr<net::X509Certificate> certificate;
      net::HostPortPair host_port;
@@ -956,7 +1004,15 @@ diff --git a/services/network/network_context.h b/services/network/network_conte
 diff --git a/services/network/public/mojom/network_context.mojom b/services/network/public/mojom/network_context.mojom
 --- a/services/network/public/mojom/network_context.mojom
 +++ b/services/network/public/mojom/network_context.mojom
-@@ -1530,24 +1530,25 @@ interface NetworkContext {
+@@ -1522,6 +1522,7 @@ interface NetworkContext {
+   // Checks the given certificate against the CertVerifier and CTVerifier.
+   VerifyCert(X509Certificate certificate,
+              HostPortPair host_port,
++             NetworkAnonymizationKey network_anonymization_key,
+              string ocsp_response,
+              string sct_list)
+       => (int32 error_code, CertVerifyResult cv_result, bool pkp_bypassed);
+@@ -1530,24 +1531,25 @@ interface NetworkContext {
    // This implementation is specific for use by Signed Exchange.
    VerifyCertForSignedExchange(X509Certificate certificate,
                                HostPortPair host_port,
@@ -985,7 +1041,7 @@ diff --git a/services/network/public/mojom/network_context.mojom b/services/netw
  
    // Sets allowed and blocked origins respectively for the URLLoaderFactory
    // consumers to access beyond the same-origin policy. The list is managed per
-@@ -1566,7 +1567,7 @@ interface NetworkContext {
+@@ -1566,7 +1568,7 @@ interface NetworkContext {
    // Deletes any dynamic data stored for |host| from the transport
    // security state. Returns true iff an entry was deleted.
    // See net::TransportSecurityState::DeleteDynamicDataForHost for more detail.
