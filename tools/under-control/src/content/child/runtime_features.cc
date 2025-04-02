@@ -203,9 +203,9 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableEyeDropperAPI, raw_ref(features::kEyeDropper),
            kSetOnlyIfOverridden},
           {wf::EnableFedCm, raw_ref(features::kFedCm), kSetOnlyIfOverridden},
-          {wf::EnableFedCmButtonMode, raw_ref(features::kFedCmButtonMode),
+          {wf::EnableFedCm, raw_ref(features::kFedCmButtonMode),
            kSetOnlyIfOverridden},
-          {wf::EnableFedCmAuthz, raw_ref(features::kFedCmAuthz),
+          {wf::EnableFedCm, raw_ref(features::kFedCmAuthz),
            kSetOnlyIfOverridden},
           {wf::EnableFedCmDelegation, raw_ref(features::kFedCmDelegation),
            kDefault},
@@ -374,6 +374,13 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {"OriginIsolationHeader", raw_ref(features::kOriginIsolationHeader)},
           {"ReduceAcceptLanguage",
            raw_ref(network::features::kReduceAcceptLanguage)},
+          {"Serial",
+#if BUILDFLAG(IS_ANDROID)
+           raw_ref(device::features::kBluetoothRfcommAndroid)
+#else
+           raw_ref(device::features::kSerial)
+#endif
+          },
           {"SerialPortConnected", raw_ref(features::kSerialPortConnected)},
           {"SignatureBasedIntegrity",
            raw_ref(network::features::kSRIMessageSignatureEnforcement)},
@@ -571,11 +578,11 @@ void ResolveInvalidConfigurations() {
   // Topics API cannot be enabled without the support of the browser process.
   // The Document API should be additionally gated by the
   // `kBrowsingTopicsDocumentAPI` feature.
-  if (!base::FeatureList::IsEnabled(blink::features::kBrowsingTopics)) {
+  if (!base::FeatureList::IsEnabled(network::features::kBrowsingTopics)) {
     LOG_IF(WARNING, WebRuntimeFeatures::IsTopicsAPIEnabled())
         << "Topics cannot be enabled in this configuration. Use --"
         << switches::kEnableFeatures << "="
-        << blink::features::kBrowsingTopics.name << " in addition.";
+        << network::features::kBrowsingTopics.name << " in addition.";
     WebRuntimeFeatures::EnableTopicsAPI(false);
     WebRuntimeFeatures::EnableTopicsDocumentAPI(false);
     WebRuntimeFeatures::EnableTopicsImgAPI(false);
@@ -592,12 +599,12 @@ void ResolveInvalidConfigurations() {
     }
   }
 
-  if (!base::FeatureList::IsEnabled(blink::features::kSharedStorageAPI)) {
+  if (!base::FeatureList::IsEnabled(network::features::kSharedStorageAPI)) {
     LOG_IF(WARNING, WebRuntimeFeatures::IsSharedStorageAPIEnabled())
         << "SharedStorage cannot be enabled in this "
            "configuration. Use --"
         << switches::kEnableFeatures << "="
-        << blink::features::kSharedStorageAPI.name << " in addition.";
+        << network::features::kSharedStorageAPI.name << " in addition.";
     WebRuntimeFeatures::EnableSharedStorageAPI(false);
   }
 
@@ -612,13 +619,13 @@ void ResolveInvalidConfigurations() {
     WebRuntimeFeatures::EnableAttributionReporting(false);
   }
 
-  if (!base::FeatureList::IsEnabled(blink::features::kInterestGroupStorage)) {
+  if (!base::FeatureList::IsEnabled(network::features::kInterestGroupStorage)) {
     LOG_IF(WARNING,
            WebRuntimeFeatures::IsAdInterestGroupAPIEnabledByRuntimeFlag())
         << "AdInterestGroupAPI cannot be enabled in this "
            "configuration. Use --"
         << switches::kEnableFeatures << "="
-        << blink::features::kInterestGroupStorage.name << " in addition.";
+        << network::features::kInterestGroupStorage.name << " in addition.";
     WebRuntimeFeatures::EnableAdInterestGroupAPI(false);
     WebRuntimeFeatures::EnableFledge(false);
   }
