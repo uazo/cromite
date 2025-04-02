@@ -9,10 +9,12 @@ PartitionNelAndReportingByNetworkIsolationKey, kSplitCacheByNavigationInitiator
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- .../browser/net/profile_network_context_service.cc   |  2 +-
- .../Enable-network-isolation-features.inc            | 12 ++++++++++++
- .../Enable-network-isolation-features.inc            |  1 +
- 3 files changed, 14 insertions(+), 1 deletion(-)
+ .../browser/net/profile_network_context_service.cc |  2 +-
+ .../Enable-network-isolation-features.inc          |  9 +++++++++
+ .../Enable-network-isolation-features.inc          |  1 +
+ net/http/http_cache.cc                             | 14 +++++++++-----
+ net/http/http_cache.h                              |  2 +-
+ 5 files changed, 21 insertions(+), 7 deletions(-)
  create mode 100644 cromite_flags/net/base/features_cc/Enable-network-isolation-features.inc
  create mode 100644 cromite_flags/services/network/public/cpp/features_cc/Enable-network-isolation-features.inc
 
@@ -26,13 +28,13 @@ diff --git a/chrome/browser/net/profile_network_context_service.cc b/chrome/brow
 -      (field_trial ? field_trial->group_name() : "None");
 +      (field_trial ? field_trial->group_name() : "EnableFeatureForTests");
  
-   // For the HTTP Cache keying experiments, if a flag indicates that the user is
-   // in an experiment group, modify `current_field_trial_status` to ensure that
+   if (disk_cache::InBackendExperiment()) {
+     if (disk_cache::InSimpleBackendExperimentGroup()) {
 diff --git a/cromite_flags/net/base/features_cc/Enable-network-isolation-features.inc b/cromite_flags/net/base/features_cc/Enable-network-isolation-features.inc
 new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/net/base/features_cc/Enable-network-isolation-features.inc
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,9 @@
 +SET_CROMITE_FEATURE_ENABLED(kSplitCodeCacheByNetworkIsolationKey);
 +SET_CROMITE_FEATURE_ENABLED(kPartitionConnectionsByNetworkIsolationKey);
 +
@@ -40,15 +42,74 @@ new file mode 100644
 +
 +// enable http cache partition
 +SET_CROMITE_FEATURE_ENABLED(kSplitCacheByNetworkIsolationKey);
-+
-+// most restricted option (ByNavigationInitiator) used
-+// it generates a cache key isolating all requests per initiator.
-+// requests with initiators with an opaque origin are not cached
-+SET_CROMITE_FEATURE_ENABLED(kSplitCacheByNavigationInitiator);
++// but disable cache for cross-site main frame navigation
++SET_CROMITE_FEATURE_ENABLED(kSplitCacheByCrossSiteMainFrameNavigationBoolean);
 diff --git a/cromite_flags/services/network/public/cpp/features_cc/Enable-network-isolation-features.inc b/cromite_flags/services/network/public/cpp/features_cc/Enable-network-isolation-features.inc
 new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/services/network/public/cpp/features_cc/Enable-network-isolation-features.inc
 @@ -0,0 +1 @@
 +SET_CROMITE_FEATURE_ENABLED(kSplitAuthCacheByNetworkIsolationKey);
+diff --git a/net/http/http_cache.cc b/net/http/http_cache.cc
+--- a/net/http/http_cache.cc
++++ b/net/http/http_cache.cc
+@@ -633,7 +633,7 @@ bool HttpCache::CanGenerateCacheKeyForRequest(const HttpRequestInfo* request) {
+ 
+ // static
+ // Generate a key that can be used inside the cache.
+-std::string HttpCache::GenerateCacheKey(
++std::string HttpCache::GenerateCacheKey2(
+     const GURL& url,
+     int load_flags,
+     const NetworkIsolationKey& network_isolation_key,
+@@ -671,8 +671,8 @@ std::string HttpCache::GenerateCacheKey(
+       const bool is_initiator_cross_site =
+           initiator_site != net::SchemefulSite(url);
+       if (is_initiator_cross_site) {
+-        is_cross_site_main_frame_navigation_prefix =
+-            kCrossSiteMainFrameNavigationPrefix;
++        DLOG(INFO) << "---initiator_site cs=" << base::StrCat({"ni_", initiator_site.Serialize(), " "});
++        return "";
+       }
+     }
+     isolation_key = base::StrCat(
+@@ -687,9 +687,11 @@ std::string HttpCache::GenerateCacheKey(
+   // Strip out the reference, username, and password sections of the URL and
+   // concatenate with the credential_key, the post_key, and the network
+   // isolation key if we are splitting the cache.
+-  return base::StringPrintf("%c/%" PRId64 "/%s%s", credential_key,
++  auto key = base::StringPrintf("%c/%" PRId64 "/%s%s", credential_key,
+                             upload_data_identifier, isolation_key.c_str(),
+                             HttpUtil::SpecForRequest(url).c_str());
++  DLOG(INFO) << "---key=" << key;
++  return key;
+ }
+ 
+ // static
+@@ -712,10 +714,12 @@ HttpCache::GenerateCacheKeyForRequestWithAlternateURL(
+   const int64_t upload_data_identifier =
+       request->upload_data_stream ? request->upload_data_stream->identifier()
+                                   : int64_t(0);
+-  return GenerateCacheKey(
++  auto key = GenerateCacheKey2(
+       url, request->load_flags, request->network_isolation_key,
+       upload_data_identifier, request->is_subframe_document_resource,
+       request->is_main_frame_navigation, request->initiator);
++  if (key.empty()) return std::nullopt;
++  return key;
+ }
+ 
+ // static
+diff --git a/net/http/http_cache.h b/net/http/http_cache.h
+--- a/net/http/http_cache.h
++++ b/net/http/http_cache.h
+@@ -509,7 +509,7 @@ class NET_EXPORT HttpCache : public HttpTransactionFactory {
+   // Generates a cache key given the various pieces used to construct the key.
+   // Must not be called if a corresponding `CanGenerateCacheKeyForRequest`
+   // returns false.
+-  static std::string GenerateCacheKey(
++  static std::string GenerateCacheKey2(
+       const GURL& url,
+       int load_flags,
+       const NetworkIsolationKey& network_isolation_key,
 --

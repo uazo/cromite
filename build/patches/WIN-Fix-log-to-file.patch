@@ -5,52 +5,53 @@ Subject: WIN Fix log to file
 Allows log activation without opening the console window.
 Log rotation enabled by default.
 ---
- chrome/common/logging_chrome.cc | 11 +++++++----
- chrome/common/logging_chrome.h  |  6 ++++--
+ chrome/common/logging_chrome.cc | 11 ++++++++---
+ chrome/common/logging_chrome.h  |  6 +++++-
  content/app/content_main.cc     |  9 ++++++---
- 3 files changed, 17 insertions(+), 9 deletions(-)
+ 3 files changed, 19 insertions(+), 7 deletions(-)
 
 diff --git a/chrome/common/logging_chrome.cc b/chrome/common/logging_chrome.cc
 --- a/chrome/common/logging_chrome.cc
 +++ b/chrome/common/logging_chrome.cc
-@@ -55,7 +55,7 @@
+@@ -54,7 +54,7 @@
  #include "content/public/common/content_switches.h"
  #include "ipc/ipc_logging.h"
  
 -#if BUILDFLAG(IS_CHROMEOS)
 +#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
+ #include "ash/constants/ash_switches.h"
  #include "base/i18n/time_formatting.h"
  #include "third_party/icu/source/i18n/unicode/timezone.h"
- #endif
-@@ -233,7 +233,7 @@ LoggingDestination DetermineLoggingDestination(
+@@ -229,7 +229,7 @@ LoggingDestination DetermineLoggingDestination(
    return LoggingDestFromCommandLine(command_line, unused);
  }
  
 -#if BUILDFLAG(IS_CHROMEOS)
-+#if BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
  bool RotateLogFile(const base::FilePath& target_path) {
    DCHECK(!target_path.empty());
    // If the old log file doesn't exist, do nothing.
-@@ -278,7 +278,7 @@ bool RotateLogFile(const base::FilePath& target_path) {
+@@ -274,7 +274,9 @@ bool RotateLogFile(const base::FilePath& target_path) {
  
    return true;
  }
--#endif  // BUILDFLAG(IS_CHROMEOS)
 +#endif  // BUILDFLAG(IS_WIN)
  
- #if BUILDFLAG(IS_CHROMEOS_ASH)
++#if BUILDFLAG(IS_CHROMEOS)
  base::FilePath SetUpSymlinkIfNeeded(const base::FilePath& symlink_path,
-@@ -457,6 +457,9 @@ void InitChromeLogging(const base::CommandLine& command_line,
+                                     bool new_log) {
+   DCHECK(!symlink_path.empty());
+@@ -447,6 +449,9 @@ void InitChromeLogging(const base::CommandLine& command_line,
        // since that will remove the newly created link instead.
        delete_old_log_file = APPEND_TO_OLD_LOG_FILE;
- #endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+ #endif  // BUILDFLAG(IS_CHROMEOS)
 +#if BUILDFLAG(IS_WIN)
 +      RotateLogFile(log_path);
 +#endif
      }
    } else {
      log_locking_state = DONT_LOCK_LOG_FILE;
-@@ -621,7 +624,7 @@ bool DialogsAreSuppressed() {
+@@ -611,7 +616,7 @@ bool DialogsAreSuppressed() {
    return dialogs_are_suppressed_;
  }
  
@@ -62,21 +63,22 @@ diff --git a/chrome/common/logging_chrome.cc b/chrome/common/logging_chrome.cc
 diff --git a/chrome/common/logging_chrome.h b/chrome/common/logging_chrome.h
 --- a/chrome/common/logging_chrome.h
 +++ b/chrome/common/logging_chrome.h
-@@ -35,10 +35,12 @@ LoggingDestination DetermineLoggingDestination(
+@@ -34,10 +34,14 @@ LoggingDestination DetermineLoggingDestination(
  // write new logs to the latest log file. Otherwise, we reuse the existing file
  // if exists.
  base::FilePath SetUpLogFile(const base::FilePath& target_path, bool new_log);
 +#endif  // BUILDFLAG(IS_CHROMEOS)
  
-+#if BUILDFLAG(IS_WIN)
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN)
  // Allow external calls to the internal method for testing.
  bool RotateLogFile(const base::FilePath& target_path);
--#endif  // BUILDFLAG(IS_CHROMEOS)
-+#endif  // BUILDFLAG(IS_WIN)
++#endif
  
- #if BUILDFLAG(IS_CHROMEOS_ASH)
++#if BUILDFLAG(IS_CHROMEOS)
  #if defined(UNIT_TEST)
-@@ -70,7 +72,7 @@ base::FilePath GetLogFileName(const base::CommandLine& command_line);
+ // Expose the following methods only for tests.
+ 
+@@ -67,7 +71,7 @@ base::FilePath GetLogFileName(const base::CommandLine& command_line);
  // otherwise.
  bool DialogsAreSuppressed();
  
@@ -88,7 +90,7 @@ diff --git a/chrome/common/logging_chrome.h b/chrome/common/logging_chrome.h
 diff --git a/content/app/content_main.cc b/content/app/content_main.cc
 --- a/content/app/content_main.cc
 +++ b/content/app/content_main.cc
-@@ -331,9 +331,12 @@ NO_STACK_PROTECTOR int RunContentProcess(
+@@ -337,9 +337,12 @@ NO_STACK_PROTECTOR int RunContentProcess(
      } else if (command_line->HasSwitch(switches::kEnableLogging)) {
        // Route stdio to parent console (if any) or create one, do not create a
        // console in children if handles are being passed.
