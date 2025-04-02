@@ -385,8 +385,6 @@ void SetFeatureFlags() {
     SetV8FlagsFormatted("--scavenger-max-new-space-capacity-mb=%i",
                         features::kV8ScavengerMaxCapacity.Get());
   }
-  SetV8FlagsIfOverridden(features::kV8SeparateGCPhases, "--separate-gc-phases",
-                         "--no-separate-gc-phases");
   SetV8FlagsIfOverridden(features::kV8Sparkplug, "--sparkplug",
                          "--no-sparkplug");
   SetV8FlagsIfOverridden(features::kV8Turbofan, "--turbofan", "--no-turbofan");
@@ -491,10 +489,6 @@ void SetFeatureFlags() {
                          "--intel-jcc-erratum-mitigation",
                          "--no-intel-jcc-erratum-mitigation");
 
-  SetV8FlagsIfOverridden(features::kV8UpdateLimitAfterLoading,
-                         "--update-allocation-limits-after-loading",
-                         "--no-update-allocation-limits-after-loading");
-
   SetV8FlagsIfOverridden(features::kV8UseLibmTrigFunctions,
                          "--use-libm-trig-functions",
                          "--no-use-libm-trig-functions");
@@ -522,6 +516,7 @@ void SetFeatureFlags() {
                          "--no-js-duplicate-named-groups");
   SetV8FlagsIfOverridden(features::kJavaScriptPromiseTry, "--js-promise-try",
                          "--no-js-promise-try");
+  SetV8Flags("--js-float16array");
 
   // WebAssembly features.
 
@@ -555,6 +550,7 @@ void V8Initializer::Initialize(IsolateHolder::ScriptMode mode,
   // instrumentation initialization, see https://crbug.com/v8/11043. --js-flags
   // and other mandatory flags in `SetFlags` must be ordered after feature flag
   // overrides.
+  SetV8Flags("--js-explicit-resource-management");
   if (!disallow_v8_feature_flag_overrides) {
     SetFeatureFlags();
   }
