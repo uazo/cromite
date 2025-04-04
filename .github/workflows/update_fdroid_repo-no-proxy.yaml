@@ -1,0 +1,66 @@
+name: Update fdroid repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      type:
+        description: 'runner? [dev/ci]'
+        required: true
+        default: 'ci'
+
+env:
+  REMOVEDOCKERSUPPORT: true
+  USELOCALIMAGE: true
+
+jobs:
+  update-fdroid:
+    runs-on: ${{ github.event.inputs.type }}
+
+    container:
+      image: uazo/fdroidserver:latest
+      volumes:
+        - /tmp/forward-proxy:/tmp/forward-proxy
+
+    steps:
+       - name: Update fdroid repo
+         shell: bash
+         run: |
+            cd /
+            . fdroidserver-env/bin/activate
+            apt update
+
+            DEBIAN_FRONTEND=noninteractive apt update && apt install -y wget unzip
+            wget https://github.com/rclone/rclone/releases/download/v1.64.0/rclone-v1.64.0-linux-amd64.zip
+            unzip rclone-v1.64.0-linux-amd64.zip
+            export rclone=rclone-v1.64.0-linux-amd64/rclone
+
+            mkdir -p  ~/.config/rclone
+            echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+
+            $rclone sync ftp:www.cromite.org/fdroid fdroid --log-level INFO
+
+            test -d /usr/share/man/man1 || mkdir -p /usr/share/man/man1
+            DEBIAN_FRONTEND=noninteractive apt install -y fdroidserver
+
+            cd fdroid/repo/
+            wget https://github.com/uazo/cromite/releases/latest/download/arm_ChromePublic.apk
+            wget https://github.com/uazo/cromite/releases/latest/download/arm64_ChromePublic.apk
+            wget https://github.com/uazo/cromite/releases/latest/download/x64_ChromePublic.apk
+
+            test arm_ChromePublic.apk.1 && rm arm_ChromePublic.apk && mv arm_ChromePublic.apk.1 arm_ChromePublic.apk
+            test arm64_ChromePublic.apk.1 && rm arm64_ChromePublic.apk && mv arm64_ChromePublic.apk.1 arm64_ChromePublic.apk
+            test x64_ChromePublic.apk.1 && rm x64_ChromePublic.apk && mv x64_ChromePublic.apk.1 x64_ChromePublic.apk
+            cd ..
+
+            gpg -d --passphrase "${{ secrets.FDROID_PASSPHRASE }}" --batch config.yml.asc >config.yml
+            gpg -d --passphrase "${{ secrets.FDROID_PASSPHRASE }}" --batch keystore.p12.asc >keystore.p12
+
+            fdroid update -c; fdroid update
+            rm config.yml keystore.p12
+            cd ..
+
+            test -f fdroid/config.yml && exit 1
+            test -f fdroid/keystore.p12 && exit 1
+
+            $rclone sync fdroid ftp:www.cromite.org/fdroid --log-level INFO
+            $rclone sync fdroid ftp:www.cromite.org/fdroid --log-level INFO
