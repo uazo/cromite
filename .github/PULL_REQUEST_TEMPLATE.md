@@ -5,7 +5,7 @@
 ## All submissions
 
 * [ ] there are no other open [Pull Requests](../../../pulls) for the same update/change
-* [ ] Bromite can be built with these changes
+* [ ] Cromite can be built with these changes
 * [ ] I have tested that the new change works as intended (AVD or physical device will do)
 
 ### Format

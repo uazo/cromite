@@ -1,17 +1,17 @@
 # Cromite AdBlock engine
 
-## Modified version of Adblock plus integrated in cromite
+## Modified version of Adblock Plus integrated in Cromite
 
-Cromite uses a modified version of adblock plus.
+Cromite uses a modified version of Adblock Plus.
 
-Some adblock plus rules cannot be used:
+Some Adblock Plus rules cannot be used:
 - removed support for header and csp filter option
 - removed support for json-override, simulate-event-poc, simulate-mouse-event snippets
 - allowed the use of override-property-read by eliminating the possibility of specifying a number as an argument (except 0 and 1)
 - removed support for sitekey
 
 Some improvements have been included:
-- Added dns CNAME support
+- Added DNS CNAME support
 - Block of WebSockets and WebTransport urls
 - Block of service workers fetchs
 
@@ -29,7 +29,7 @@ Since v77 Bromite uses [Chromium subresource filter](https://github.com/chromium
 
 This engine does not currently support CSS rules; as a result some sites will show ads.
 
-In cromite it is disabled by default.
+In Cromite it is disabled by default.
 
 ### Update mechanism
 
