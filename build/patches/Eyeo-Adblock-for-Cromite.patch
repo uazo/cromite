@@ -44,10 +44,10 @@ suit Cromite logic.
  components/adblock/content/browser/BUILD.gn   |   24 +-
  .../content/browser/adblock_blocking_page.cc  |  182 +
  .../content/browser/adblock_blocking_page.h   |   75 +
- .../browser/adblock_content_browser_client.h  |  237 +-
+ .../browser/adblock_content_browser_client.h  |  241 +-
  .../browser/adblock_internals_page_handler.cc |    9 +-
  .../browser/adblock_url_loader_factory.cc     |   70 +-
- .../browser/adblock_webcontents_observer.cc   |   59 +-
+ .../browser/adblock_webcontents_observer.cc   |   62 +-
  .../browser/adblock_webcontents_observer.h    |    5 +-
  .../content/browser/element_hider_impl.cc     |   13 +-
  .../content/browser/eyeo_document_info.cc     |   15 +
@@ -98,7 +98,7 @@ suit Cromite logic.
  .../adblock/core/subscription/subscription.cc |   20 +
  .../adblock/core/subscription/subscription.h  |    3 +
  .../subscription_collection_impl.cc           |    1 +
- .../core/subscription/subscription_config.cc  |   28 +-
+ .../core/subscription/subscription_config.cc  |   40 +-
  .../core/subscription/subscription_config.h   |    6 +-
  .../subscription_downloader_impl.cc           |   19 +-
  .../subscription_persistent_metadata.h        |    1 +
@@ -125,7 +125,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 120 files changed, 9157 insertions(+), 616 deletions(-)
+ 120 files changed, 9175 insertions(+), 617 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -2466,7 +2466,7 @@ diff --git a/components/adblock/content/browser/adblock_content_browser_client.h
  
   protected:
 -  static bool IsFilteringNeeded(content::BrowserContext* browser_context);
-+  bool IsFilteringNeeded(content::RenderFrameHost* frame);
++  bool IsFilteringNeeded(content::RenderFrameHost* frame, const GURL& embedder_url);
 +  bool IsFilteringNeeded(content::BrowserContext* browser_context, const GURL& embedder_url);
  
    // current_browser_context is the BrowserContext relevant for the currently
@@ -2517,7 +2517,7 @@ diff --git a/components/adblock/content/browser/adblock_content_browser_client.h
 +    WillInterceptWebSocket(content::RenderFrameHost* frame,
 +      content::RenderProcessHost* process,
 +      const url::Origin& origin) {
-+  if (IsFilteringNeeded(frame)) {
++  if (IsFilteringNeeded(frame, origin.GetURL())) {
      return true;
    }
 -  return ContentBrowserClientBase::WillInterceptWebSocket(frame);
@@ -2536,7 +2536,7 @@ diff --git a/components/adblock/content/browser/adblock_content_browser_client.h
      mojo::PendingRemote<network::mojom::WebSocketHandshakeClient>
          handshake_client) {
 -  if (frame && IsFilteringNeeded(GetBrowserContext(frame))) {
-+  if (IsFilteringNeeded(frame)) {
++  if (IsFilteringNeeded(frame, url)) {
      auto* subscription_service =
          adblock::SubscriptionServiceFactory::GetForBrowserContext(
              GetBrowserContext(frame));
@@ -2691,7 +2691,7 @@ diff --git a/components/adblock/content/browser/adblock_content_browser_client.h
 -  }
 -#endif
 +      type != content::ContentBrowserClient::URLLoaderFactoryType::kDownload &&
-+      IsFilteringNeeded(frame);
++      IsFilteringNeeded(frame, request_initiator.GetURL());
  
    if (use_adblock_proxy) {
      auto [proxied_receiver, target_factory_remote] = factory_builder.Append();
@@ -2728,7 +2728,7 @@ diff --git a/components/adblock/content/browser/adblock_content_browser_client.h
                                                  std::move(handshake_client));
        return;
      }
-@@ -324,16 +447,38 @@ void AdblockContentBrowserClient<ContentBrowserClientBase>::
+@@ -324,16 +447,42 @@ void AdblockContentBrowserClient<ContentBrowserClientBase>::
    VLOG(1) << "[eyeo] Web socket blocked for " << url;
  }
  
@@ -2736,12 +2736,16 @@ diff --git a/components/adblock/content/browser/adblock_content_browser_client.h
  template <class ContentBrowserClientBase>
  bool AdblockContentBrowserClient<ContentBrowserClientBase>::IsFilteringNeeded(
 -    content::BrowserContext* browser_context) {
-+          content::RenderFrameHost* frame) {
++          content::RenderFrameHost* frame, const GURL& embedder_url) {
 +  if (frame) {
-+    content::RenderFrameHost* embedder = frame->GetOutermostMainFrameOrEmbedder();
-+    const auto& embedder_url = embedder->GetLastCommittedURL();
 +    auto* browser_context = frame->GetProcess()->GetBrowserContext();
-+    return IsFilteringNeeded(browser_context, embedder_url);
++    content::RenderFrameHost* embedder = frame->GetOutermostMainFrameOrEmbedder();
++    const auto& top_frame_url = embedder->GetLastCommittedURL();
++    if(top_frame_url.is_empty()) {
++      return IsFilteringNeeded(browser_context, embedder_url);
++    } else {
++      return IsFilteringNeeded(browser_context, top_frame_url);
++    }
 +  }
 +  return false;
 +}
@@ -3020,13 +3024,20 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc 
  
  AdblockWebContentObserver::~AdblockWebContentObserver() = default;
  
-@@ -153,6 +170,44 @@ void AdblockWebContentObserver::DidFinishNavigation(
+@@ -141,7 +158,8 @@ void AdblockWebContentObserver::DidFinishNavigation(
+   VLOG(1) << "[eyeo] Finished navigation: URL=" << url
+           << ", has_commited=" << navigation_handle->HasCommitted()
+           << ", is_error=" << navigation_handle->IsErrorPage()
+-          << ", isInMainFrame=" << navigation_handle->IsInMainFrame();
++          << ", isInMainFrame=" << navigation_handle->IsInMainFrame()
++          << ", NetErrorCode=" << navigation_handle->GetNetErrorCode();
+   content::RenderFrameHost* frame = nullptr;
+   if (navigation_handle->HasCommitted()) {
+     frame = navigation_handle->GetRenderFrameHost();
+@@ -153,6 +171,44 @@ void AdblockWebContentObserver::DidFinishNavigation(
      VLOG(1) << "[eyeo] Unsupported scheme, skipping injection.";
      return;
    }
-+  if (!IsFilteringNeeded(frame, settings_map_)) {
-+    return;
-+  }
 +  if (navigation_handle->GetNetErrorCode() == net::ERR_BLOCKED_BY_ADMINISTRATOR
 +        && navigation_handle->IsInMainFrame()) {
 +    GURL subscription_url;
@@ -3060,6 +3071,9 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc 
 +          AssociateBlockingPage(error_page_navigation_handle.get(),
 +                                std::move(blocking_page));
 +    }
++    return;
++  }
++  if (!IsFilteringNeeded(frame, settings_map_)) {
 +    return;
 +  }
    if (!navigation_handle->IsErrorPage()) {
@@ -11731,16 +11745,28 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
    if (!g_port_for_testing) {
      return url.spec();
    }
-@@ -108,7 +108,7 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+@@ -108,7 +108,19 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
         "EasyList",
         {"en"},
         SubscriptionUiVisibility::Visible,
 -       SubscriptionFirstRunBehavior::Subscribe,
-+       SubscriptionFirstRunBehavior::Ignore,
++       SubscriptionFirstRunBehavior::SubscribeAtFirstRun,
++       SubscriptionPrivilegedFilterStatus::Forbidden},
++      {GURL(GetHost() + "badblock_lite.txt"),
++       "Celenity/BadBlock Lite",
++       {"en"},
++       SubscriptionUiVisibility::Visible,
++       SubscriptionFirstRunBehavior::SubscribeAtFirstRun,
++       SubscriptionPrivilegedFilterStatus::Forbidden},
++      {GURL(GetHost() + "badmojr-1Hosts-master-Pro-adblock.txt"),
++       "badmojr/1Hosts",
++       {"en"},
++       SubscriptionUiVisibility::Visible,
++       SubscriptionFirstRunBehavior::SubscribeAtFirstRun,
         SubscriptionPrivilegedFilterStatus::Forbidden},
        {GURL(GetHost() + "abpindo.txt"),
         "ABPindo",
-@@ -262,17 +262,23 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+@@ -262,17 +274,23 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
         SubscriptionFirstRunBehavior::SubscribeIfLocaleMatch,
         SubscriptionPrivilegedFilterStatus::Forbidden},
        {AcceptableAdsUrl(),
@@ -11757,18 +11783,18 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
         SubscriptionUiVisibility::Visible,
 -       SubscriptionFirstRunBehavior::Subscribe,
 -       SubscriptionPrivilegedFilterStatus::Allowed},
-+       SubscriptionFirstRunBehavior::Ignore,
++       SubscriptionFirstRunBehavior::SubscribeAtFirstRun,
 +       SubscriptionPrivilegedFilterStatus::AllowedAndChecked},
 +      {GURL("https://raw.githubusercontent.com/uazo/cromite/master/tools/filters/experimental-cromite-filters.txt"),
 +       "Cromite experimental filters",
 +       {},
 +       SubscriptionUiVisibility::Visible,
-+       SubscriptionFirstRunBehavior::Ignore,
++       SubscriptionFirstRunBehavior::SubscribeAtFirstRun,
 +       SubscriptionPrivilegedFilterStatus::AllowedAndChecked},
        {GURL(GetHost() + "i_dont_care_about_cookies.txt"),
         "I don't care about cookies",
         {},
-@@ -303,13 +309,13 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+@@ -303,13 +321,13 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
         {},
         SubscriptionUiVisibility::Invisible,
         SubscriptionFirstRunBehavior::Ignore,
@@ -11784,7 +11810,7 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
  
        // You can customize subscriptions available on first run and in settings
        // here. Items are displayed in settings in order declared here. See
-@@ -346,7 +352,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
+@@ -346,7 +364,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
    for (const auto& cur : GetKnownSubscriptions()) {
      if (cur.url == url) {
        return cur.privileged_status ==
@@ -11793,7 +11819,7 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
      }
    }
  
-@@ -356,9 +362,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
+@@ -356,9 +374,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
  const std::vector<PreloadedSubscriptionInfo>&
  config::GetPreloadedSubscriptionConfiguration() {
    static const std::vector<PreloadedSubscriptionInfo> preloaded_subscriptions =
