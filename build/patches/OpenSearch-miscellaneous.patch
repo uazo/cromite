@@ -5,19 +5,19 @@ Subject: OpenSearch: miscellaneous
 Fix upstream bug with recently added engines prematurely discarded
 because they have no last-visit timestamp
 Fix upstream bug with visited engines visit time not updated
-Allow adding search engines in incognito mode
 Allow using search engine URLs with non-empty paths
 Add verbose logging
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- .../settings/SearchEngineAdapter.java         |  4 ++-
- .../search_engine_tab_helper.cc               | 35 ++++++++++++++-----
- .../renderer/chrome_render_frame_observer.cc  |  2 ++
- .../search_engines/template_url_fetcher.cc    | 24 ++++++++++---
+ .../settings/SearchEngineAdapter.java         |  4 +-
+ .../search_engine_tab_helper.cc               | 36 ++++++++++++----
+ .../renderer/chrome_render_frame_observer.cc  |  2 +
+ .../search_engines/template_url_fetcher.cc    | 41 ++++++++++++++-----
+ .../search_engines/template_url_fetcher.h     |  2 +-
  .../search_engines/template_url_parser.cc     |  2 +-
- .../search_engines/template_url_service.h     |  8 ++---
- 6 files changed, 56 insertions(+), 19 deletions(-)
+ .../search_engines/template_url_service.h     |  8 ++--
+ 7 files changed, 70 insertions(+), 25 deletions(-)
 
 diff --git a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java b/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
 --- a/chrome/browser/search_engines/android/java/src/org/chromium/chrome/browser/search_engines/settings/SearchEngineAdapter.java
@@ -44,7 +44,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
  #include "base/metrics/histogram_macros.h"
  #include "chrome/browser/favicon/favicon_utils.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -47,6 +48,7 @@ void SearchEngineTabHelper::BindOpenSearchDescriptionDocumentHandler(
+@@ -48,6 +49,7 @@ void SearchEngineTabHelper::BindOpenSearchDescriptionDocumentHandler(
          receiver) {
    // Bind only for outermost main frames.
    if (rfh->GetParentOrOuterDocument()) {
@@ -52,7 +52,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
      return;
    }
  
-@@ -77,6 +79,7 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
+@@ -78,6 +80,7 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
    // Don't autogenerate keywords for pages that are the result of form
    // submissions.
    if (IsFormSubmit(entry)) {
@@ -60,7 +60,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
      return std::u16string();
    }
  
-@@ -86,6 +89,7 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
+@@ -87,6 +90,7 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
    if (!url.is_valid()) {
      url = entry->GetURL();
      if (!url.is_valid()) {
@@ -68,7 +68,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
        return std::u16string();
      }
    }
-@@ -95,10 +99,10 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
+@@ -96,10 +100,10 @@ std::u16string SearchEngineTabHelper::GenerateKeywordFromNavigationEntry(
    // b) have a path.
    //
    // If we relax the path constraint, we need to be sure to sanitize the path
@@ -82,7 +82,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
      return std::u16string();
    }
  
-@@ -127,14 +131,15 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+@@ -128,14 +132,15 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
    // http://b/issue?id=863583. For that reason, this doesn't check and allow
    // urls referring to osdd urls with same schemes.
    if (!osdd_url.is_valid() || !osdd_url.SchemeIsHTTPOrHTTPS()) {
@@ -100,7 +100,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
      return;
    }
  
-@@ -148,6 +153,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+@@ -149,6 +154,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
      --index;
    }
    if (!entry || IsFormSubmit(entry)) {
@@ -108,7 +108,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
      return;
    }
  
-@@ -158,6 +164,12 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+@@ -159,11 +165,18 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
      return;
    }
  
@@ -121,15 +121,21 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
    auto* frame = web_contents()->GetPrimaryMainFrame();
    mojo::Remote<network::mojom::URLLoaderFactory> url_loader_factory;
    frame->CreateNetworkServiceDefaultFactory(
-@@ -165,6 +177,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+       url_loader_factory.BindNewPipeAndPassReceiver());
  
++  bool is_off_the_record = profile->IsOffTheRecord();
    // Download the OpenSearch description document. If this is successful, a
    // new keyword will be created when done.
-+  // NOTE: for search pages under the same domain only 1 keyword is supported
+ #if BUILDFLAG(IS_ANDROID)
+@@ -172,6 +185,7 @@ void SearchEngineTabHelper::PageHasOpenSearchDescriptionDocument(
+   }
+ #endif
    TemplateURLFetcherFactory::GetForProfile(profile)->ScheduleDownload(
++      is_off_the_record,
        keyword, osdd_url, entry->GetFavicon().url,
        frame->GetLastCommittedOrigin(), url_loader_factory.get(),
-@@ -210,12 +223,19 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
+       frame->GetRoutingID(),
+@@ -216,12 +230,19 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
      return;
    }
  
@@ -151,7 +157,7 @@ diff --git a/chrome/browser/ui/search_engines/search_engine_tab_helper.cc b/chro
    TemplateURLService* url_service =
        TemplateURLServiceFactory::GetForProfile(profile);
    if (!url_service) {
-@@ -227,7 +247,6 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
+@@ -233,7 +254,6 @@ void SearchEngineTabHelper::GenerateKeywordIfNecessary(
      return;
    }
  
@@ -181,7 +187,60 @@ diff --git a/chrome/renderer/chrome_render_frame_observer.cc b/chrome/renderer/c
 diff --git a/components/search_engines/template_url_fetcher.cc b/components/search_engines/template_url_fetcher.cc
 --- a/components/search_engines/template_url_fetcher.cc
 +++ b/components/search_engines/template_url_fetcher.cc
-@@ -261,18 +261,32 @@ void TemplateURLFetcher::ScheduleDownload(
+@@ -72,7 +72,8 @@ class TemplateURLFetcher::RequestDelegate {
+                   const url::Origin& initiator,
+                   network::mojom::URLLoaderFactory* url_loader_factory,
+                   int render_frame_id,
+-                  int32_t request_id);
++                  int32_t request_id,
++                  bool is_off_the_record);
+ 
+   RequestDelegate(const RequestDelegate&) = delete;
+   RequestDelegate& operator=(const RequestDelegate&) = delete;
+@@ -98,6 +99,7 @@ class TemplateURLFetcher::RequestDelegate {
+   std::u16string keyword_;
+   const GURL osdd_url_;
+   const GURL favicon_url_;
++  bool is_off_the_record_;
+ 
+   base::CallbackListSubscription template_url_subscription_;
+ 
+@@ -112,11 +114,13 @@ TemplateURLFetcher::RequestDelegate::RequestDelegate(
+     const url::Origin& initiator,
+     network::mojom::URLLoaderFactory* url_loader_factory,
+     int render_frame_id,
+-    int32_t request_id)
++    int32_t request_id,
++    bool is_off_the_record)
+     : fetcher_(fetcher),
+       keyword_(keyword),
+       osdd_url_(osdd_url),
+-      favicon_url_(favicon_url) {
++      favicon_url_(favicon_url),
++      is_off_the_record_(is_off_the_record) {
+   TemplateURLService* model = fetcher_->template_url_service_;
+   DCHECK(model);  // TemplateURLFetcher::ScheduleDownload verifies this.
+ 
+@@ -229,7 +233,9 @@ void TemplateURLFetcher::RequestDelegate::AddSearchProvider() {
+   // omnibox until they are activated.
+   data.is_active = TemplateURLData::ActiveStatus::kUnspecified;
+ 
+-  model->Add(std::make_unique<TemplateURL>(data));
++  if (!is_off_the_record_) {
++    model->Add(std::make_unique<TemplateURL>(data));
++  }
+ 
+   fetcher_->RequestCompleted(this);
+   // WARNING: RequestCompleted deletes us.
+@@ -244,6 +250,7 @@ TemplateURLFetcher::~TemplateURLFetcher() {
+ }
+ 
+ void TemplateURLFetcher::ScheduleDownload(
++    bool is_off_the_record,
+     const std::u16string& keyword,
+     const GURL& osdd_url,
+     const GURL& favicon_url,
+@@ -261,21 +268,35 @@ void TemplateURLFetcher::ScheduleDownload(
      return;
    }
  
@@ -218,7 +277,23 @@ diff --git a/components/search_engines/template_url_fetcher.cc b/components/sear
 +  LOG(INFO) << "OpenSearch: getting " << osdd_url;
    requests_.push_back(std::make_unique<RequestDelegate>(
        this, keyword, osdd_url, favicon_url, initiator, url_loader_factory,
-       render_frame_id, request_id));
+-      render_frame_id, request_id));
++      render_frame_id, request_id, is_off_the_record));
+ }
+ 
+ void TemplateURLFetcher::RequestCompleted(RequestDelegate* request) {
+diff --git a/components/search_engines/template_url_fetcher.h b/components/search_engines/template_url_fetcher.h
+--- a/components/search_engines/template_url_fetcher.h
++++ b/components/search_engines/template_url_fetcher.h
+@@ -48,7 +48,7 @@ class TemplateURLFetcher : public KeyedService {
+   // TemplateURL in the model for |keyword|, or we're already downloading an
+   // OSDD for this keyword, no download is started.
+   //
+-  void ScheduleDownload(const std::u16string& keyword,
++  void ScheduleDownload(bool is_off_the_record, const std::u16string& keyword,
+                         const GURL& osdd_url,
+                         const GURL& favicon_url,
+                         const url::Origin& initiator,
 diff --git a/components/search_engines/template_url_parser.cc b/components/search_engines/template_url_parser.cc
 --- a/components/search_engines/template_url_parser.cc
 +++ b/components/search_engines/template_url_parser.cc
