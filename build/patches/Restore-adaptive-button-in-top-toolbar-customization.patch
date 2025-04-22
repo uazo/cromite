@@ -7,16 +7,54 @@ Voice button and legacy share/voice functionality is not restored.
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- .../chrome/browser/settings/MainSettings.java         |  9 +--------
- .../segmentation_platform_config.cc                   |  1 +
- .../adaptive/AdaptiveToolbarButtonController.java     |  2 +-
- .../toolbar/adaptive/AdaptiveToolbarPrefs.java        |  2 +-
- .../adaptive/AdaptiveToolbarStatePredictor.java       |  4 ++++
- .../RadioButtonGroupAdaptiveToolbarPreference.java    | 11 ++---------
- ...e-adaptive-button-in-top-toolbar-customization.inc |  1 +
- 7 files changed, 11 insertions(+), 19 deletions(-)
+ .../ReaderModeToolbarButtonController.java    |  6 +++---
+ .../ContextualPageActionController.java       |  4 ++++
+ .../chrome/browser/settings/MainSettings.java |  9 +-------
+ .../segmentation_platform_config.cc           |  1 +
+ ...tton_group_adaptive_toolbar_preference.xml |  9 ++++++++
+ .../AdaptiveToolbarButtonController.java      |  2 +-
+ .../adaptive/AdaptiveToolbarFeatures.java     |  2 +-
+ .../adaptive/AdaptiveToolbarPrefs.java        |  2 +-
+ .../AdaptiveToolbarStatePredictor.java        |  6 +++++-
+ .../adaptive/AdaptiveToolbarStats.java        |  2 ++
+ ...oButtonGroupAdaptiveToolbarPreference.java | 21 +++++++++++--------
+ ...ve-button-in-top-toolbar-customization.inc |  1 +
+ 12 files changed, 41 insertions(+), 24 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Restore-adaptive-button-in-top-toolbar-customization.inc
 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeToolbarButtonController.java b/chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeToolbarButtonController.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeToolbarButtonController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/dom_distiller/ReaderModeToolbarButtonController.java
+@@ -39,12 +39,12 @@ public class ReaderModeToolbarButtonController extends BaseButtonDataProvider {
+                 modalDialogManager,
+                 buttonDrawable,
+                 context.getString(R.string.reader_view_text_alt),
+-                /* actionChipLabelResId= */ R.string.reader_mode_action_chip_label_simplify_page,
++                /* actionChipLabelResId= */ Resources.ID_NULL,
+                 /* supportsTinting= */ true,
+                 /* iphCommandBuilder= */ null,
+                 AdaptiveToolbarButtonVariant.READER_MODE,
+-                /* tooltipTextResId= */ Resources.ID_NULL,
+-                /* showHoverHighlight= */ false);
++                /* tooltipTextResId= */ R.string.reader_mode_action_chip_label_simplify_page,
++                /* showHoverHighlight= */ true);
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/segmentation_platform/ContextualPageActionController.java b/chrome/android/java/src/org/chromium/chrome/browser/segmentation_platform/ContextualPageActionController.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/segmentation_platform/ContextualPageActionController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/segmentation_platform/ContextualPageActionController.java
+@@ -188,6 +188,10 @@ public class ContextualPageActionController {
+                                             && mTabSupplier.get().getId() == tab.getId();
+                             if (!isSameTab) return;
+ 
++                            if (signalAccumulator.hasReaderMode()
++                                    && result == AdaptiveToolbarButtonVariant.UNKNOWN) {
++                                result = AdaptiveToolbarButtonVariant.READER_MODE;
++                            }
+                             showDynamicAction(result);
+                         });
+     }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
@@ -47,6 +85,25 @@ diff --git a/chrome/browser/segmentation_platform/segmentation_platform_config.c
    if (!base::FeatureList::IsEnabled(
            chrome::android::kAdaptiveButtonInTopToolbarCustomizationV2)) {
      return nullptr;
+diff --git a/chrome/browser/ui/android/toolbar/java/res/layout/radio_button_group_adaptive_toolbar_preference.xml b/chrome/browser/ui/android/toolbar/java/res/layout/radio_button_group_adaptive_toolbar_preference.xml
+--- a/chrome/browser/ui/android/toolbar/java/res/layout/radio_button_group_adaptive_toolbar_preference.xml
++++ b/chrome/browser/ui/android/toolbar/java/res/layout/radio_button_group_adaptive_toolbar_preference.xml
+@@ -90,6 +90,15 @@ found in the LICENSE file.
+           app:iconSrc="@drawable/summarize_auto"
+           app:primaryText="@string/adaptive_toolbar_button_preference_page_summary" />
+ 
++      <org.chromium.components.browser_ui.widget.RadioButtonWithDescription
++          android:id="@+id/adaptive_option_reader_mode"
++          android:layout_width="match_parent"
++          android:layout_height="wrap_content"
++          android:minHeight="@dimen/min_touch_target_size"
++          android:paddingTop="10dp"
++          app:iconSrc="@drawable/ic_mobile_friendly"
++          app:primaryText="@string/reader_mode_action_chip_label_simplify_page" />
++
+     </org.chromium.components.browser_ui.widget.RadioButtonWithDescriptionLayout>
+ 
+ </LinearLayout>
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarButtonController.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarButtonController.java
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarButtonController.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarButtonController.java
@@ -59,6 +116,20 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
      }
  
      /** Returns the {@link ButtonDataProvider} used in a single-variant mode. */
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarFeatures.java
+@@ -72,9 +72,9 @@ public class AdaptiveToolbarFeatures {
+             case AdaptiveToolbarButtonVariant.SHARE:
+             case AdaptiveToolbarButtonVariant.VOICE:
+             case AdaptiveToolbarButtonVariant.AUTO:
++            case AdaptiveToolbarButtonVariant.READER_MODE:
+                 return false;
+             case AdaptiveToolbarButtonVariant.PRICE_TRACKING:
+-            case AdaptiveToolbarButtonVariant.READER_MODE:
+             case AdaptiveToolbarButtonVariant.PRICE_INSIGHTS:
+             case AdaptiveToolbarButtonVariant.DISCOUNTS:
+                 return true;
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarPrefs.java
@@ -74,6 +145,20 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStatePredictor.java
+@@ -228,12 +228,12 @@ public class AdaptiveToolbarStatePredictor {
+             case AdaptiveToolbarButtonVariant.ADD_TO_BOOKMARKS:
+             case AdaptiveToolbarButtonVariant.READ_ALOUD:
+             case AdaptiveToolbarButtonVariant.PAGE_SUMMARY:
++            case AdaptiveToolbarButtonVariant.READER_MODE:
+                 return true;
+             case AdaptiveToolbarButtonVariant.UNKNOWN:
+             case AdaptiveToolbarButtonVariant.NONE:
+             case AdaptiveToolbarButtonVariant.AUTO:
+             case AdaptiveToolbarButtonVariant.PRICE_TRACKING:
+-            case AdaptiveToolbarButtonVariant.READER_MODE:
+             case AdaptiveToolbarButtonVariant.PRICE_INSIGHTS:
+                 return false;
+             default:
 @@ -261,6 +261,10 @@ public class AdaptiveToolbarStatePredictor {
       * @param callback A callback for results.
       */
@@ -85,10 +170,30 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
          if (sSegmentationResultsForTesting != null) {
              callback.onResult(sSegmentationResultsForTesting);
              return;
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStats.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStats.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStats.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/AdaptiveToolbarStats.java
+@@ -117,6 +117,8 @@ public class AdaptiveToolbarStats {
+                 return AdaptiveToolbarRadioButtonState.READ_ALOUD;
+             case AdaptiveToolbarButtonVariant.PAGE_SUMMARY:
+                 return AdaptiveToolbarRadioButtonState.PAGE_SUMMARY;
++            case AdaptiveToolbarButtonVariant.READER_MODE:
++                return AdaptiveToolbarRadioButtonState.UNKNOWN;
+             case AdaptiveToolbarButtonVariant.AUTO:
+                 switch (uiState.autoButtonCaption) {
+                     case AdaptiveToolbarButtonVariant.NEW_TAB:
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/settings/RadioButtonGroupAdaptiveToolbarPreference.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/settings/RadioButtonGroupAdaptiveToolbarPreference.java
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/settings/RadioButtonGroupAdaptiveToolbarPreference.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/adaptive/settings/RadioButtonGroupAdaptiveToolbarPreference.java
-@@ -57,6 +57,7 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+@@ -36,6 +36,7 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+     private @NonNull RadioButtonWithDescription mAddToBookmarksButton;
+     private @NonNull RadioButtonWithDescription mReadAloudButton;
+     private @NonNull RadioButtonWithDescription mPageSummaryButton;
++    private @NonNull RadioButtonWithDescription mReaderMode;
+     private @AdaptiveToolbarButtonVariant int mSelected;
+     private @Nullable AdaptiveToolbarStatePredictor mStatePredictor;
+     private boolean mCanUseVoiceSearch = true;
+@@ -57,6 +58,7 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
          mAutoButton =
                  (RadioButtonWithDescription)
                          holder.findViewById(R.id.adaptive_option_based_on_usage);
@@ -96,7 +201,7 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
          mNewTabButton =
                  (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_new_tab);
          mShareButton = (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_share);
-@@ -64,6 +65,7 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+@@ -64,6 +66,7 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
                  (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_voice_search);
          mTranslateButton =
                  (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_translate);
@@ -104,7 +209,16 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
          mAddToBookmarksButton =
                  (RadioButtonWithDescription)
                          holder.findViewById(R.id.adaptive_option_add_to_bookmarks);
-@@ -101,15 +103,6 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+@@ -71,6 +74,8 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+                 (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_read_aloud);
+         mPageSummaryButton =
+                 (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_page_summary);
++        mReaderMode =
++                (RadioButtonWithDescription) holder.findViewById(R.id.adaptive_option_reader_mode);
+         initializeRadioButtonSelection();
+         RecordUserAction.record("Mobile.AdaptiveToolbarButton.SettingsPage.Opened");
+     }
+@@ -101,15 +106,6 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
                                              R.string
                                                      .adaptive_toolbar_button_preference_based_on_your_usage_description,
                                              getButtonString(uiState.autoButtonCaption)));
@@ -120,6 +234,34 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
                      updateVoiceButtonVisibility();
                      updateReadAloudButtonVisibility();
                      updatePageSummaryButtonVisibility();
+@@ -136,6 +132,8 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+             mSelected = AdaptiveToolbarButtonVariant.READ_ALOUD;
+         } else if (mPageSummaryButton.isChecked()) {
+             mSelected = AdaptiveToolbarButtonVariant.PAGE_SUMMARY;
++        } else if (mReaderMode.isChecked()) {
++            mSelected = AdaptiveToolbarButtonVariant.READER_MODE;
+         } else {
+             assert false : "No matching setting found.";
+         }
+@@ -176,6 +174,8 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+                 return mReadAloudButton;
+             case AdaptiveToolbarButtonVariant.PAGE_SUMMARY:
+                 return mPageSummaryButton;
++            case AdaptiveToolbarButtonVariant.READER_MODE:
++                return mReaderMode;
+         }
+         return null;
+     }
+@@ -204,6 +204,9 @@ public class RadioButtonGroupAdaptiveToolbarPreference extends Preference
+             case AdaptiveToolbarButtonVariant.PAGE_SUMMARY:
+                 stringRes = R.string.adaptive_toolbar_button_preference_page_summary;
+                 break;
++            case AdaptiveToolbarButtonVariant.READER_MODE:
++                stringRes = R.string.adaptive_toolbar_button_preference_page_summary;
++                break;
+             default:
+                 assert false : "Unknown variant " + variant;
+         }
 diff --git a/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Restore-adaptive-button-in-top-toolbar-customization.inc b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Restore-adaptive-button-in-top-toolbar-customization.inc
 new file mode 100644
 --- /dev/null
