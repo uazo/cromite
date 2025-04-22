@@ -14,13 +14,13 @@ Subject: bromite build utils
  build/config/android/rules.gni                |   6 +-
  .../ChromeAccessibilitySettingsDelegate.java  |   5 +
  chrome/browser/flags/BUILD.gn                 |  10 +-
- .../flags/android/cromite_native_utils.cc     |  57 ++++++++++
+ .../flags/android/cromite_native_utils.cc     |  92 +++++++++++++++
  .../flags/android/cromite_native_utils.h      |  14 +++
  .../browser/flags/CromiteNativeUtils.java     |  46 ++++++++
  mojo/public/tools/mojom/mojom_parser.py       |  22 +++-
  tools/grit/grit/grd_reader.py                 |  27 ++++-
  tools/grit/preprocess_if_expr.py              |  32 +++++-
- 17 files changed, 502 insertions(+), 19 deletions(-)
+ 17 files changed, 537 insertions(+), 19 deletions(-)
  create mode 100644 build/bromite/bromite_utils.gni
  create mode 100644 build/bromite/gyp/cpp_bromite_include.py
  create mode 100644 build/bromite/gyp/cpp_bromite_include.pydeps
@@ -508,7 +508,7 @@ diff --git a/chrome/browser/flags/android/cromite_native_utils.cc b/chrome/brows
 new file mode 100755
 --- /dev/null
 +++ b/chrome/browser/flags/android/cromite_native_utils.cc
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,92 @@
 +#include "chrome/browser/flags/android/cromite_native_utils.h"
 +
 +#include "chrome/browser/browser_process.h"
@@ -531,10 +531,33 @@ new file mode 100755
 +  entries.erase(internal_name + "@1"); // enabled
 +  entries.erase(internal_name + "@2"); // disabled
 +
-+  if (isEnabled)
-+    entries.insert(internal_name + "@1");
-+  else
-+    entries.insert(internal_name + "@2");
++  bool is_switch = false;
++  if (const flags_ui::FeatureEntry* entry =
++        about_flags::GetCurrentFlagsState()->FindFeatureEntryByName(
++          internal_name)) {
++    if (entry->type == flags_ui::FeatureEntry::SINGLE_DISABLE_VALUE) {
++      entries.erase(entry->switches.command_line_switch);
++      if (isEnabled) {
++        entries.insert(entry->switches.command_line_switch);
++      }
++      is_switch = true;
++    } else if (entry->type == flags_ui::FeatureEntry::ENABLE_DISABLE_VALUE) {
++      entries.erase(entry->switches.command_line_switch);
++      entries.erase(entry->switches.disable_command_line_switch);
++      if (isEnabled) {
++        entries.insert(entry->switches.disable_command_line_switch);
++      }
++      is_switch = true;
++    }
++  }
++
++  if (!is_switch) {
++    if (isEnabled) {
++      entries.insert(internal_name + "@1");
++    } else {
++      entries.insert(internal_name + "@2");
++    }
++  }
 +
 +  flags_storage.SetFlags(entries);
 +  flags_storage.CommitPendingWrites();
@@ -547,6 +570,18 @@ new file mode 100755
 +  flags_ui::PrefServiceFlagsStorage flags_storage(
 +      g_browser_process->local_state());
 +  std::set<std::string> entries = flags_storage.GetFlags();
++
++  if (const flags_ui::FeatureEntry* entry =
++        about_flags::GetCurrentFlagsState()->FindFeatureEntryByName(
++          internal_name)) {
++    if (entry->type == flags_ui::FeatureEntry::SINGLE_DISABLE_VALUE &&
++        entries.count(entry->switches.command_line_switch)) {
++      return true;
++    } else if (entry->type == flags_ui::FeatureEntry::ENABLE_DISABLE_VALUE &&
++               entries.count(entry->switches.disable_command_line_switch)) {
++      return true;
++    }
++  }
 +
 +  const std::string enabled_entry = internal_name + "@1";
 +  if (entries.count(enabled_entry))
