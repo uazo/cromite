@@ -8,8 +8,14 @@ Original License: BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  chrome/browser/flag-metadata.json                    |  4 ++++
+ .../disable-pull-to-refresh-effect.grdp              |  9 +++++++++
+ .../java/res/xml/accessibility_preferences.xml       |  6 ++++++
+ .../browser/android/overscroll_controller_android.cc |  5 +++--
  ...t-flags-remove-disable-pull-to-refresh-effect.inc | 12 ++++++++++++
- 2 files changed, 16 insertions(+)
+ ui/android/overscroll_refresh.cc                     |  5 +++--
+ ui/android/overscroll_refresh.h                      |  3 ++-
+ 7 files changed, 39 insertions(+), 5 deletions(-)
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/disable-pull-to-refresh-effect.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Revert-flags-remove-disable-pull-to-refresh-effect.inc
 
 diff --git a/chrome/browser/flag-metadata.json b/chrome/browser/flag-metadata.json
@@ -26,6 +32,55 @@ diff --git a/chrome/browser/flag-metadata.json b/chrome/browser/flag-metadata.js
    {
      "name": "disable-quick-answers-v2-translation",
      "owners": [ "croissant-eng@chromium.org" ],
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/disable-pull-to-refresh-effect.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/disable-pull-to-refresh-effect.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/disable-pull-to-refresh-effect.grdp
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_DISABLE_PULL_TO_REFRESH_TITLE" desc="Text for 'Disable pull to refresh' settings option.">
++        Disable pull to refresh
++    </message>
++    <message name="IDS_DISABLE_PULL_TO_REFRESH_SUMMARY" desc="Summary text for 'Disable pull to refresh' settings option.">
++        Page reloads triggered by vertically overscrolling content.
++    </message>
++</grit-part>
+diff --git a/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml b/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml
+--- a/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml
++++ b/components/browser_ui/accessibility/android/java/res/xml/accessibility_preferences.xml
+@@ -50,4 +50,10 @@ found in the LICENSE file.
+         android:key="image_descriptions"
+         android:title="@string/image_descriptions_settings_title" />
+ 
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:title="@string/disable_pull_to_refresh_title"
++        android:summary="@string/disable_pull_to_refresh_summary"
++        app:featureName="disable-pull-to-refresh-effect"
++        app:needRestart="true" />
++
+ </PreferenceScreen>
+diff --git a/content/browser/android/overscroll_controller_android.cc b/content/browser/android/overscroll_controller_android.cc
+--- a/content/browser/android/overscroll_controller_android.cc
++++ b/content/browser/android/overscroll_controller_android.cc
+@@ -62,14 +62,15 @@ std::unique_ptr<OverscrollGlow> CreateGlowEffect(OverscrollGlowClient* client) {
+ std::unique_ptr<OverscrollRefresh> CreateRefreshEffect(
+     ui::OverscrollRefreshHandler* overscroll_refresh_handler,
+     float dpi_scale) {
++  bool disable_pull_to_refresh = false;
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kDisablePullToRefreshEffect)) {
+-    return nullptr;
++    disable_pull_to_refresh = true;
+   }
+ 
+   float edge_width = OverscrollRefresh::kDefaultNavigationEdgeWidth * dpi_scale;
+   return std::make_unique<OverscrollRefresh>(overscroll_refresh_handler,
+-                                             edge_width);
++                                             edge_width, disable_pull_to_refresh);
+ }
+ 
+ }  // namespace
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/Revert-flags-remove-disable-pull-to-refresh-effect.inc b/cromite_flags/chrome/browser/about_flags_cc/Revert-flags-remove-disable-pull-to-refresh-effect.inc
 new file mode 100644
 --- /dev/null
@@ -43,4 +98,48 @@ new file mode 100644
 +#endif
 +
 +#endif
+diff --git a/ui/android/overscroll_refresh.cc b/ui/android/overscroll_refresh.cc
+--- a/ui/android/overscroll_refresh.cc
++++ b/ui/android/overscroll_refresh.cc
+@@ -31,9 +31,10 @@ const float kWeightAngle30 = 1.73f;
+ }  // namespace
+ 
+ OverscrollRefresh::OverscrollRefresh(OverscrollRefreshHandler* handler,
+-                                     float edge_width)
++                                     float edge_width, bool disable_pull_to_refresh)
+     : scrolled_to_top_(true),
+       scrolled_to_bottom_(false),
++      disable_pull_to_refresh_(disable_pull_to_refresh),
+       top_at_scroll_start_(true),
+       bottom_at_scroll_start_(false),
+       overflow_y_hidden_(false),
+@@ -92,7 +93,7 @@ void OverscrollRefresh::OnOverscrolled(const cc::OverscrollBehavior& behavior) {
+     }
+     // Pull-to-refresh. Check overscroll-behavior-y
+     if (ydelta > 0) {
+-      type = OverscrollAction::kPullToRefresh;
++      if (!disable_pull_to_refresh_) type = OverscrollAction::kPullToRefresh;
+     } else if (scrolled_to_bottom_) {  // ydelta < 0
+       type = OverscrollAction::kPullFromBottomEdge;
+     }
+diff --git a/ui/android/overscroll_refresh.h b/ui/android/overscroll_refresh.h
+--- a/ui/android/overscroll_refresh.h
++++ b/ui/android/overscroll_refresh.h
+@@ -47,7 +47,7 @@ class UI_ANDROID_EXPORT OverscrollRefresh {
+   static constexpr int kDefaultNavigationEdgeWidth = 24;
+   // LINT.ThenChange(//ui/android/java/src/org/chromium/ui/OverscrollRefreshHandler.java:kDefaultNavigationEdgeWidth)
+ 
+-  OverscrollRefresh(OverscrollRefreshHandler* handler, float edge_width);
++  OverscrollRefresh(OverscrollRefreshHandler* handler, float edge_width, bool disable_pull_to_refresh);
+ 
+   OverscrollRefresh(const OverscrollRefresh&) = delete;
+   OverscrollRefresh& operator=(const OverscrollRefresh&) = delete;
+@@ -102,6 +102,7 @@ class UI_ANDROID_EXPORT OverscrollRefresh {
+ 
+   bool scrolled_to_top_;
+   bool scrolled_to_bottom_;
++  bool disable_pull_to_refresh_;
+ 
+   // True if the content y offset was zero before scroll began. Overscroll
+   // should not be triggered for the scroll that started from non-zero offset.
 --
