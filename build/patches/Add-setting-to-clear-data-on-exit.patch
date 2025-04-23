@@ -11,6 +11,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../ClearBrowsingDataFragment.java            | 31 ++++++--
  .../ClearBrowsingDataFragmentAtStart.java     | 79 +++++++++++++++++++
  chrome/app/settings_strings.grdp              | 10 +++
+ chrome/browser/about_flags.cc                 |  1 +
  .../browsing_data/browsing_data_bridge.cc     | 17 +++-
  .../chrome_browsing_data_lifetime_manager.cc  | 22 +++++-
  .../chrome_browsing_data_remover_delegate.cc  | 15 ++++
@@ -32,13 +33,17 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../core/clear_browsing_data_tab.h            |  3 +-
  components/browsing_data/core/pref_names.cc   | 17 ++++
  components/browsing_data/core/pref_names.h    | 10 +++
+ components/favicon/core/favicon_database.cc   | 12 +++
+ components/favicon/core/favicon_database.h    |  2 +
  .../search_engines/template_url_service.cc    |  1 +
  content/browser/btm/btm_service_impl.cc       |  2 +-
  content/browser/storage_partition_impl.cc     |  1 +
  .../public/browser/browsing_data_remover.h    |  7 +-
- 32 files changed, 386 insertions(+), 33 deletions(-)
+ .../Add-setting-to-clear-data-on-exit.inc     |  8 ++
+ 36 files changed, 409 insertions(+), 33 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp
+ create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Add-setting-to-clear-data-on-exit.inc
 
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
@@ -346,6 +351,17 @@ diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
    <message name="IDS_SETTINGS_CLEAR_DATA_DESCRIPTION" desc="Description for delete browsing data button in Privacy options. 'History' refers to browsing history. 'Cookies' refers to the technical meaning of a cookie, i.e. data saved by a website on the user's computer, as in when a website saves your preferences.">
      Delete history, cookies, cache, and more
    </message>
+diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
+--- a/chrome/browser/about_flags.cc
++++ b/chrome/browser/about_flags.cc
+@@ -103,6 +103,7 @@
+ #include "components/enterprise/data_controls/core/browser/features.h"
+ #include "components/enterprise/obfuscation/core/utils.h"
+ #include "components/error_page/common/error_page_switches.h"
++#include "components/favicon/core/favicon_database.h"
+ #include "components/feature_engagement/public/feature_constants.h"
+ #include "components/feature_engagement/public/feature_list.h"
+ #include "components/feed/feed_feature_list.h"
 diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chrome/browser/android/browsing_data/browsing_data_bridge.cc
 --- a/chrome/browser/android/browsing_data/browsing_data_bridge.cc
 +++ b/chrome/browser/android/browsing_data/browsing_data_bridge.cc
@@ -907,6 +923,47 @@ diff --git a/components/browsing_data/core/pref_names.h b/components/browsing_da
  // Clear browsing data deletion time period.
  inline constexpr char kDeleteTimePeriod[] = "browser.clear_data.time_period";
  inline constexpr char kDeleteTimePeriodBasic[] =
+diff --git a/components/favicon/core/favicon_database.cc b/components/favicon/core/favicon_database.cc
+--- a/components/favicon/core/favicon_database.cc
++++ b/components/favicon/core/favicon_database.cc
+@@ -38,6 +38,10 @@
+ 
+ namespace favicon {
+ 
++CROMITE_FEATURE(kClearFaviconsData,
++                "ClearFaviconsData",
++                base::FEATURE_DISABLED_BY_DEFAULT);
++
+ // Description of database tables:
+ //
+ // icon_mapping
+@@ -507,6 +511,14 @@ bool FaviconDatabase::SetFaviconBitmapLastUpdateTime(FaviconBitmapID bitmap_id,
+ 
+ bool FaviconDatabase::SetFaviconsOutOfDateBetween(base::Time begin,
+                                                   base::Time end) {
++  LOG(INFO) << "---FaviconDatabase::SetFaviconsOutOfDateBetween"
++            << " begin=" << begin << " " << begin.is_null()
++            << " end=" << end << " " << end.is_null();
++  if (begin.is_null() && base::FeatureList::IsEnabled(kClearFaviconsData)) {
++    std::ignore = db_.Execute("DELETE FROM favicon_bitmaps");
++    std::ignore = db_.Execute("DELETE FROM favicons");
++    std::ignore = db_.Execute("DELETE FROM icon_mapping");
++  }
+   if (end.is_null())
+     end = base::Time::Max();
+   sql::Statement statement(
+diff --git a/components/favicon/core/favicon_database.h b/components/favicon/core/favicon_database.h
+--- a/components/favicon/core/favicon_database.h
++++ b/components/favicon/core/favicon_database.h
+@@ -33,6 +33,8 @@ namespace favicon {
+ // All earlier updates are ignored.
+ static const int kFaviconUpdateLastRequestedAfterDays = 10;
+ 
++BASE_DECLARE_FEATURE(kClearFaviconsData);
++
+ // This database interface is owned by the history backend and runs on the
+ // history thread.
+ class FaviconDatabase {
 diff --git a/components/search_engines/template_url_service.cc b/components/search_engines/template_url_service.cc
 --- a/components/search_engines/template_url_service.cc
 +++ b/components/search_engines/template_url_service.cc
@@ -965,4 +1022,17 @@ diff --git a/content/public/browser/browsing_data_remover.h b/content/public/bro
    // All data stored by the Attribution Reporting API.
    static constexpr DataType DATA_TYPE_ATTRIBUTION_REPORTING =
        DATA_TYPE_ATTRIBUTION_REPORTING_SITE_CREATED |
+diff --git a/cromite_flags/chrome/browser/about_flags_cc/Add-setting-to-clear-data-on-exit.inc b/cromite_flags/chrome/browser/about_flags_cc/Add-setting-to-clear-data-on-exit.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/about_flags_cc/Add-setting-to-clear-data-on-exit.inc
+@@ -0,0 +1,8 @@
++#ifdef FLAG_SECTION
++
++    {"clear-favicons-data",
++     "Clear favicons data",
++     "deletes all data from the favicons db when deleting at startup/close with cache selection.", kOsAll,
++     FEATURE_VALUE_TYPE(favicon::kClearFaviconsData)},
++
++#endif
 --
