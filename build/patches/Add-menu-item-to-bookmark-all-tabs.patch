@@ -10,7 +10,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../bookmarks/android/bookmark_bridge.h       |  8 ++++
  .../browser/bookmarks/BookmarkBridge.java     | 41 ++++++++++++++++++
  .../browser/bookmarks/bookmark_html_writer.cc | 14 +++++-
- .../bookmark_merged_surface_service.cc        |  3 ++
+ .../bookmark_merged_surface_service.cc        |  2 +
+ .../bookmarks/bookmark_parent_folder.cc       |  1 +
  .../permanent_folder_ordering_tracker.cc      |  2 +
  .../dialogs/DownloadLocationCustomView.java   |  4 +-
  .../strings/android_chrome_strings.grd        |  3 ++
@@ -29,12 +30,12 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/bookmarks/browser/bookmark_uuids.h |  1 +
  components/bookmarks/browser/model_loader.cc  |  8 +++-
  .../bookmark_specifics_conversions.cc         |  1 +
- 25 files changed, 243 insertions(+), 14 deletions(-)
+ 26 files changed, 243 insertions(+), 14 deletions(-)
 
 diff --git a/chrome/android/java/res/menu/main_menu.xml b/chrome/android/java/res/menu/main_menu.xml
 --- a/chrome/android/java/res/menu/main_menu.xml
 +++ b/chrome/android/java/res/menu/main_menu.xml
-@@ -74,6 +74,10 @@ found in the LICENSE file.
+@@ -77,6 +77,10 @@ found in the LICENSE file.
          <item android:id="@+id/all_bookmarks_menu_id"
              android:title="@string/menu_bookmarks"
              android:icon="@drawable/btn_star_filled" />
@@ -45,7 +46,7 @@ diff --git a/chrome/android/java/res/menu/main_menu.xml b/chrome/android/java/re
          <item android:id="@+id/recent_tabs_menu_id"
              android:title="@string/menu_recent_tabs"
              android:icon="@drawable/devices_black_24dp" />
-@@ -198,6 +202,9 @@ found in the LICENSE file.
+@@ -204,6 +208,9 @@ found in the LICENSE file.
          <item android:id="@id/tinker_tank_menu_id"
              android:title="@string/menu_tinker_tank"
              android:icon="@drawable/ic_add_box_rounded_corner" />
@@ -58,15 +59,15 @@ diff --git a/chrome/android/java/res/menu/main_menu.xml b/chrome/android/java/re
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -97,6 +97,7 @@ import org.chromium.chrome.browser.bookmarks.BookmarkPane;
- import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
+@@ -101,6 +101,7 @@ import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
+ import org.chromium.chrome.browser.bookmarks.bar.BookmarkBarUtils;
  import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
  import org.chromium.chrome.browser.compositor.CompositorViewHolder;
 +import org.chromium.chrome.browser.bookmarks.BookmarkModel;
  import org.chromium.chrome.browser.compositor.layouts.Layout;
  import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChrome;
  import org.chromium.chrome.browser.compositor.layouts.LayoutManagerChromePhone;
-@@ -253,12 +254,17 @@ import org.chromium.chrome.browser.ui.RootUiCoordinator;
+@@ -263,12 +264,17 @@ import org.chromium.chrome.browser.ui.RootUiCoordinator;
  import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
  import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
  import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
@@ -84,7 +85,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
  import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
  import org.chromium.components.browser_ui.edge_to_edge.SystemBarColorHelper;
  import org.chromium.components.browser_ui.edge_to_edge.TabbedSystemBarColorHelper;
-@@ -3103,6 +3109,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements MismatchedIn
+@@ -3233,6 +3239,8 @@ public class ChromeTabbedActivity extends ChromeActivity {
                      getTabModelSelectorSupplier().get(),
                      closeAllTabsRunnable);
              RecordUserAction.record("MobileMenuCloseAllTabs");
@@ -93,7 +94,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
          } else if (id == R.id.close_all_incognito_tabs_menu_id) {
              // Close only incognito tabs
              Runnable closeAllTabsRunnable =
-@@ -3191,6 +3199,41 @@ public class ChromeTabbedActivity extends ChromeActivity implements MismatchedIn
+@@ -3331,6 +3339,41 @@ public class ChromeTabbedActivity extends ChromeActivity {
          getTabModalLifetimeHandler().onOmniboxFocusChanged(hasFocus);
      }
  
@@ -387,27 +388,30 @@ diff --git a/chrome/browser/bookmarks/bookmark_html_writer.cc b/chrome/browser/b
 diff --git a/chrome/browser/bookmarks/bookmark_merged_surface_service.cc b/chrome/browser/bookmarks/bookmark_merged_surface_service.cc
 --- a/chrome/browser/bookmarks/bookmark_merged_surface_service.cc
 +++ b/chrome/browser/bookmarks/bookmark_merged_surface_service.cc
-@@ -32,6 +32,7 @@ BookmarkParentFolder GetBookmarkParentFolderFromPermanentType(
-     BookmarkNode::Type type) {
-   switch (type) {
+@@ -108,6 +108,8 @@ BookmarkMergedSurfaceService::BookmarkMergedSurfaceService(
+ BookmarkMergedSurfaceService::~BookmarkMergedSurfaceService() {
+   for (auto& observer : observers_) {
+     observer.BookmarkMergedSurfaceServiceBeingDeleted();
++    case BookmarkNode::Type::TABS_COLLECTION:
++      NOTREACHED();
+   }
+ }
+ 
+diff --git a/chrome/browser/bookmarks/bookmark_parent_folder.cc b/chrome/browser/bookmarks/bookmark_parent_folder.cc
+--- a/chrome/browser/bookmarks/bookmark_parent_folder.cc
++++ b/chrome/browser/bookmarks/bookmark_parent_folder.cc
+@@ -18,6 +18,7 @@ BookmarkParentFolder GetBookmarkParentFolderFromPermanentNode(
+   CHECK(node->is_permanent_node());
+   switch (node->type()) {
      case bookmarks::BookmarkNode::URL:
 +    case bookmarks::BookmarkNode::TABS_COLLECTION:
        NOTREACHED();
      case bookmarks::BookmarkNode::FOLDER:
        // TODO(crbug.com/381252292): Consider extending type with a value
-@@ -70,6 +71,8 @@ std::optional<PermanentFolderType> GetIfPermanentFolderType(
- 
-     case BookmarkNode::Type::URL:
-       NOTREACHED();
-+    case BookmarkNode::Type::TABS_COLLECTION:
-+      NOTREACHED();
-   }
-   NOTREACHED();
- }
 diff --git a/chrome/browser/bookmarks/permanent_folder_ordering_tracker.cc b/chrome/browser/bookmarks/permanent_folder_ordering_tracker.cc
 --- a/chrome/browser/bookmarks/permanent_folder_ordering_tracker.cc
 +++ b/chrome/browser/bookmarks/permanent_folder_ordering_tracker.cc
-@@ -23,6 +23,7 @@ bool IsValidTrackedType(BookmarkNode::Type type) {
+@@ -26,6 +26,7 @@ bool IsValidTrackedType(BookmarkNode::Type type) {
    switch (type) {
      case bookmarks::BookmarkNode::URL:
      case bookmarks::BookmarkNode::FOLDER:
@@ -415,7 +419,7 @@ diff --git a/chrome/browser/bookmarks/permanent_folder_ordering_tracker.cc b/chr
        NOTREACHED();
  
      case bookmarks::BookmarkNode::BOOKMARK_BAR:
-@@ -235,6 +236,7 @@ void PermanentFolderOrderingTracker::SetTrackedPermanentNodes() {
+@@ -291,6 +292,7 @@ void PermanentFolderOrderingTracker::SetTrackedPermanentNodes() {
    switch (tracked_type_) {
      case bookmarks::BookmarkNode::URL:
      case bookmarks::BookmarkNode::FOLDER:
@@ -447,7 +451,7 @@ diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browse
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -4487,6 +4487,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4497,6 +4497,9 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_MENU_SELECT_TABS" desc="Menu item for bulk editing tabs. [CHAR_LIMIT=27]">
          Select tabs
        </message>
