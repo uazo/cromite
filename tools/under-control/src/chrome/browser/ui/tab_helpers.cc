@@ -121,6 +121,8 @@
 #include "components/download/content/factory/navigation_monitor_factory.h"
 #include "components/download/content/public/download_navigation_observer.h"
 #include "components/enterprise/buildflags/buildflags.h"
+#include "components/fingerprinting_protection_filter/interventions/browser/interventions_web_contents_helper.h"
+#include "components/fingerprinting_protection_filter/interventions/common/interventions_features.h"
 #include "components/history/content/browser/web_contents_top_sites_observer.h"
 #include "components/history/core/browser/top_sites.h"
 #include "components/infobars/content/content_infobar_manager.h"
@@ -220,6 +222,7 @@
 #include "chrome/browser/ui/blocked_content/framebust_block_tab_helper.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/hats/hats_helper.h"
+#include "chrome/browser/ui/performance_controls/performance_controls_hats_service_factory.h"
 #include "chrome/browser/ui/shared_highlighting/shared_highlighting_promo.h"
 #endif
 
@@ -358,6 +361,13 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
         HostContentSettingsMapFactory::GetForProfile(profile),
         TrackingProtectionSettingsFactory::GetForProfile(profile),
         profile->IsIncognitoProfile());
+  }
+
+  if (fingerprinting_protection_interventions::features::
+          IsCanvasInterventionsEnabledForIncognitoState(
+              profile->IsIncognitoProfile())) {
+    fingerprinting_protection_interventions::InterventionsWebContentsHelper::
+        CreateForWebContents(web_contents, profile->IsIncognitoProfile());
   }
 
   // Only create the IpProtectionStatus if the User Bypass feature is enabled.
@@ -697,17 +707,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
           features::kHappinessTrackingSurveysForDesktopDemo) ||
       base::FeatureList::IsEnabled(features::kTrustSafetySentimentSurvey) ||
       base::FeatureList::IsEnabled(features::kTrustSafetySentimentSurveyV2) ||
-      base::FeatureList::IsEnabled(performance_manager::features::
-                                       kPerformanceControlsPerformanceSurvey) ||
-      base::FeatureList::IsEnabled(
-          performance_manager::features::
-              kPerformanceControlsBatteryPerformanceSurvey) ||
-      base::FeatureList::IsEnabled(
-          performance_manager::features::
-              kPerformanceControlsMemorySaverOptOutSurvey) ||
-      base::FeatureList::IsEnabled(
-          performance_manager::features::
-              kPerformanceControlsBatterySaverOptOutSurvey) ||
+      PerformanceControlsHatsServiceFactory::IsAnySurveyFeatureEnabled() ||
       base::FeatureList::IsEnabled(
           page_info::kMerchantTrustEvaluationControlSurvey) ||
       base::FeatureList::IsEnabled(

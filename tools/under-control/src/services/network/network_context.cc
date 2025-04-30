@@ -394,12 +394,8 @@ base::RepeatingCallback<bool(const url::Origin&)> BuildOriginFilter(
 // If |filter| is null, creates an always-true predicate.
 base::RepeatingCallback<bool(const GURL&)> BuildUrlFilter(
     mojom::ClearDataFilterPtr filter) {
-  return filter ? base::BindRepeating(
-                      &DoesUrlMatchFilter, filter->type,
-                      std::set<url::Origin>(filter->origins.begin(),
-                                            filter->origins.end()),
-                      std::set<std::string>(filter->domains.begin(),
-                                            filter->domains.end()))
+  return filter ? BindDoesUrlMatchFilter(filter->type, filter->origins,
+                                         filter->domains)
                 : base::NullCallback();
 }
 
@@ -1183,6 +1179,14 @@ void NetworkContext::DeleteStoredTrustTokens(
 
 void NetworkContext::SetBlockTrustTokens(bool block) {
   block_trust_tokens_ = block;
+}
+
+void NetworkContext::SetTrackingProtectionContentSetting(
+    const ContentSettingsForOneType& settings) {
+  if (!ip_protection_core_) {
+    return;
+  }
+  ip_protection_core_->SetTrackingProtectionContentSetting(settings);
 }
 
 void NetworkContext::OnProxyLookupComplete(
@@ -2030,7 +2034,8 @@ void NetworkContext::CreateHostResolver(
     private_internal_resolver =
         network_service_->host_resolver_factory()->CreateStandaloneResolver(
             url_request_context_->net_log(), std::move(options),
-            "" /* host_mapping_rules */, false /* enable_caching */);
+            /* host_mapping_rules */ "", /* enable_caching */ false,
+            /* enable_stale */ false);
     private_internal_resolver->SetRequestContext(url_request_context_);
     internal_resolver = private_internal_resolver.get();
   }
@@ -2652,7 +2657,8 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
         std::make_unique<ip_protection::IpProtectionCoreImplMojo>(
             std::move(params_->ip_protection_control), core_host_remote,
             mdl_manager, prt_registry, params_->enable_ip_protection,
-            params_->ip_protection_incognito);
+            params_->ip_protection_incognito,
+            params_->ip_protection_data_directory);
     builder.set_proxy_delegate(
         std::make_unique<ip_protection::IpProtectionProxyDelegate>(
             ip_protection_core_impl.get()));
@@ -2983,6 +2989,10 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
       }
     }
   }
+
+#if BUILDFLAG(IS_ANDROID)
+  builder.enable_stale_dns_resolver(params_->stale_dns_enabled);
+#endif  // BUILDFLAG(IS_ANDROID)
 
   if (on_url_request_context_builder_configured) {
     std::move(on_url_request_context_builder_configured).Run(&builder);

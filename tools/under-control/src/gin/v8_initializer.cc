@@ -280,6 +280,21 @@ void SetFlags(IsolateHolder::ScriptMode mode,
   }
 }
 
+// Sets feature flags that are default to enabled.
+//
+// This function must be called *before* SetFeatureFlags is called, so that
+// default-enabled flags may be overridden and disabled.
+//
+// Usually V8 is the source of truth for the default state of feature flags.
+// However, some features must be shipped from the blink side because they add
+// new globals, which requires updating web tests that cannot be skipped (to
+// safeguard against accidentally breaking the web).
+void SetDefaultEnabledFeatureFlags() {
+  SetV8Flags("--js-float16array");
+  SetV8Flags("--js-explicit-resource-management");
+  SetV8Flags("--js-regexp-escape");
+}
+
 // Sets feature controlled V8 flags.
 void SetFeatureFlags() {
   // Chromium features prefixed with "V8Flag_" are forwarded to V8 as V8 flags,
@@ -373,6 +388,10 @@ void SetFeatureFlags() {
   if (base::FeatureList::IsEnabled(features::kV8MemoryReducer)) {
     SetV8FlagsFormatted("--memory-reducer-gc-count=%i",
                         features::kV8MemoryReducerGCCount.Get());
+  }
+  if (base::FeatureList::IsEnabled(features::kV8PreconfigureOldGen)) {
+    SetV8FlagsFormatted("--initial-old-space-size=%i",
+                        features::kV8PreconfigureOldGenSize.Get());
   }
   SetV8FlagsIfOverridden(features::kV8IncrementalMarkingStartUserVisible,
                          "--incremental-marking-start-user-visible",
@@ -498,25 +517,16 @@ void SetFeatureFlags() {
                          "--no-use-original-message-for-stack-trace");
 
   // JavaScript language features.
-  SetV8FlagsIfOverridden(features::kJavaScriptIteratorHelpers,
-                         "--harmony-iterator-helpers",
-                         "--no-harmony-iterator-helpers");
-  SetV8FlagsIfOverridden(features::kJavaScriptPromiseWithResolvers,
-                         "--js-promise-withresolvers",
-                         "--no-js-promise-withresolvers");
   SetV8FlagsIfOverridden(features::kJavaScriptRegExpModifiers,
                          "--js-regexp-modifiers", "--no-js-regexp-modifiers");
   SetV8FlagsIfOverridden(features::kJavaScriptImportAttributes,
                          "--harmony-import-attributes",
                          "--no-harmony-import-attributes");
-  SetV8FlagsIfOverridden(features::kJavaScriptSetMethods,
-                         "--harmony-set-methods", "--no-harmony-set-methods");
   SetV8FlagsIfOverridden(features::kJavaScriptRegExpDuplicateNamedGroups,
                          "--js-regexp-duplicate-named-groups",
                          "--no-js-duplicate-named-groups");
   SetV8FlagsIfOverridden(features::kJavaScriptPromiseTry, "--js-promise-try",
                          "--no-js-promise-try");
-  SetV8Flags("--js-float16array");
 
   // WebAssembly features.
 
@@ -525,14 +535,6 @@ void SetFeatureFlags() {
   SetV8FlagsIfOverridden(features::kWebAssemblyInliningCallIndirect,
                          "--wasm-inlining-call-indirect",
                          "--no-wasm-inlining-call-indirect");
-  SetV8FlagsIfOverridden(features::kWebAssemblyMultipleMemories,
-                         "--experimental-wasm-multi-memory",
-                         "--no-experimental-wasm-multi-memory");
-  SetV8FlagsIfOverridden(features::kWebAssemblyTurboshaft, "--turboshaft-wasm",
-                         "--no-turboshaft-wasm");
-  SetV8FlagsIfOverridden(features::kWebAssemblyTurboshaftInstructionSelection,
-                         "--turboshaft-wasm-instruction-selection-staged",
-                         "--no-turboshaft-wasm-instruction-selection-staged");
 }
 
 }  // namespace
@@ -550,7 +552,7 @@ void V8Initializer::Initialize(IsolateHolder::ScriptMode mode,
   // instrumentation initialization, see https://crbug.com/v8/11043. --js-flags
   // and other mandatory flags in `SetFlags` must be ordered after feature flag
   // overrides.
-  SetV8Flags("--js-explicit-resource-management");
+  SetDefaultEnabledFeatureFlags();
   if (!disallow_v8_feature_flag_overrides) {
     SetFeatureFlags();
   }
