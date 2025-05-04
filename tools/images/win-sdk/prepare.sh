@@ -8,9 +8,9 @@ msvc-wine/vsdownload.py  \
    --cache msvc-cache \
    --dest ./out \
    --save-manifest \
-   Microsoft.VisualStudio.Component.VC.14.41.17.11.x86.x64 \
-   Microsoft.VisualStudio.Component.VC.14.41.17.11.MFC \
-   Win11SDK_10.0.22621
+   Microsoft.VisualStudio.Component.VC.14.42.17.12.x86.x64 \
+   Microsoft.VisualStudio.Component.VC.14.42.17.12.MFC \
+   Win11SDK_10.0.26100
 
 mv ./out/kits/ "./out/Windows Kits"
 
