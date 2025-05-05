@@ -45,7 +45,7 @@
 #include "ui/events/blink/blink_features.h"
 #include "ui/gfx/switches.h"
 #include "ui/gl/gl_switches.h"
-#include "ui/native_theme/native_theme_features.h"
+#include "ui/native_theme/features/native_theme_features.h"
 #include "ui/native_theme/native_theme_utils.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -250,7 +250,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableMediaEngagementBypassAutoplayPolicies,
            raw_ref(media::kMediaEngagementBypassAutoplayPolicies)},
           {wf::EnablePaymentApp, raw_ref(features::kServiceWorkerPaymentApps)},
-          {wf::EnablePaymentRequest, raw_ref(features::kWebPayments)},
           {wf::EnablePeriodicBackgroundSync,
            raw_ref(features::kPeriodicBackgroundSync)},
           {wf::EnablePushMessagingSubscriptionChange,
@@ -346,12 +345,11 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
 #endif
           {"CompressionDictionaryTransport",
            raw_ref(network::features::kCompressionDictionaryTransport)},
+          {"ClipboardChangeEvent", raw_ref(features::kClipboardChangeEvent)},
           {"CompressionDictionaryTransportBackend",
            raw_ref(network::features::kCompressionDictionaryTransportBackend)},
           {"CookieDeprecationFacilitatedTesting",
            raw_ref(features::kCookieDeprecationFacilitatedTesting)},
-          {"Database", raw_ref(blink::features::kWebSQLAccess),
-           kSetOnlyIfOverridden},
           {"DocumentPolicyIncludeJSCallStacksInCrashReports",
            raw_ref(blink::features::
                        kDocumentPolicyIncludeJSCallStacksInCrashReports),
@@ -450,7 +448,6 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
       {wrf::EnableAutomationControlled, switches::kEnableAutomation, true},
       {wrf::EnableAutomationControlled, switches::kHeadless, true},
       {wrf::EnableAutomationControlled, switches::kRemoteDebuggingPipe, true},
-      {wrf::EnableDatabase, switches::kDisableDatabases, false},
       {wrf::EnableFileSystem, switches::kDisableFileSystem, false},
       {wrf::EnableNetInfoDownlinkMax,
        switches::kEnableNetworkInformationDownlinkMax, true},
