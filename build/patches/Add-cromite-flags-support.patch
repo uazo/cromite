@@ -41,6 +41,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../Add-cromite-flags-support.grdp            |   9 +
  .../placeholder.txt                           |   1 +
  chrome/browser/ui/ui_features.cc              |   1 +
+ chrome/browser/unexpire_flags.cc              |  15 +-
  chrome/common/chrome_features.cc              |   1 +
  .../browser_ui/accessibility/android/BUILD.gn |   1 +
  .../res/xml/accessibility_preferences.xml     |   3 +-
@@ -57,7 +58,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  components/permissions/features.cc            |   2 +
  ...nthetic_trials_active_group_id_provider.cc |   4 +-
  ...ynthetic_trials_active_group_id_provider.h |   4 +-
- components/webui/flags/flags_state.cc         |  59 ++++++
+ components/webui/flags/flags_state.cc         |  64 +++++++
  components/webui/flags/resources/app.css      |  24 +++
  components/webui/flags/resources/app.html.ts  |  28 +++
  components/webui/flags/resources/app.ts       |  24 +++
@@ -106,7 +107,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  third_party/blink/public/common/features.h    |   1 +
  ui/base/ui_base_features.cc                   |   1 +
  ui/base/ui_base_features.h                    |   1 +
- 93 files changed, 812 insertions(+), 29 deletions(-)
+ 94 files changed, 831 insertions(+), 30 deletions(-)
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/include_all_directory.java
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/java_template/CromiteCachedFlag.java.tmpl
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-cromite-flags-support.grdp
@@ -963,6 +964,38 @@ diff --git a/chrome/browser/ui/ui_features.cc b/chrome/browser/ui/ui_features.cc
  
 +#include "cromite_flags/chrome_browser_ui_ui_features_cc.inc"
  }  // namespace features
+diff --git a/chrome/browser/unexpire_flags.cc b/chrome/browser/unexpire_flags.cc
+--- a/chrome/browser/unexpire_flags.cc
++++ b/chrome/browser/unexpire_flags.cc
+@@ -12,6 +12,7 @@
+ #include "base/containers/contains.h"
+ #include "base/containers/flat_map.h"
+ #include "base/no_destructor.h"
++#include "chrome/browser/about_flags.h"
+ #include "chrome/browser/expired_flags_list.h"
+ #include "chrome/browser/unexpire_flags_gen.h"
+ #include "chrome/common/chrome_version.h"
+@@ -117,7 +118,19 @@ bool IsFlagExpired(const flags_ui::FlagsStorage* storage,
+ 
+   // Otherwise, the flag is expired if its expiration mstone is less than the
+   // mstone of this copy of Chromium.
+-  return mstone < CHROME_VERSION_MAJOR;
++  if (mstone < CHROME_VERSION_MAJOR) {
++    if (const flags_ui::FeatureEntry* entry =
++          about_flags::GetCurrentFlagsState()->FindFeatureEntryByName(
++            internal_name)) {
++      if (const base::Feature* feature = entry->feature.feature) {
++        if (feature->is_cromite) {
++          return false;
++        }
++      }
++    }
++    return true;
++  }
++  return false;
+ }
+ 
+ namespace testing {
 diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
 --- a/chrome/common/chrome_features.cc
 +++ b/chrome/common/chrome_features.cc
@@ -1310,6 +1343,18 @@ diff --git a/components/webui/flags/flags_state.cc b/components/webui/flags/flag
      CHECK(entry);
  
      if (entry->type == FeatureEntry::FEATURE_VALUE ||
+@@ -1186,6 +1245,11 @@ void FlagsState::SetFlags(
+       std::string feature_internal_name = flag.substr(0, at_index);
+       const flags_ui::FeatureEntry* entry =
+           FindFeatureEntryByName(feature_internal_name);
++      if (!entry) {
++        if (base::FeatureList::IsCromiteFlag(feature_internal_name)) {
++          continue;
++        }
++      }
+       CHECK(entry);
+ 
+       if (entry->type == FeatureEntry::FEATURE_VALUE ||
 diff --git a/components/webui/flags/resources/app.css b/components/webui/flags/resources/app.css
 --- a/components/webui/flags/resources/app.css
 +++ b/components/webui/flags/resources/app.css
