@@ -89,3 +89,7 @@ echo -e ${RED} -------- download clang prebuilds ${NC}
 cd $WORKSPACE/chromium/src
 python3 tools/clang/scripts/update.py --package=clang --host-os=win --no-clear=true
 python3 tools/clang/scripts/update.py --package=clang --host-os=linux --no-clear=true
+
+echo -e ${RED} -------- bootstrap python3 for gn ${NC}
+cd $WORKSPACE/chromium/src
+echo ../../../../../usr/bin >$WORKSPACE/depot_tools/python3_bin_reldir.txt
