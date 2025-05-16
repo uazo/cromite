@@ -79,7 +79,7 @@ JIT stands for Just-In-Time compilation and is a feature of chromium v8 which is
 
 However, the use of JIT opens up possible security holes exploited over time to scale the chromium sandbox and allow access to privileged processes by javascript. Technically, the reason is that the memory used by JIT is read/write/execute and can therefore be exploited to insert code from, for example, a UAF (use-after-free) error within a javascript callback. In addition, the activation of JIT allows the exchange of shared memory between different frames, an amazing and at the same time risky feature.
 
-For this reason, in cromite (and its predecessor cromite) it was chosen to disable JIT by default, penalising execution but offering a smaller attack surface.
+For this reason, in cromite (and its predecessor bromite) it was chosen to disable JIT by default, penalising execution but offering a smaller attack surface.
 
 If you trust the site or have performance needs or need to use WebAssembly, you can activate that feature specifically for that website via UI:
 <details>
