@@ -242,6 +242,7 @@ void ContentBrowserClient::OverrideURLLoaderFactoryParams(
     BrowserContext* browser_context,
     const url::Origin& origin,
     bool is_for_isolated_world,
+    bool is_for_service_worker,
     network::mojom::URLLoaderFactoryParams* factory_params) {}
 
 void ContentBrowserClient::GetAdditionalViewSourceSchemes(
@@ -1069,9 +1070,7 @@ ContentBrowserClient::CreateURLLoaderThrottles(
 
 std::vector<std::unique_ptr<blink::URLLoaderThrottle>>
 ContentBrowserClient::CreateURLLoaderThrottlesForKeepAlive(
-    const network::ResourceRequest& request,
     BrowserContext* browser_context,
-    const base::RepeatingCallback<WebContents*()>& wc_getter,
     FrameTreeNodeId frame_tree_node_id) {
   return std::vector<std::unique_ptr<blink::URLLoaderThrottle>>();
 }
@@ -1354,9 +1353,9 @@ ContentBrowserClient::CreateWindowForVideoPictureInPicture(
   return nullptr;
 }
 
-media::PictureInPictureEventsInfo::AutoPipReason
-ContentBrowserClient::GetAutoPipReason(const WebContents& web_contents) const {
-  return media::PictureInPictureEventsInfo::AutoPipReason::kUnknown;
+media::PictureInPictureEventsInfo::AutoPipInfo
+ContentBrowserClient::GetAutoPipInfo(const WebContents& web_contents) const {
+  return media::PictureInPictureEventsInfo::AutoPipInfo();
 }
 
 void ContentBrowserClient::RegisterRendererPreferenceWatcher(
@@ -1835,15 +1834,15 @@ void ContentBrowserClient::NotifyMultiCaptureStateChanged(
     const std::string& label,
     MultiCaptureChanged state) {}
 
-bool ContentBrowserClient::ShouldEnableDips(BrowserContext* browser_context) {
+bool ContentBrowserClient::ShouldEnableBtm(BrowserContext* browser_context) {
   return true;
 }
 
-uint64_t ContentBrowserClient::GetDipsRemoveMask() {
-  return kDefaultDipsRemoveMask;
+uint64_t ContentBrowserClient::GetBtmRemoveMask() {
+  return kDefaultBtmRemoveMask;
 }
 
-bool ContentBrowserClient::ShouldDipsDeleteInteractionRecords(
+bool ContentBrowserClient::ShouldBtmDeleteInteractionRecords(
     uint64_t remove_mask) {
   return remove_mask & BrowsingDataRemover::DATA_TYPE_COOKIES;
 }
@@ -1855,6 +1854,7 @@ bool ContentBrowserClient::ShouldSuppressAXLoadComplete(RenderFrameHost* rfh) {
 void ContentBrowserClient::BindAIManager(
     BrowserContext* browser_context,
     base::SupportsUserData* context_user_data,
+    RenderFrameHost* rfh,
     mojo::PendingReceiver<blink::mojom::AIManager> receiver) {
   EchoAIManagerImpl::Create(std::move(receiver));
 }
@@ -1930,6 +1930,7 @@ bool ContentBrowserClient::IsSaveableNavigation(
 
 #if BUILDFLAG(IS_WIN)
 void ContentBrowserClient::OnUiaProviderRequested(bool uia_provider_enabled) {}
+void ContentBrowserClient::OnUiaProviderDisabled() {}
 #endif
 
 bool ContentBrowserClient::AllowNonActivatedCrossOriginPaintHolding() {
@@ -1968,7 +1969,6 @@ std::unique_ptr<KeepAliveRequestTracker>
 ContentBrowserClient::MaybeCreateKeepAliveRequestTracker(
     const network::ResourceRequest& request,
     std::optional<ukm::SourceId> ukm_source_id,
-    bool is_attribution_request,
     KeepAliveRequestTracker::IsContextDetachedCallback
         is_context_detached_callback) {
   return nullptr;

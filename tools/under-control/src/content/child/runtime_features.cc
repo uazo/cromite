@@ -207,6 +207,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            kSetOnlyIfOverridden},
           {wf::EnableFedCm, raw_ref(features::kFedCmAuthz),
            kSetOnlyIfOverridden},
+          {wf::EnableFedCmAutofill, raw_ref(features::kFedCmAutofill),
+           kDefault},
           {wf::EnableFedCmDelegation, raw_ref(features::kFedCmDelegation),
            kDefault},
           {wf::EnableFedCmIdPRegistration,
@@ -252,8 +254,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnablePaymentApp, raw_ref(features::kServiceWorkerPaymentApps)},
           {wf::EnablePeriodicBackgroundSync,
            raw_ref(features::kPeriodicBackgroundSync)},
-          {wf::EnablePushMessagingSubscriptionChange,
-           raw_ref(features::kPushSubscriptionChangeEvent)},
           {wf::EnableSecurePaymentConfirmation,
            raw_ref(features::kSecurePaymentConfirmation)},
           {wf::EnableSecurePaymentConfirmationDebug,
@@ -268,6 +268,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kTouchDragAndContextMenu)},
           {wf::EnableWebAuthenticationAmbient,
            raw_ref(device::kWebAuthnAmbientSignin)},
+          {wf::EnableWebAuthenticationImmediateGet,
+           raw_ref(device::kWebAuthnImmediateGet), kSetOnlyIfOverridden},
           {wf::EnableWebAuthenticationConditionalCreate,
            raw_ref(device::kWebAuthnPasskeyUpgrade)},
           {wf::EnableWebBluetooth, raw_ref(features::kWebBluetooth),
@@ -315,6 +317,10 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
   for (const auto& mapping : blinkFeatureToBaseFeatureMapping) {
     SetRuntimeFeatureFromChromiumFeature(
         *mapping.chromium_feature, mapping.option, mapping.feature_enabler);
+  }
+
+  if (features::IsPushSubscriptionChangeEventEnabled()) {
+    wf::EnablePushMessagingSubscriptionChange(true);
   }
 
   // TODO(crbug.com/40571563): Cleanup the inconsistency between custom WRF
@@ -372,13 +378,11 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {"OriginIsolationHeader", raw_ref(features::kOriginIsolationHeader)},
           {"ReduceAcceptLanguage",
            raw_ref(network::features::kReduceAcceptLanguage)},
-          {"Serial",
+          {"RelatedWebsitePartitionAPI",
+           raw_ref(net::features::kRelatedWebsitePartitionAPI)},
 #if BUILDFLAG(IS_ANDROID)
-           raw_ref(device::features::kBluetoothRfcommAndroid)
-#else
-           raw_ref(device::features::kSerial)
+          {"Serial", raw_ref(device::features::kBluetoothRfcommAndroid)},
 #endif
-          },
           {"SerialPortConnected", raw_ref(features::kSerialPortConnected)},
           {"SignatureBasedIntegrity",
            raw_ref(network::features::kSRIMessageSignatureEnforcement)},
@@ -406,6 +410,9 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(webnn::mojom::features::
                        kExperimentalWebMachineLearningNeuralNetwork),
            kSetOnlyIfOverridden},
+#if BUILDFLAG(IS_ANDROID)
+          {"WebAppLaunchQueue", raw_ref(features::kAndroidWebAppLaunchHandler)},
+#endif
           {"WebAuthenticationNewBfCacheHandlingBlink",
            raw_ref(device::kWebAuthnNewBfCacheHandling)}};
   for (const auto& mapping : runtimeFeatureNameToChromiumFeatureMapping) {
@@ -461,8 +468,6 @@ void SetRuntimeFeaturesFromCommandLine(const base::CommandLine& command_line) {
       {wrf::EnableScriptedSpeechSynthesis, switches::kDisableSpeechSynthesisAPI,
        false},
       {wrf::EnableSharedWorker, switches::kDisableSharedWorkers, false},
-      {wrf::EnableMutationEvents, blink::switches::kMutationEventsEnabled,
-       true},
       {wrf::EnableKeyboardFocusableScrollers,
        blink::switches::kKeyboardFocusableScrollersEnabled, true},
       {wrf::EnableKeyboardFocusableScrollers,
