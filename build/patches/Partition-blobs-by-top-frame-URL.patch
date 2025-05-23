@@ -21,7 +21,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
-@@ -12683,6 +12683,8 @@ void RenderFrameHostImpl::ReportBlockingCrossPartitionBlobURL(
+@@ -12819,6 +12819,8 @@ void RenderFrameHostImpl::ReportBlockingCrossPartitionBlobURL(
  }
  
  bool RenderFrameHostImpl::DoesDocumentHaveStorageAccess() {
@@ -39,9 +39,9 @@ new file mode 100644
 diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/blob_url_store_impl.cc
 --- a/storage/browser/blob/blob_url_store_impl.cc
 +++ b/storage/browser/blob/blob_url_store_impl.cc
-@@ -21,6 +21,18 @@
- 
- namespace storage {
+@@ -33,6 +33,18 @@ bool IsBlobUrlAccessCrossPartitionSameOrigin(
+ }
+ }  // namespace
  
 +namespace {
 +
@@ -58,7 +58,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
  // Self deletes when the last binding to it is closed.
  class BlobURLTokenImpl : public blink::mojom::BlobURLToken {
   public:
-@@ -93,6 +105,30 @@ BlobURLStoreImpl::~BlobURLStoreImpl() {
+@@ -105,6 +117,30 @@ BlobURLStoreImpl::~BlobURLStoreImpl() {
    }
  }
  
@@ -89,7 +89,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
  void BlobURLStoreImpl::Register(
      mojo::PendingRemote<blink::mojom::Blob> blob,
      const GURL& url,
-@@ -107,6 +143,14 @@ void BlobURLStoreImpl::Register(
+@@ -119,6 +155,14 @@ void BlobURLStoreImpl::Register(
      return;
    }
  
@@ -104,7 +104,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
    if (registry_)
      registry_->AddUrlMapping(url, std::move(blob), storage_key_,
                               renderer_origin_, render_process_host_id_,
-@@ -127,21 +171,32 @@ void BlobURLStoreImpl::Revoke(const GURL& url) {
+@@ -155,26 +199,38 @@ bool BlobURLStoreImpl::ShouldPartitionBlobUrlAccess(
  void BlobURLStoreImpl::ResolveAsURLLoaderFactory(
      const GURL& url,
      mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
@@ -135,18 +135,16 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
 +    std::move(callback).Run(std::nullopt, std::nullopt);
 +    return;
 +  }
-   if (registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url),
-                              storage_key_) ==
-       BlobUrlRegistry::MappingStatus::kNotMappedCrossPartitionSameOrigin) {
-@@ -150,6 +205,7 @@ void BlobURLStoreImpl::FinishResolveAsURLLoaderFactory(
-             features::kBlockCrossPartitionBlobUrlFetching) &&
-         !partitioning_disabled_by_policy_;
-     if (feature_and_policy_check && !has_storage_access_handle) {
+   const BlobUrlRegistry::MappingStatus mapping_status =
+       registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url), storage_key_);
+   if (IsBlobUrlAccessCrossPartitionSameOrigin(mapping_status)) {
+     if (ShouldPartitionBlobUrlAccess(has_storage_access_handle,
+                                      mapping_status)) {
 +      // LOG(INFO) << "---ResolveAsURLLoaderFactory blocked" << url;
        partitioning_blob_url_closure_.Run(url,
                                           blink::mojom::PartitioningBlobURLInfo::
                                               kBlockedCrossPartitionFetching);
-@@ -162,6 +218,12 @@ void BlobURLStoreImpl::FinishResolveAsURLLoaderFactory(
+@@ -186,6 +242,12 @@ void BlobURLStoreImpl::FinishResolveAsURLLoaderFactory(
      partitioning_blob_url_closure_.Run(url, std::nullopt);
    }
  
@@ -159,7 +157,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
    BlobURLLoaderFactory::Create(registry_->GetBlobFromUrl(url), url,
                                 std::move(receiver));
    // When a fragment URL is present, registry_->GetUnsafeAgentClusterID(url) and
-@@ -176,12 +238,15 @@ void BlobURLStoreImpl::ResolveAsBlobURLToken(
+@@ -200,12 +262,15 @@ void BlobURLStoreImpl::ResolveAsBlobURLToken(
      const GURL& url,
      mojo::PendingReceiver<blink::mojom::BlobURLToken> token,
      bool is_top_level_navigation,
@@ -175,7 +173,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
                                std::move(callback),
                                storage_access_check_callback_.Run());
  }
-@@ -190,8 +255,14 @@ void BlobURLStoreImpl::FinishResolveAsBlobURLToken(
+@@ -214,8 +279,14 @@ void BlobURLStoreImpl::FinishResolveAsBlobURLToken(
      const GURL& url,
      mojo::PendingReceiver<blink::mojom::BlobURLToken> token,
      bool is_top_level_navigation,
@@ -187,9 +185,9 @@ diff --git a/storage/browser/blob/blob_url_store_impl.cc b/storage/browser/blob/
 +    std::move(callback).Run(std::nullopt);
 +    return;
 +  }
-   if (!is_top_level_navigation &&
-       (registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url),
-                               storage_key_) ==
+   if (!is_top_level_navigation) {
+     const BlobUrlRegistry::MappingStatus mapping_status =
+         registry_->IsUrlMapped(BlobUrlUtils::ClearUrlFragment(url),
 diff --git a/storage/browser/blob/blob_url_store_impl.h b/storage/browser/blob/blob_url_store_impl.h
 --- a/storage/browser/blob/blob_url_store_impl.h
 +++ b/storage/browser/blob/blob_url_store_impl.h
@@ -209,7 +207,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.h b/storage/browser/blob/b
        ResolveAsBlobURLTokenCallback callback) override;
  
   private:
-@@ -77,6 +81,8 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
+@@ -81,6 +85,8 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
    void FinishResolveAsURLLoaderFactory(
        const GURL& url,
        mojo::PendingReceiver<network::mojom::URLLoaderFactory> receiver,
@@ -218,7 +216,7 @@ diff --git a/storage/browser/blob/blob_url_store_impl.h b/storage/browser/blob/b
        ResolveAsURLLoaderFactoryCallback callback,
        bool has_storage_access_handle);
  
-@@ -84,9 +90,16 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
+@@ -88,9 +94,16 @@ class COMPONENT_EXPORT(STORAGE_BROWSER) BlobURLStoreImpl
        const GURL& url,
        mojo::PendingReceiver<blink::mojom::BlobURLToken> token,
        bool is_top_level_navigation,
@@ -241,7 +239,7 @@ diff --git a/storage/browser/blob/features.cc b/storage/browser/blob/features.cc
 @@ -10,6 +10,7 @@ namespace features {
  BASE_FEATURE(kBlockCrossPartitionBlobUrlFetching,
               "BlockCrossPartitionBlobUrlFetching",
-              base::FEATURE_DISABLED_BY_DEFAULT);
+              base::FEATURE_ENABLED_BY_DEFAULT);
 +SET_CROMITE_FEATURE_ENABLED(kBlockCrossPartitionBlobUrlFetching);
  
  // Please keep features in alphabetical order.
