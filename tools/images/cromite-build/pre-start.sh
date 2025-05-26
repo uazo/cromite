@@ -74,9 +74,9 @@ CXX=clang++ ./configure.py --bootstrap
 
 echo -e ${RED} -------- download clang indexer ${NC}
 cd $WORKSPACE/
-wget https://github.com/clangd/clangd/releases/download/17.0.3/clangd_indexing_tools-linux-17.0.3.zip
-unzip clangd_indexing_tools-linux-17.0.3.zip
-rm clangd_indexing_tools-linux-17.0.3.zip
+wget https://github.com/clangd/clangd/releases/download/snapshot_20250518/clangd_indexing_tools-linux-snapshot_20250518.zip
+unzip clangd_indexing_tools-linux-snapshot_20250518.zip
+rm clangd_indexing_tools-linux-snapshot_20250518.zip
 
 echo -e ${RED} -------- download rc ${NC}
 cd $WORKSPACE/chromium/src
