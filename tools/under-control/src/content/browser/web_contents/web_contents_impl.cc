@@ -155,6 +155,7 @@
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
 #include "content/public/browser/navigation_details.h"
+#include "content/public/browser/permission_descriptor_util.h"
 #include "content/public/browser/preload_pipeline_info.h"
 #include "content/public/browser/preview_cancel_reason.h"
 #include "content/public/browser/render_widget_host_iterator.h"
@@ -230,16 +231,21 @@
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/android/build_info.h"
+#include "base/check.h"
 #include "content/browser/android/java_interfaces_impl.h"
 #include "content/browser/android/nfc_host.h"
 #include "content/browser/navigation_transitions/back_forward_transition_animation_manager_android.h"
 #include "content/browser/web_contents/web_contents_android.h"
 #include "content/browser/web_contents/web_contents_view_android.h"
+#include "content/public/browser/android/child_process_importance.h"
 #include "services/device/public/mojom/nfc.mojom.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "ui/android/event_forwarder.h"
 #include "ui/android/view_android.h"
 #include "ui/base/device_form_factor.h"
+#else  // !BUILDFLAG(IS_ANDROID)
+#include "ui/accessibility/accessibility_features.h"
 #endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
@@ -521,8 +527,10 @@ bool IsWindowManagementGranted(RenderFrameHost* host) {
   CHECK(permission_controller);
 
   return permission_controller->GetPermissionStatusForCurrentDocument(
-             blink::PermissionType::WINDOW_MANAGEMENT, host) ==
-         blink::mojom::PermissionStatus::GRANTED;
+             content::PermissionDescriptorUtil::
+                 CreatePermissionDescriptorForPermissionType(
+                     blink::PermissionType::WINDOW_MANAGEMENT),
+             host) == blink::mojom::PermissionStatus::GRANTED;
 }
 
 // Returns true if `host` has the Automatic Fullscreen permission granted.
@@ -532,8 +540,10 @@ bool IsAutomaticFullscreenGranted(RenderFrameHost* host) {
   CHECK(permission_controller);
 
   return permission_controller->GetPermissionStatusForCurrentDocument(
-             blink::PermissionType::AUTOMATIC_FULLSCREEN, host) ==
-         blink::mojom::PermissionStatus::GRANTED;
+             content::PermissionDescriptorUtil::
+                 CreatePermissionDescriptorForPermissionType(
+                     blink::PermissionType::AUTOMATIC_FULLSCREEN),
+             host) == blink::mojom::PermissionStatus::GRANTED;
 }
 
 // Adjust the requested `rect` for opening or placing a window and return the id
@@ -2174,12 +2184,6 @@ void WebContentsImpl::ResetAccessibility() {
       });
 }
 
-void WebContentsImpl::AddAccessibilityModeForTesting(ui::AXMode mode) {
-  ui::AXMode new_mode(accessibility_mode_);
-  new_mode |= mode;
-  SetAccessibilityMode(new_mode);
-}
-
 // Helper class used by WebContentsImpl::RequestAXTreeSnapshot.
 // Handles the callbacks from parallel snapshot requests to each frame,
 // and feeds the results to an AXTreeCombiner, which converts them into a
@@ -3063,10 +3067,20 @@ WebContentsImpl::GetPictureInPictureOptions() const {
 }
 
 #if BUILDFLAG(IS_ANDROID)
+ChildProcessImportance
+WebContentsImpl::GetPrimaryMainFrameImportanceForTesting() {
+  return GetPrimaryMainFrame()->GetRenderWidgetHost()->importance();
+}
+
 void WebContentsImpl::SetPrimaryMainFrameImportance(
     ChildProcessImportance importance) {
   OPTIONAL_TRACE_EVENT1("content", "WebContentsImpl::SetMainFrameImportance",
                         "importance", static_cast<int>(importance));
+  CHECK(IsPerceptibleImportanceSupported() ||
+        importance != ChildProcessImportance::PERCEPTIBLE)
+      << "Setter of ChildProcessImportance::PERCEPTIBLE should be aware of the "
+         "support and avoid using PERCEPTIBLE if "
+         "IsPerceptibleImportanceSupported() is false";
   GetPrimaryMainFrame()->GetRenderWidgetHost()->SetImportance(importance);
 }
 #endif
@@ -3627,6 +3641,10 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
 
 #if BUILDFLAG(IS_ANDROID)
   prefs.device_scale_adjustment = GetDeviceScaleAdjustment(min_width_in_dp);
+
+  if (base::FeatureList::IsEnabled(blink::features::kForceOffTextAutosizing)) {
+    prefs.text_autosizing_enabled = false;
+  }
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // GuestViews in the same StoragePartition need to find each other's frames.
@@ -3639,6 +3657,13 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
 
   prefs.payment_request_enabled =
       base::FeatureList::IsEnabled(features::kWebPayments);
+
+#if BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(features::kWebauthnDisabledOnAuto) &&
+      base::android::BuildInfo::GetInstance()->is_automotive()) {
+    prefs.disable_webauthn = true;
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
 
   GetContentClient()->browser()->OverrideWebPreferences(
       this, *main_frame->GetSiteInstance(), &prefs);
@@ -3869,6 +3894,11 @@ void WebContentsImpl::Init(const WebContents::CreateParams& params,
                            blink::FramePolicy primary_main_frame_policy) {
   TRACE_EVENT0("content", "WebContentsImpl::Init");
 
+  // Set initial autofill mode. Prefs may update this value later but for
+  // pre-warmed WebContents that update happens too late.
+  renderer_preferences_.uses_platform_autofill =
+      params.initially_use_platform_autofill;
+
   is_in_preview_mode_ = params.preview_mode;
   creator_location_ = params.creator_location;
 #if BUILDFLAG(IS_ANDROID)
@@ -3945,7 +3975,7 @@ void WebContentsImpl::Init(const WebContents::CreateParams& params,
   screen_orientation_provider_ =
       std::make_unique<ScreenOrientationProvider>(this);
 
-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_IOS)
+#if BUILDFLAG(IS_ANDROID) || (BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS))
   DateTimeChooser::CreateDateTimeChooser(this);
 #endif
 
@@ -6491,6 +6521,12 @@ void WebContentsImpl::SaveFrameWithHeaders(
   params->set_download_source(download::DownloadSource::WEB_CONTENTS_API);
   params->set_isolation_info(rfhi.ComputeIsolationInfoForNavigation(url));
 
+  // TODO(crbug.com/382291442): Remove feature guarding once launched.
+  if (base::FeatureList::IsEnabled(
+          network::features::kPopulatePermissionsPolicyOnRequest)) {
+    params->set_permissions_policy(rfhi.GetPermissionsPolicy());
+  }
+
   FrameTreeNode* frame_tree_node = rfhi.frame_tree_node();
   FrameNavigationEntry* frame_navigation_entry =
       frame_tree_node->frame_tree()
@@ -7258,9 +7294,9 @@ gfx::NativeWindow WebContentsImpl::GetOwnerNativeWindow() {
   return GetTopLevelNativeWindow();
 }
 
-media::PictureInPictureEventsInfo::AutoPipReason
-WebContentsImpl::GetAutoPipReason() const {
-  return GetContentClient()->browser()->GetAutoPipReason(*this);
+media::PictureInPictureEventsInfo::AutoPipInfo WebContentsImpl::GetAutoPipInfo()
+    const {
+  return GetContentClient()->browser()->GetAutoPipInfo(*this);
 }
 
 void WebContentsImpl::OnKeepAliveRequestCreated(
@@ -7356,6 +7392,19 @@ void WebContentsImpl::OnInvalidInputEventSource(
     return;
   }
   iter->second->OnInvalidInputEventSource();
+}
+
+void WebContentsImpl::StateOnOverscrollTransfer(
+    const viz::FrameSinkId& frame_sink_id,
+    blink::mojom::DidOverscrollParamsPtr params) {
+  auto iter = created_widgets_.find(frame_sink_id);
+  // This adds a safeguard against race condition where a RenderWidgetHostImpl
+  // is being destroyed & removed from |created_widgets_|, but Viz may still
+  // send a mojo call referencing it.
+  if (iter == created_widgets_.end()) {
+    return;
+  }
+  iter->second->DidOverscroll(std::move(params));
 }
 
 void WebContentsImpl::DidNavigateMainFramePreCommit(
@@ -8610,7 +8659,8 @@ void WebContentsImpl::RunJavaScriptDialog(
 
   for (auto* handler : page_handlers) {
     handler->DidRunJavaScriptDialog(
-        render_frame_host->GetLastCommittedURL(), normalized_message,
+        render_frame_host->GetLastCommittedURL(),
+        render_frame_host->devtools_frame_token(), normalized_message,
         default_prompt, dialog_type, has_non_devtools_handlers,
         base::BindOnce(&CloseDialogCallbackWrapper::Run, wrapper, false));
   }
@@ -8713,7 +8763,8 @@ void WebContentsImpl::RunBeforeUnloadConfirm(
   GURL frame_url = render_frame_host->GetLastCommittedURL();
   for (auto* handler : page_handlers) {
     handler->DidRunBeforeUnloadConfirm(
-        frame_url, has_non_devtools_handlers,
+        frame_url, render_frame_host->devtools_frame_token(),
+        has_non_devtools_handlers,
         base::BindOnce(&CloseDialogCallbackWrapper::Run, wrapper, false));
   }
 
@@ -9312,6 +9363,96 @@ void WebContentsImpl::DidStopLoading() {
           features::kAndroidSpareRendererCreationAfterLoading) {
     WarmUpAndroidSpareRenderer();
   }
+#endif
+}
+
+ui::AXTreeUpdate WebContentsImpl::RequestAXTreeSnapshotWithinBrowserProcess() {
+  ui::BrowserAccessibilityManager* root_manager =
+      GetRootBrowserAccessibilityManager();
+  // A page can be fully loaded before a user turns on accessibility services,
+  // and we can be in a transient state waiting for managers.
+  if (!root_manager || !root_manager->ax_tree()) {
+    return ui::AXTreeUpdate();
+  }
+
+  ui::AXTreeUpdate combined_update;
+  ui::AXTreeCombiner combiner;
+
+  GetPrimaryMainFrame()->ForEachRenderFrameHostImplWithAction(
+      [this, &combiner](RenderFrameHostImpl* rfhi) {
+        ui::BrowserAccessibilityManager* manager =
+            rfhi->browser_accessibility_manager();
+        if (!manager) {
+          return RenderFrameHost::FrameIterationAction::kContinue;
+        }
+
+        ui::AXTree* tree = manager->ax_tree();
+        if (!tree || !tree->root()) {
+          return RenderFrameHost::FrameIterationAction::kContinue;
+        }
+
+        ui::AXTreeUpdate update_for_frame;
+        update_for_frame.root_id = tree->root()->id();
+        update_for_frame.tree_data = tree->data();
+
+        std::vector<ui::AXNodeData> nodes;
+        RecursivelyConstructAXTree(tree->root(), nodes);
+        update_for_frame.nodes = nodes;
+
+        combiner.AddTree(update_for_frame, rfhi->AccessibilityIsRootFrame());
+
+        return RenderFrameHost::FrameIterationAction::kContinue;
+      });
+
+  // Combine all the individual frame tree updates into one.
+  combiner.Combine();
+  CHECK(combiner.combined());
+  combined_update = std::move(combiner.combined().value());
+  return combined_update;
+}
+
+void WebContentsImpl::RecursivelyConstructAXTree(
+    ui::AXNode* node,
+    std::vector<ui::AXNodeData>& nodes) {
+  nodes.push_back(node->data());
+
+  for (auto iter = node->AllChildrenBegin(); iter != node->AllChildrenEnd();
+       ++iter) {
+    RecursivelyConstructAXTree(&(*iter), nodes);
+  }
+}
+
+void WebContentsImpl::ApplyAXTreeFixingResult(ui::AXTreeID tree_id,
+                                              ui::AXNodeID node_id,
+                                              ax::mojom::Role role) {
+// The AXTreeFixing feature is not currently available on Android.
+#if !BUILDFLAG(IS_ANDROID)
+  CHECK(features::IsAXTreeFixingEnabled());
+
+  GetPrimaryMainFrame()->ForEachRenderFrameHostImplWithAction(
+      [tree_id, node_id, role](RenderFrameHostImpl* rfhi) {
+        ui::BrowserAccessibilityManager* manager =
+            rfhi->browser_accessibility_manager();
+        if (!manager) {
+          return RenderFrameHost::FrameIterationAction::kContinue;
+        }
+
+        ui::AXTree* tree = manager->ax_tree();
+        if (!tree || !tree->root()) {
+          return RenderFrameHost::FrameIterationAction::kContinue;
+        }
+
+        ui::AXNode* node = manager->ax_tree()->GetFromId(node_id);
+        if (!node) {
+          return RenderFrameHost::FrameIterationAction::kContinue;
+        }
+
+        // Update the node's role and stop iterating.
+        ui::AXNodeData new_data = node->data();
+        new_data.role = role;
+        node->SetData(new_data);
+        return RenderFrameHost::FrameIterationAction::kStop;
+      });
 #endif
 }
 
@@ -10384,7 +10525,8 @@ void WebContentsImpl::OnDialogClosed(int render_process_id,
   std::vector<protocol::PageHandler*> page_handlers =
       protocol::PageHandler::EnabledForWebContents(this);
   for (auto* handler : page_handlers) {
-    handler->DidCloseJavaScriptDialog(success, user_input);
+    handler->DidCloseJavaScriptDialog(rfh->devtools_frame_token(),
+                                      success, user_input);
   }
 
   is_showing_javascript_dialog_ = false;
@@ -11769,6 +11911,7 @@ float WebContentsImpl::GetCurrentTouchSequenceYOffset() {
 std::unique_ptr<PrefetchHandle> WebContentsImpl::StartPrefetch(
     const GURL& prefetch_url,
     bool use_prefetch_proxy,
+    const std::string& embedder_histogram_suffix,
     const blink::mojom::Referrer& referrer,
     const std::optional<url::Origin>& referring_origin,
     std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
@@ -11789,9 +11932,10 @@ std::unique_ptr<PrefetchHandle> WebContentsImpl::StartPrefetch(
   PrefetchType prefetch_type(PreloadingTriggerType::kEmbedder,
                              use_prefetch_proxy);
   auto container = std::make_unique<PrefetchContainer>(
-      *this, prefetch_url, prefetch_type, referrer, referring_origin,
-      std::move(no_vary_search_hint), std::move(preload_pipeline_info),
-      std::move(attempt), holdback_status_override);
+      *this, prefetch_url, prefetch_type, embedder_histogram_suffix, referrer,
+      referring_origin, std::move(no_vary_search_hint),
+      std::move(preload_pipeline_info), std::move(attempt),
+      holdback_status_override);
 
   return prefetch_service->AddPrefetchContainerWithHandle(std::move(container));
 }

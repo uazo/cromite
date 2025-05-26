@@ -24,6 +24,7 @@
 #include "mojo/public/cpp/bindings/features.h"
 #include "net/base/features.h"
 #include "services/network/public/cpp/features.h"
+#include "storage/browser/blob/features.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/android/ui_android_features.h"
@@ -93,6 +94,14 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // Disable third-party storage partitioning on WebView.
   aw_feature_overrides.DisableFeature(
       net::features::kThirdPartyStoragePartitioning);
+
+  // Disable fetching partitioned Blob URL on WebView.
+  aw_feature_overrides.DisableFeature(
+      ::features::kBlockCrossPartitionBlobUrlFetching);
+
+  // Disable enforcing `noopener` on Blob URL navigations on WebView.
+  aw_feature_overrides.DisableFeature(
+      blink::features::kEnforceNoopenerOnBlobURLNavigation);
 
 #if BUILDFLAG(ENABLE_VALIDATING_COMMAND_DECODER)
   // Disable the passthrough on WebView.
@@ -306,14 +315,11 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // Sharing ANGLE's Vulkan queue is not supported on WebView.
   aw_feature_overrides.DisableFeature(::features::kVulkanFromANGLE);
 
-  // Viz has no internal differentiation for WebView. We will roll out these
-  // combined features separately.
-  aw_feature_overrides.DisableFeature(
-      ::features::kDrawImmediatelyWhenInteractive);
-  aw_feature_overrides.DisableFeature(
-      ::features::kAckOnSurfaceActivationWhenInteractive);
-
   // Partitioned :visited links history is not supported on WebView.
   aw_feature_overrides.DisableFeature(
       blink::features::kPartitionVisitedLinkDatabaseWithSelfLinks);
+
+  // Disable draw cutout edge-to-edge on WebView. Safe area insets are not
+  // handled correctly when WebView is drawing edge-to-edge.
+  aw_feature_overrides.DisableFeature(features::kDrawCutoutEdgeToEdge);
 }
