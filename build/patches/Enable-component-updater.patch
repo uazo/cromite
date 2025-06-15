@@ -24,12 +24,13 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  components/update_client/component.cc         | 12 +++++
  components/update_client/crx_downloader.cc    |  5 ++
  components/update_client/net/network_impl.cc  |  2 +
+ components/update_client/protocol_parser.cc   |  2 +
  .../update_client/protocol_parser_json.cc     |  2 +
  components/update_client/request_sender.cc    |  3 +-
  components/update_client/update_checker.cc    |  6 ++-
  components/update_client/update_engine.cc     |  9 ++++
  components/update_client/utils.cc             |  3 ++
- 21 files changed, 132 insertions(+), 49 deletions(-)
+ 22 files changed, 134 insertions(+), 49 deletions(-)
 
 diff --git a/android_webview/browser/aw_browser_main_parts.cc b/android_webview/browser/aw_browser_main_parts.cc
 --- a/android_webview/browser/aw_browser_main_parts.cc
@@ -44,7 +45,7 @@ diff --git a/android_webview/browser/aw_browser_main_parts.cc b/android_webview/
  // Must come after all headers that specialize FromJniType() / ToJniType().
  #include "android_webview/browser_jni_headers/AwBrowserMainParts_jni.h"
  #include "android_webview/browser_jni_headers/AwInterfaceRegistrar_jni.h"
-@@ -338,6 +341,10 @@ int AwBrowserMainParts::PreMainMessageLoopRun() {
+@@ -343,6 +346,10 @@ int AwBrowserMainParts::PreMainMessageLoopRun() {
    Java_AwInterfaceRegistrar_registerMojoInterfaces(
        base::android::AttachCurrentThread());
  
@@ -252,10 +253,10 @@ diff --git a/components/component_updater/component_installer.cc b/components/co
 @@ -247,6 +252,9 @@ void ComponentInstaller::Install(
        InstallHelper(unpack_path, &manifest, &version, &install_path);
    base::DeletePathRecursively(unpack_path);
-   if (result.result.category_ != update_client::ErrorCategory::kNone) {
+   if (result.result.category != update_client::ErrorCategory::kNone) {
 +    LOG(ERROR) << "ComponentInstaller:"
-+               << " Install error " << result.result.code_
-+               << " extra " << result.result.extra_;
++               << " Install error " << result.result.code
++               << " extra " << result.result.extra;
      main_task_runner_->PostTask(FROM_HERE,
                                  base::BindOnce(std::move(callback), result));
      return;
@@ -389,7 +390,7 @@ diff --git a/components/component_updater/component_updater_url_constants.cc b/c
  // --component-updater=url-source=someurl.
  const char kUpdaterJSONDefaultUrl[] =
 -    "https://update.googleapis.com/service/update2/json";
-+    "https://www.cromite.org/components/query.json";
++    "https://www.cromite.org/components/query4_0.json";
  
  const char kUpdaterJSONFallbackUrl[] =
 -    "http://update.googleapis.com/service/update2/json";
@@ -470,7 +471,7 @@ diff --git a/components/crx_file/crx_build_action_main.cc b/components/crx_file/
 diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verifier.cc
 --- a/components/crx_file/crx_verifier.cc
 +++ b/components/crx_file/crx_verifier.cc
-@@ -18,6 +18,7 @@
+@@ -13,6 +13,7 @@
  #include <set>
  #include <utility>
  
@@ -478,7 +479,7 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
  #include "base/base64.h"
  #include "base/files/file.h"
  #include "base/files/file_path.h"
-@@ -39,9 +40,15 @@ namespace {
+@@ -35,9 +36,15 @@ namespace {
  
  // The SHA256 hash of the DER SPKI "ecdsa_2017_public" Crx3 key.
  constexpr uint8_t kPublisherKeyHash[] = {
@@ -494,7 +495,7 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
  
  // The SHA256 hash of the DER SPKI "ecdsa_2017_public" Crx3 test key.
  constexpr uint8_t kPublisherTestKeyHash[] = {
-@@ -210,6 +217,13 @@ VerifierResult VerifyCrx3(
+@@ -199,6 +206,13 @@ VerifierResult VerifyCrx3(
        found_publisher_key =
            found_publisher_key || key_hash == publisher_key ||
            (accept_publisher_test_key && key_hash == *publisher_test_key);
@@ -506,9 +507,9 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
 +      DLOG(INFO) << "---key: " << key;
 +
        auto v = std::make_unique<crypto::SignatureVerifier>();
-       static_assert(sizeof(unsigned char) == sizeof(uint8_t),
-                     "Unsupported char size.");
-@@ -223,9 +237,11 @@ VerifierResult VerifyCrx3(
+       if (!v->VerifyInit(proof_type.second, base::as_byte_span(sig),
+                          base::as_byte_span(key))) {
+@@ -210,9 +224,11 @@ VerifierResult VerifyCrx3(
        verifiers.push_back(std::move(v));
      }
    }
@@ -523,7 +524,7 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
 diff --git a/components/update_client/component.cc b/components/update_client/component.cc
 --- a/components/update_client/component.cc
 +++ b/components/update_client/component.cc
-@@ -398,6 +398,18 @@ void Component::StateChecking::DoHandle() {
+@@ -372,6 +372,18 @@ void Component::StateChecking::DoHandle() {
      return;
    }
  
@@ -574,7 +575,7 @@ diff --git a/components/update_client/crx_downloader.cc b/components/update_clie
 diff --git a/components/update_client/net/network_impl.cc b/components/update_client/net/network_impl.cc
 --- a/components/update_client/net/network_impl.cc
 +++ b/components/update_client/net/network_impl.cc
-@@ -130,7 +130,9 @@ void NetworkFetcherImpl::PostRequest(
+@@ -131,7 +131,9 @@ void NetworkFetcherImpl::PostRequest(
        network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
    // The `Content-Type` header set by |AttachStringForUpload| overwrites any
    // `Content-Type` header present in the |ResourceRequest| above.
@@ -582,12 +583,31 @@ diff --git a/components/update_client/net/network_impl.cc b/components/update_cl
    simple_url_loader->AttachStringForUpload(post_data, content_type);
 +#endif
    simple_url_loader->SetOnResponseStartedCallback(base::BindOnce(
-       &NetworkFetcherImpl::OnResponseStartedCallback, base::Unretained(this),
-       std::move(response_started_callback)));
+       &NetworkFetcherImpl::OnResponseStartedCallback,
+       weak_ptr_factory_.GetWeakPtr(), std::move(response_started_callback)));
+diff --git a/components/update_client/protocol_parser.cc b/components/update_client/protocol_parser.cc
+--- a/components/update_client/protocol_parser.cc
++++ b/components/update_client/protocol_parser.cc
+@@ -7,6 +7,7 @@
+ #include <string>
+ 
+ #include "base/strings/stringprintf.h"
++#include "base/logging.h"
+ 
+ namespace update_client {
+ 
+@@ -54,6 +55,7 @@ void ProtocolParser::ParseError(const char* details, ...) {
+ 
+   base::StringAppendV(&errors_, details, args);
+   va_end(args);
++  LOG(INFO) << "ParseError " << errors_;
+ }
+ 
+ bool ProtocolParser::Parse(const std::string& response) {
 diff --git a/components/update_client/protocol_parser_json.cc b/components/update_client/protocol_parser_json.cc
 --- a/components/update_client/protocol_parser_json.cc
 +++ b/components/update_client/protocol_parser_json.cc
-@@ -16,6 +16,7 @@
+@@ -18,6 +18,7 @@
  #include "base/values.h"
  #include "base/version.h"
  #include "components/update_client/protocol_definition.h"
@@ -595,7 +615,7 @@ diff --git a/components/update_client/protocol_parser_json.cc b/components/updat
  
  namespace update_client {
  
-@@ -311,6 +312,7 @@ bool ProtocolParserJSON::DoParse(const std::string& response_json,
+@@ -262,6 +263,7 @@ bool ProtocolParserJSON::DoParse(const std::string& response_json,
                                   Results* results) {
    CHECK(results);
  
@@ -606,7 +626,7 @@ diff --git a/components/update_client/protocol_parser_json.cc b/components/updat
 diff --git a/components/update_client/request_sender.cc b/components/update_client/request_sender.cc
 --- a/components/update_client/request_sender.cc
 +++ b/components/update_client/request_sender.cc
-@@ -104,7 +104,8 @@ void RequestSender::SendInternal() {
+@@ -101,7 +101,8 @@ void RequestSender::SendInternal() {
    }
    VLOG_IF(2, !url.is_valid()) << "url is not valid.";
  
@@ -619,7 +639,7 @@ diff --git a/components/update_client/request_sender.cc b/components/update_clie
 diff --git a/components/update_client/update_checker.cc b/components/update_client/update_checker.cc
 --- a/components/update_client/update_checker.cc
 +++ b/components/update_client/update_checker.cc
-@@ -242,6 +242,10 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
+@@ -262,6 +262,10 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
        config_->IsMachineExternallyManaged(), additional_attributes,
        updater_state_attributes, std::move(apps));
  
@@ -630,7 +650,7 @@ diff --git a/components/update_client/update_checker.cc b/components/update_clie
    cancellation_->OnCancel(
        base::MakeRefCounted<RequestSender>(config_->GetNetworkFetcherFactory())
            ->Send({url},
-@@ -251,7 +255,7 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
+@@ -271,7 +275,7 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
                   config_->GetProtocolHandlerFactory()
                       ->CreateSerializer()
                       ->Serialize(request),
@@ -661,14 +681,14 @@ diff --git a/components/update_client/update_engine.cc b/components/update_clien
 diff --git a/components/update_client/utils.cc b/components/update_client/utils.cc
 --- a/components/update_client/utils.cc
 +++ b/components/update_client/utils.cc
-@@ -111,6 +111,9 @@ bool VerifyFileHash256(const base::FilePath& filepath,
-   uint8_t actual_hash[crypto::kSHA256Length] = {};
-   hasher->Finish(actual_hash, sizeof(actual_hash));
+@@ -118,6 +118,9 @@ bool VerifyFileHash256(const base::FilePath& filepath,
+   std::array<uint8_t, crypto::kSHA256Length> sha256_hash;
+   hasher->Finish(sha256_hash);
  
 +  DLOG(INFO) << "VerifyFileHash256 "
-+             << "actual_hash=" << base::HexEncode(actual_hash);
++             << "sha256_hash=" << base::HexEncode(sha256_hash);
 +
-   return memcmp(actual_hash, &expected_hash[0], sizeof(actual_hash)) == 0;
+   return base::span(sha256_hash) == base::span(expected_hash);
  }
  
 --

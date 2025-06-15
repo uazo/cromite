@@ -4,24 +4,27 @@ Subject: Disable safety check
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- chrome/android/BUILD.gn                       |  5 ---
+ chrome/android/BUILD.gn                       |  5 --
  chrome/android/chrome_java_sources.gni        |  1 -
  .../android/java/res/xml/main_preferences.xml |  3 +-
- .../settings/FragmentDependencyProvider.java  | 31 -------------------
+ .../PasswordCheckupLauncher.java              | 57 +------------------
+ .../settings/FragmentDependencyProvider.java  | 32 -----------
  .../chrome/browser/settings/MainSettings.java |  2 +-
- .../settings/SettingsNavigationImpl.java      | 13 ++------
+ .../settings/SettingsNavigationImpl.java      | 13 +----
  chrome/browser/BUILD.gn                       |  1 -
- .../suggestions/action/OmniboxPedal.java      |  3 --
+ chrome/browser/safety_check/android/BUILD.gn  |  2 -
+ .../safety_check/SafetyCheckBridge.java       |  4 +-
+ .../suggestions/action/OmniboxPedal.java      |  3 -
  chrome/browser/ui/tab_helpers.cc              |  2 +-
  .../site_settings/SiteSettings.java           |  2 +-
  .../Disable-safety-check.inc                  |  1 +
- 11 files changed, 8 insertions(+), 56 deletions(-)
+ 14 files changed, 11 insertions(+), 117 deletions(-)
  create mode 100644 cromite_flags/chrome/common/chrome_features_cc/Disable-safety-check.inc
 
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
-@@ -451,7 +451,6 @@ if (current_toolchain == default_toolchain) {
+@@ -461,7 +461,6 @@ if (_is_default_toolchain) {
        "//chrome/browser/recent_tabs:java",
        "//chrome/browser/regional_capabilities/android:java",
        "//chrome/browser/safe_browsing/android:java",
@@ -29,16 +32,16 @@ diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
        "//chrome/browser/safety_hub/android:java",
        "//chrome/browser/screenshot_monitor:java",
        "//chrome/browser/search_engines/android:java",
-@@ -1086,8 +1085,6 @@ if (current_toolchain == default_toolchain) {
-       "//chrome/browser/readaloud/android:junit",
+@@ -1107,8 +1106,6 @@ if (_is_default_toolchain) {
        "//chrome/browser/recent_tabs:junit",
        "//chrome/browser/recent_tabs/internal:junit",
+       "//chrome/browser/safe_browsing/android:junit",
 -      "//chrome/browser/safety_check/android:junit",
 -      "//chrome/browser/safety_hub/android:junit",
        "//chrome/browser/search_engines/android:junit",
        "//chrome/browser/search_resumption:junit",
-       "//chrome/browser/signin/services/android:junit",
-@@ -1360,8 +1357,6 @@ if (current_toolchain == default_toolchain) {
+       "//chrome/browser/serial/android:junit",
+@@ -1386,8 +1383,6 @@ if (_is_default_toolchain) {
        "//chrome/browser/quick_delete:javatests",
        "//chrome/browser/renderer_host/android:javatests",
        "//chrome/browser/safe_browsing/android:javatests",
@@ -50,7 +53,7 @@ diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -913,7 +913,6 @@ chrome_java_sources = [
+@@ -932,7 +932,6 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/safe_browsing/SafeBrowsingPasswordReuseDialogBridge.java",
    "java/src/org/chromium/chrome/browser/safe_browsing/SafeBrowsingReferringAppBridge.java",
    "java/src/org/chromium/chrome/browser/safe_browsing/SafeBrowsingSettingsNavigation.java",
@@ -71,6 +74,103 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
      <Preference
          android:fragment="org.chromium.chrome.browser.safety_hub.SafetyHubFragment"
          android:key="safety_hub"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/PasswordCheckupLauncher.java b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/PasswordCheckupLauncher.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/PasswordCheckupLauncher.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/PasswordCheckupLauncher.java
+@@ -18,7 +18,6 @@ import org.chromium.base.supplier.ObservableSupplierImpl;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.password_check.PasswordCheckFactory;
+ import org.chromium.chrome.browser.profiles.Profile;
+-import org.chromium.chrome.browser.safety_check.SafetyCheckSettingsFragment;
+ import org.chromium.chrome.browser.settings.SettingsCustomTabLauncherImpl;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.chrome.browser.sync.SyncServiceFactory;
+@@ -32,8 +31,6 @@ public class PasswordCheckupLauncher {
+     @CalledByNative
+     private static void launchCheckupOnlineWithWindowAndroid(
+             @JniType("std::string") String checkupUrl, WindowAndroid windowAndroid) {
+-        if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
+-        launchCheckupOnlineWithActivity(checkupUrl, windowAndroid.getActivity().get());
+     }
+ 
+     @CalledByNative
+@@ -42,75 +39,23 @@ public class PasswordCheckupLauncher {
+             WindowAndroid windowAndroid,
+             @PasswordCheckReferrer int passwordCheckReferrer,
+             @Nullable String accountEmail) {
+-        assert accountEmail == null || !accountEmail.isEmpty();
+-        if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
+-        assert profile != null;
+-
+-        PasswordManagerHelper passwordManagerHelper = PasswordManagerHelper.getForProfile(profile);
+-        if (ChromeFeatureList.isEnabled(ChromeFeatureList.LOGIN_DB_DEPRECATION_ANDROID)) {
+-            // This is invoked from the leak dialog if the compromised password is saved for other
+-            // sites. After the login DB deprecation, this code path is guaranteed to only be
+-            // executed for users with access to UPM, since they are the only ones with saved
+-            // passwords.
+-            passwordManagerHelper.showPasswordCheckup(
+-                    windowAndroid.getContext().get(),
+-                    passwordCheckReferrer,
+-                    getModalDialogManagerSupplier(windowAndroid),
+-                    accountEmail,
+-                    new SettingsCustomTabLauncherImpl());
+-            return;
+-        }
+-
+-        // Force instantiation of GMSCore password check if GMSCore update is required. Password
+-        // check launch will fail and instead show the blocking dialog with the suggestion to
+-        // update.
+-        if (passwordManagerHelper.canUseUpm()
+-                || PasswordManagerUtilBridge.isGmsCoreUpdateRequired(
+-                        UserPrefs.get(profile), SyncServiceFactory.getForProfile(profile))) {
+-            passwordManagerHelper.showPasswordCheckup(
+-                    windowAndroid.getContext().get(),
+-                    passwordCheckReferrer,
+-                    getModalDialogManagerSupplier(windowAndroid),
+-                    accountEmail,
+-                    new SettingsCustomTabLauncherImpl());
+-            return;
+-        }
+-
+-        PasswordCheckFactory.getOrCreate()
+-                .showUi(windowAndroid.getContext().get(), passwordCheckReferrer);
+     }
+ 
+     @CalledByNative
+     private static void launchCheckupOnlineWithActivity(
+             @JniType("std::string") String checkupUrl, Activity activity) {
+-        if (tryLaunchingNativePasswordCheckup(activity)) return;
+-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(checkupUrl));
+-        intent.setPackage(activity.getPackageName());
+-        activity.startActivity(intent);
+     }
+ 
+     @CalledByNative
+     static void launchSafetyCheck(WindowAndroid windowAndroid) {
+-        if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
+-        SettingsNavigationFactory.createSettingsNavigation()
+-                .startSettings(
+-                        windowAndroid.getContext().get(),
+-                        SafetyCheckSettingsFragment.class,
+-                        SafetyCheckSettingsFragment.createBundle(true));
+     }
+ 
+     @CalledByNative
+     static void launchSafetyHub(WindowAndroid windowAndroid) {
+-        if (windowAndroid.getContext().get() == null) return; // Window not available yet/anymore.
+-        SettingsNavigationFactory.createSettingsNavigation()
+-                .startSettings(windowAndroid.getContext().get(), SettingsFragment.SAFETY_CHECK);
+     }
+ 
+     private static boolean tryLaunchingNativePasswordCheckup(Activity activity) {
+-        GooglePasswordManagerUIProvider googlePasswordManagerUiProvider =
+-                ServiceLoaderUtil.maybeCreate(GooglePasswordManagerUIProvider.class);
+-        if (googlePasswordManagerUiProvider == null) return false;
+-        return googlePasswordManagerUiProvider.launchPasswordCheckup(activity);
++        return false;
+     }
+ 
+     private static ObservableSupplier<ModalDialogManager> getModalDialogManagerSupplier(
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/FragmentDependencyProvider.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/FragmentDependencyProvider.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/FragmentDependencyProvider.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/FragmentDependencyProvider.java
@@ -88,7 +188,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/Fragme
  import org.chromium.chrome.browser.search_engines.settings.SearchEngineSettings;
  import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
  import org.chromium.chrome.browser.site_settings.ChromeSiteSettingsDelegate;
-@@ -130,20 +123,6 @@ public class FragmentDependencyProvider extends FragmentManager.FragmentLifecycl
+@@ -131,20 +124,6 @@ public class FragmentDependencyProvider extends FragmentManager.FragmentLifecycl
              delegate.setSnackbarManagerSupplier(mSnackbarManagerSupplier);
              baseSiteSettingsFragment.setSiteSettingsDelegate(delegate);
          }
@@ -104,12 +204,12 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/Fragme
 -                    UserPrefs.get(mProfile),
 -                    new PasswordStoreBridge(mProfile),
 -                    PasswordManagerHelper.getForProfile(mProfile),
--                    LaunchIntentDispatcher::createCustomTabActivityIntent);
+-                    new SettingsCustomTabLauncherImpl());
 -        }
          if (fragment instanceof PasswordCheckFragmentView) {
              PasswordCheckComponentUiFactory.create(
                      (PasswordCheckFragmentView) fragment,
-@@ -232,13 +211,6 @@ public class FragmentDependencyProvider extends FragmentManager.FragmentLifecycl
+@@ -237,14 +216,6 @@ public class FragmentDependencyProvider extends FragmentManager.FragmentLifecycl
              ((AutofillLocalIbanEditor) fragment)
                      .setModalDialogManagerSupplier(mModalDialogManagerSupplier);
          }
@@ -118,12 +218,13 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/Fragme
 -                    new SafetyHubModuleDelegateImpl(
 -                            mProfile,
 -                            mModalDialogManagerSupplier,
--                            SigninAndHistorySyncActivityLauncherImpl.get()));
+-                            SigninAndHistorySyncActivityLauncherImpl.get(),
+-                            new SettingsCustomTabLauncherImpl()));
 -        }
          if (fragment instanceof INeedSnackbarManager) {
              ((INeedSnackbarManager)fragment).setSnackbarManagerSupplier(mSnackbarManagerSupplier);
          }
-@@ -253,8 +225,5 @@ public class FragmentDependencyProvider extends FragmentManager.FragmentLifecycl
+@@ -259,8 +230,5 @@ public class FragmentDependencyProvider extends FragmentManager.FragmentLifecycl
          if (fragment instanceof ManageSyncSettings) {
              ((ManageSyncSettings) fragment).setSnackbarManagerSupplier(mSnackbarManagerSupplier);
          }
@@ -135,7 +236,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/Fragme
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
-@@ -316,7 +316,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
+@@ -328,7 +328,7 @@ public class MainSettings extends ChromeBaseSettingsFragment
              removePreferenceIfPresent(PREF_UI_THEME);
          }
  
@@ -184,18 +285,58 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/Settin
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -3309,7 +3309,6 @@ static_library("browser") {
+@@ -3354,7 +3354,6 @@ static_library("browser") {
        "//chrome/browser/recent_tabs:jni_headers",
        "//chrome/browser/regional_capabilities",
        "//chrome/browser/safe_browsing/android:safe_browsing_enums",
 -      "//chrome/browser/safety_check/android",
        "//chrome/browser/safety_hub/android",
        "//chrome/browser/search_resumption:jni_headers",
-       "//chrome/browser/signin/services/android:jni_headers",
+       "//chrome/browser/serial/android:jni_headers",
+diff --git a/chrome/browser/safety_check/android/BUILD.gn b/chrome/browser/safety_check/android/BUILD.gn
+--- a/chrome/browser/safety_check/android/BUILD.gn
++++ b/chrome/browser/safety_check/android/BUILD.gn
+@@ -14,7 +14,6 @@ generate_jni("jni_headers") {
+ source_set("android") {
+   sources = [ "safety_check_bridge.cc" ]
+   deps = [
+-    ":jni_headers",
+     "//chrome/browser/signin:identity_manager_provider",
+     "//components/password_manager/core/browser/leak_detection",
+     "//components/prefs",
+@@ -73,7 +72,6 @@ android_library("java") {
+ 
+   srcjar_deps = [
+     ":bulk_leak_check_service_enums",
+-    ":jni_headers",
+     ":safety_check_enums",
+   ]
+   resources_package = "org.chromium.chrome.browser.safety_check"
+diff --git a/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckBridge.java b/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckBridge.java
+--- a/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckBridge.java
++++ b/chrome/browser/safety_check/android/java/src/org/chromium/chrome/browser/safety_check/SafetyCheckBridge.java
+@@ -26,7 +26,7 @@ public class SafetyCheckBridge {
+ 
+     /** Returns whether the user is signed in for the purposes of password check. */
+     boolean userSignedIn() {
+-        return SafetyCheckBridgeJni.get().userSignedIn(mProfile);
++        return false;
+     }
+ 
+     /**
+@@ -37,7 +37,7 @@ public class SafetyCheckBridge {
+      */
+     @SafeBrowsingStatus
+     int checkSafeBrowsing() {
+-        return SafetyCheckBridgeJni.get().checkSafeBrowsing(mProfile);
++        return SafeBrowsingStatus.DISABLED;
+     }
+ 
+     /** C++ method signatures. */
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/action/OmniboxPedal.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/action/OmniboxPedal.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/action/OmniboxPedal.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/suggestions/action/OmniboxPedal.java
-@@ -55,9 +55,6 @@ public class OmniboxPedal extends OmniboxAction {
+@@ -56,9 +56,6 @@ public class OmniboxPedal extends OmniboxAction {
              case OmniboxPedalId.UPDATE_CREDIT_CARD:
                  delegate.openSettingsPage(SettingsFragment.PAYMENT_METHODS);
                  break;
@@ -208,15 +349,15 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 --- a/chrome/browser/ui/tab_helpers.cc
 +++ b/chrome/browser/ui/tab_helpers.cc
-@@ -559,7 +559,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+@@ -571,7 +571,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
    tpcd::trial::ValidityService::MaybeCreateForWebContents(web_contents);
    TrustedVaultEncryptionKeysTabHelper::CreateForWebContents(web_contents);
  #if BUILDFLAG(IS_ANDROID)
 -  if (base::FeatureList::IsEnabled(features::kSafetyHub)) {
 +  if (((true)) || base::FeatureList::IsEnabled(features::kSafetyHub)) {
-     auto* service = UnusedSitePermissionsServiceFactory::GetForProfile(profile);
+     auto* service = RevokedPermissionsServiceFactory::GetForProfile(profile);
      if (service) {
-       UnusedSitePermissionsService::TabHelper::CreateForWebContents(
+       RevokedPermissionsService::TabHelper::CreateForWebContents(web_contents,
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
@@ -227,7 +368,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 -        if (!getSiteSettingsDelegate().isSafetyHubEnabled()) {
 +        if (((false)) && !getSiteSettingsDelegate().isSafetyHubEnabled()) {
              Preference autorevocationPref =
-                     assumeNonNull(findPreference(PERMISSION_AUTOREVOCATION_PREF));
+                     findPreference(PERMISSION_AUTOREVOCATION_PREF);
              getPreferenceScreen().removePreference(autorevocationPref);
 diff --git a/cromite_flags/chrome/common/chrome_features_cc/Disable-safety-check.inc b/cromite_flags/chrome/common/chrome_features_cc/Disable-safety-check.inc
 new file mode 100644
