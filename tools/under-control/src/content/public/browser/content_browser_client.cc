@@ -62,6 +62,7 @@
 #include "media/mojo/mojom/media_service.mojom.h"
 #include "mojo/public/cpp/bindings/message.h"
 #include "net/base/isolation_info.h"
+#include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/site_for_cookies.h"
 #include "net/ssl/client_cert_identity.h"
 #include "net/ssl/client_cert_store.h"
@@ -178,16 +179,25 @@ bool ContentBrowserClient::ShouldUseProcessPerSite(
   return false;
 }
 
+bool ContentBrowserClient::
+    ShouldReuseExistingProcessForNewMainFrameSiteInstance(
+        BrowserContext* browser_context,
+        const GURL& site_instance_original_url) {
+  DCHECK(browser_context);
+  return true;
+}
+
 bool ContentBrowserClient::ShouldAllowProcessPerSiteForMultipleMainFrames(
     BrowserContext* context) {
   return true;
 }
 
-std::optional<ContentBrowserClient::SpareProcessRefusedByEmbedderReason>
-ContentBrowserClient::ShouldUseSpareRenderProcessHost(
+bool ContentBrowserClient::ShouldUseSpareRenderProcessHost(
     BrowserContext* browser_context,
-    const GURL& site_url) {
-  return std::nullopt;
+    const GURL& site_url,
+    std::optional<SpareProcessRefusedByEmbedderReason>& refused_reason) {
+  refused_reason = std::nullopt;
+  return true;
 }
 
 bool ContentBrowserClient::DoesSiteRequireDedicatedProcess(
@@ -451,6 +461,7 @@ AllowServiceWorkerResult ContentBrowserClient::AllowServiceWorker(
     const GURL& scope,
     const net::SiteForCookies& site_for_cookies,
     const std::optional<url::Origin>& top_frame_origin,
+    const blink::StorageKey& storage_key,
     const GURL& script_url,
     BrowserContext* context) {
   return AllowServiceWorkerResult::Yes();
@@ -542,6 +553,7 @@ void ContentBrowserClient::AllowWorkerFileSystem(
     const GURL& url,
     BrowserContext* browser_context,
     const std::vector<GlobalRenderFrameHostId>& render_frames,
+    const blink::StorageKey& storage_key,
     base::OnceCallback<void(bool)> callback) {
   std::move(callback).Run(true);
 }
@@ -549,21 +561,24 @@ void ContentBrowserClient::AllowWorkerFileSystem(
 bool ContentBrowserClient::AllowWorkerIndexedDB(
     const GURL& url,
     BrowserContext* browser_context,
-    const std::vector<GlobalRenderFrameHostId>& render_frames) {
+    const std::vector<GlobalRenderFrameHostId>& render_frames,
+    const blink::StorageKey& storage_key) {
   return true;
 }
 
 bool ContentBrowserClient::AllowWorkerCacheStorage(
     const GURL& url,
     BrowserContext* browser_context,
-    const std::vector<GlobalRenderFrameHostId>& render_frames) {
+    const std::vector<GlobalRenderFrameHostId>& render_frames,
+    const blink::StorageKey& storage_key) {
   return true;
 }
 
 bool ContentBrowserClient::AllowWorkerWebLocks(
     const GURL& url,
     BrowserContext* browser_context,
-    const std::vector<GlobalRenderFrameHostId>& render_frames) {
+    const std::vector<GlobalRenderFrameHostId>& render_frames,
+    const blink::StorageKey& storage_key) {
   return true;
 }
 
@@ -699,7 +714,13 @@ bool ContentBrowserClient::IsFullCookieAccessAllowed(
     content::BrowserContext* browser_context,
     content::WebContents* web_contents,
     const GURL& url,
-    const blink::StorageKey& storage_key) {
+    const blink::StorageKey& storage_key,
+    net::CookieSettingOverrides overrides) {
+  return true;
+}
+
+bool ContentBrowserClient::IsPrefetchWithServiceWorkerAllowed(
+    content::BrowserContext* browser_context) {
   return true;
 }
 
@@ -709,6 +730,12 @@ void ContentBrowserClient::GrantCookieAccessDueToHeuristic(
     const net::SchemefulSite& accessing_site,
     base::TimeDelta ttl,
     bool ignore_schemes) {}
+
+bool ContentBrowserClient::AreThirdPartyCookiesGenerallyAllowed(
+    content::BrowserContext* browser_context,
+    content::WebContents* web_contents) {
+  return true;
+}
 
 bool ContentBrowserClient::CanSendSCTAuditingReport(
     BrowserContext* browser_context) {
@@ -990,11 +1017,8 @@ void ContentBrowserClient::OpenURL(
   std::move(callback).Run(nullptr);
 }
 
-std::vector<std::unique_ptr<NavigationThrottle>>
-content::ContentBrowserClient::CreateThrottlesForNavigation(
-    NavigationHandle* navigation_handle) {
-  return std::vector<std::unique_ptr<NavigationThrottle>>();
-}
+void ContentBrowserClient::CreateThrottlesForNavigation(
+    NavigationThrottleRegistry& registry) {}
 
 std::vector<std::unique_ptr<CommitDeferringCondition>>
 ContentBrowserClient::CreateCommitDeferringConditionsForNavigation(
@@ -1758,8 +1782,9 @@ bool ContentBrowserClient::CanBackForwardCachedPageReceiveCookieChanges(
     content::BrowserContext& browser_context,
     const GURL& url,
     const net::SiteForCookies& site_for_cookies,
-    const std::optional<url::Origin>& top_frame_origin,
-    const net::CookieSettingOverrides overrides) {
+    const url::Origin& top_frame_origin,
+    const net::CookieSettingOverrides overrides,
+    base::optional_ref<const net::CookiePartitionKey> cookie_partition_key) {
   return true;
 }
 
@@ -1789,6 +1814,11 @@ bool ContentBrowserClient::IsBlobUrlPartitioningEnabled(
 }
 
 bool ContentBrowserClient::ShouldReduceAcceptLanguage(
+    content::BrowserContext* browser_context) {
+  return true;
+}
+
+bool ContentBrowserClient::IsClearWindowNameForNewBrowsingContextGroupAllowed(
     content::BrowserContext* browser_context) {
   return true;
 }
@@ -1943,12 +1973,6 @@ bool ContentBrowserClient::ShouldDispatchPagehideDuringCommit(
   return true;
 }
 
-std::unique_ptr<WebUIController> ContentBrowserClient::OverrideForInternalWebUI(
-    WebUI* web_ui,
-    const GURL& url) {
-  return nullptr;
-}
-
 std::optional<network::CrossOriginEmbedderPolicy>
 ContentBrowserClient::MaybeOverrideLocalURLCrossOriginEmbedderPolicy(
     content::NavigationHandle* navigation_handle) {
@@ -1963,6 +1987,10 @@ bool ContentBrowserClient::ShouldPrioritizeForBackForwardCache(
     BrowserContext* browser_context,
     const GURL& url) {
   return false;
+}
+
+bool ContentBrowserClient::IsRendererProcessPriorityEnabled() {
+  return true;
 }
 
 std::unique_ptr<KeepAliveRequestTracker>

@@ -29,7 +29,6 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/not_fatal_until.h"
 #include "base/sequence_checker.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
@@ -127,15 +126,14 @@
 #include "services/network/proxy_resolving_socket_factory_mojo.h"
 #include "services/network/public/cpp/cert_verifier/mojo_cert_verifier.h"
 #include "services/network/public/cpp/content_security_policy/content_security_policy.h"
-#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "services/network/public/cpp/parsed_headers.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_host_resolver.h"
 #include "services/network/public/mojom/clear_data_filter.mojom.h"
+#include "services/network/public/mojom/connection_change_observer_client.mojom-forward.h"
 #include "services/network/public/mojom/cookie_encryption_provider.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
-#include "services/network/public/mojom/reconnect_event_observer.mojom-forward.h"
 #include "services/network/public/mojom/reporting_service.mojom.h"
 #include "services/network/public/mojom/trust_tokens.mojom-forward.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -147,6 +145,7 @@
 #include "services/network/shared_dictionary/shared_dictionary_constants.h"
 #include "services/network/shared_dictionary/shared_dictionary_manager.h"
 #include "services/network/shared_dictionary/shared_dictionary_storage.h"
+#include "services/network/shared_resource_checker.h"
 #include "services/network/ssl_config_service_mojo.h"
 #include "services/network/throttling/network_conditions.h"
 #include "services/network/throttling/throttling_controller.h"
@@ -746,6 +745,9 @@ NetworkContext::NetworkContext(
       base::BindRepeating(&NetworkContext::OnCookieManagerSettingsChanged,
                           weak_factory_.GetWeakPtr()));
 
+  shared_resource_checker_ = std::make_unique<SharedResourceChecker>(
+      cookie_manager_->cookie_settings());
+
   network_service_->RegisterNetworkContext(this);
 
   // Only register for destruction if |this| will be wholly lifetime-managed
@@ -849,6 +851,10 @@ NetworkContext::NetworkContext(
            net::handles::kInvalidNetworkHandle)),
       prefetch_cache_(prefetch_enabled_ ? std::make_unique<PrefetchCache>()
                                         : nullptr) {
+
+  shared_resource_checker_ = std::make_unique<SharedResourceChecker>(
+      cookie_manager_->cookie_settings());
+
   // May be nullptr in tests.
   if (network_service_) {
     network_service_->RegisterNetworkContext(this);
@@ -1059,7 +1065,7 @@ void NetworkContext::OnRCMDisconnect(
     const network::RestrictedCookieManager* rcm) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   auto it = restricted_cookie_managers_.find(rcm);
-  CHECK(it != restricted_cookie_managers_.end(), base::NotFatalUntil::M130);
+  CHECK(it != restricted_cookie_managers_.end());
   restricted_cookie_managers_.erase(it);
 }
 
@@ -1208,8 +1214,14 @@ void NetworkContext::SetTrackingProtectionContentSetting(
 void NetworkContext::OnProxyLookupComplete(
     ProxyLookupRequest* proxy_lookup_request) {
   auto it = proxy_lookup_requests_.find(proxy_lookup_request);
-  CHECK(it != proxy_lookup_requests_.end(), base::NotFatalUntil::M130);
+  CHECK(it != proxy_lookup_requests_.end());
   proxy_lookup_requests_.erase(it);
+}
+
+void NetworkContext::SetTLS13EarlyDataEnabled(bool enabled) {
+  url_request_context_->http_transaction_factory()
+      ->GetSession()
+      ->SetTLS13EarlyDataEnabled(enabled);
 }
 
 void NetworkContext::DisableQuic() {
@@ -1222,7 +1234,7 @@ void NetworkContext::DestroyURLLoaderFactory(
     return;
   }
   auto it = url_loader_factories_.find(url_loader_factory);
-  CHECK(it != url_loader_factories_.end(), base::NotFatalUntil::M130);
+  CHECK(it != url_loader_factories_.end());
   url_loader_factories_.erase(it);
 }
 
@@ -1239,7 +1251,7 @@ void NetworkContext::LoaderCreated(uint32_t process_id) {
 
 void NetworkContext::LoaderDestroyed(uint32_t process_id) {
   auto it = loader_count_per_process_.find(process_id);
-  CHECK(it != loader_count_per_process_.end(), base::NotFatalUntil::M130);
+  CHECK(it != loader_count_per_process_.end());
   it->second -= 1;
   if (it->second == 0) {
     loader_count_per_process_.erase(it);
@@ -2250,8 +2262,8 @@ void NetworkContext::PreconnectSockets(
     const net::NetworkAnonymizationKey& network_anonymization_key,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
     const std::optional<net::ConnectionKeepAliveConfig>& keepalive_config,
-    mojo::PendingRemote<mojom::ReconnectEventObserver>
-        reconnect_event_observer) {
+    mojo::PendingRemote<mojom::ConnectionChangeObserverClient>
+        connection_change_observer_client) {
   DCHECK(!require_network_anonymization_key_ ||
          !network_anonymization_key.IsEmpty());
 
@@ -2282,14 +2294,15 @@ void NetworkContext::PreconnectSockets(
                                        user_agent);
   request_info.traffic_annotation = traffic_annotation;
 
-  if (keepalive_config.has_value() || reconnect_event_observer.is_valid()) {
+  if (keepalive_config.has_value() ||
+      connection_change_observer_client.is_valid()) {
     request_info.connection_management_config =
         net::ConnectionManagementConfig();
     request_info.connection_management_config->keep_alive_config =
         keepalive_config;
-    if (reconnect_event_observer.is_valid()) {
+    if (connection_change_observer_client.is_valid()) {
       auto change_observer = std::make_unique<ConnectionChangeObserver>(
-          std::move(reconnect_event_observer), this);
+          std::move(connection_change_observer_client), this);
 
       request_info.connection_management_config->connection_change_observer =
           change_observer.get();
@@ -2892,6 +2905,11 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
   }
 
   auto quic_context = std::make_unique<net::QuicContext>();
+  if (params_->quic_idle_connection_timeout_seconds &&
+      params_->quic_idle_connection_timeout_seconds.value() >= 0) {
+    quic_context->params()->idle_connection_timeout =
+        base::Seconds(params_->quic_idle_connection_timeout_seconds.value());
+  }
   network_session_configurator::ParseCommandLineAndFieldTrials(
       *base::CommandLine::ForCurrentProcess(), is_quic_force_disabled,
       &session_params, quic_context->params());
@@ -2913,8 +2931,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
 
   if (params_->shared_dictionary_enabled) {
     builder.set_enable_shared_dictionary(true);
-    builder.set_enable_shared_zstd(
-        base::FeatureList::IsEnabled(network::features::kSharedZstd));
+    builder.set_enable_shared_zstd(true);
   }
 
   builder.SetWrapHttpNetworkLayerCallback(
@@ -3089,7 +3106,7 @@ void NetworkContext::OnHttpCacheCleared(ClearHttpCacheCallback callback,
 
 void NetworkContext::OnHostResolverShutdown(HostResolver* resolver) {
   auto found_resolver = host_resolvers_.find(resolver);
-  CHECK(found_resolver != host_resolvers_.end(), base::NotFatalUntil::M130);
+  CHECK(found_resolver != host_resolvers_.end());
   host_resolvers_.erase(found_resolver);
 }
 
@@ -3151,7 +3168,7 @@ GURL NetworkContext::GetHSTSRedirectForPreconnect(const GURL& original_url) {
 #if BUILDFLAG(IS_P2P_ENABLED)
 void NetworkContext::DestroySocketManager(P2PSocketManager* socket_manager) {
   auto iter = socket_managers_.find(socket_manager);
-  CHECK(iter != socket_managers_.end(), base::NotFatalUntil::M130);
+  CHECK(iter != socket_managers_.end());
   socket_managers_.erase(iter);
 }
 #endif  // BUILDFLAG(IS_P2P_ENABLED)
@@ -3168,7 +3185,7 @@ void NetworkContext::CanUploadDomainReliability(
 
 void NetworkContext::OnVerifyCertComplete(uint64_t cert_verify_id, int result) {
   auto iter = cert_verifier_requests_.find(cert_verify_id);
-  CHECK(iter != cert_verifier_requests_.end(), base::NotFatalUntil::M130);
+  CHECK(iter != cert_verifier_requests_.end());
 
   auto pending_cert_verify = std::move(iter->second);
   cert_verifier_requests_.erase(iter);
