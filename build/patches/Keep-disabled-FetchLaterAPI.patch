@@ -22,7 +22,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 diff --git a/content/browser/loader/keep_alive_url_loader.cc b/content/browser/loader/keep_alive_url_loader.cc
 --- a/content/browser/loader/keep_alive_url_loader.cc
 +++ b/content/browser/loader/keep_alive_url_loader.cc
-@@ -43,6 +43,36 @@
+@@ -45,6 +45,36 @@
  #include "services/network/public/mojom/url_request.mojom.h"
  #include "third_party/blink/public/common/features.h"
  
@@ -56,35 +56,35 @@ diff --git a/content/browser/loader/keep_alive_url_loader.cc b/content/browser/l
 +      })");
 +}
 +
- namespace content {
- namespace {
+ namespace features {
  
-@@ -304,7 +334,6 @@ KeepAliveURLLoader::KeepAliveURLLoader(
+ // See third_party/blink/renderer/core/fetch/retry_options.idl for details of
+@@ -440,7 +470,6 @@ KeepAliveURLLoader::KeepAliveURLLoader(
        forwarding_client_(
            std::make_unique<ForwardingClient>(this,
                                               std::move(forwarding_client))),
--      traffic_annotation_(traffic_annotation),
+-      traffic_annotation_(net::NetworkTrafficAnnotationTag(traffic_annotation)),
        network_loader_factory_(std::move(network_loader_factory)),
        stored_url_load_(std::make_unique<StoredURLLoad>()),
        policy_container_host_(std::move(policy_container_host)),
-@@ -363,7 +392,7 @@ void KeepAliveURLLoader::Start() {
+@@ -519,7 +548,7 @@ void KeepAliveURLLoader::StartInternal(bool is_retry) {
    url_loader_ = blink::ThrottlingURLLoader::CreateLoaderAndStart(
        network_loader_factory_, throttles_getter_.Run(), request_id_, options_,
        &resource_request_, forwarding_client_.get(),
--      net::NetworkTrafficAnnotationTag(traffic_annotation_),
-+      net::NetworkTrafficAnnotationTag(kTrafficAnnotation),
+-      is_retry ? kKeepAliveRetryAnnotationTag : traffic_annotation_,
++      is_retry ? kKeepAliveRetryAnnotationTag : kTrafficAnnotation,
        base::SingleThreadTaskRunner::GetCurrentDefault(),
        /*cors_exempt_header_list=*/std::nullopt,
        // `this`'s lifetime is at least the same as `url_loader_`.
 diff --git a/content/browser/loader/keep_alive_url_loader.h b/content/browser/loader/keep_alive_url_loader.h
 --- a/content/browser/loader/keep_alive_url_loader.h
 +++ b/content/browser/loader/keep_alive_url_loader.h
-@@ -315,9 +315,6 @@ class CONTENT_EXPORT KeepAliveURLLoader
+@@ -407,9 +407,6 @@ class CONTENT_EXPORT KeepAliveURLLoader
    // disconnected from the remote of URLLoader in the renderer.
    base::OneShotTimer disconnected_loader_timer_;
  
 -  // The NetworkTrafficAnnotationTag for the request being loaded.
--  net::MutableNetworkTrafficAnnotationTag traffic_annotation_;
+-  net::NetworkTrafficAnnotationTag traffic_annotation_;
 -
    // A refptr to the URLLoaderFactory implementation that can actually create a
    // URLLoader. An extra refptr is required here to support deferred loading.
@@ -99,7 +99,7 @@ new file mode 100644
 diff --git a/third_party/blink/renderer/core/fetch/fetch_manager.cc b/third_party/blink/renderer/core/fetch/fetch_manager.cc
 --- a/third_party/blink/renderer/core/fetch/fetch_manager.cc
 +++ b/third_party/blink/renderer/core/fetch/fetch_manager.cc
-@@ -270,6 +270,7 @@ class ResponseResolver final : public GarbageCollected<ResponseResolver> {
+@@ -271,6 +271,7 @@ class ResponseResolver final : public GarbageCollected<ResponseResolver> {
    // Rejects the promise with the supplied object.
    void Reject(v8::Local<v8::Value> error);
    void Reject(DOMException*);
@@ -107,7 +107,7 @@ diff --git a/third_party/blink/renderer/core/fetch/fetch_manager.cc b/third_part
  
    // Rejects the promise with the TypeError exception created at construction
    // time. Also optionally passes `devtools_request_id`, `issue_id`, and
-@@ -325,6 +326,12 @@ void ResponseResolver::Reject(DOMException* dom_exception) {
+@@ -326,6 +327,12 @@ void ResponseResolver::Reject(DOMException* dom_exception) {
    Clear();
  }
  
@@ -120,7 +120,7 @@ diff --git a/third_party/blink/renderer/core/fetch/fetch_manager.cc b/third_part
  void ResponseResolver::RejectBecauseFailed(
      std::optional<String> devtools_request_id,
      std::optional<base::UnguessableToken> issue_id,
-@@ -1289,10 +1296,20 @@ void FetchManager::Loader::Failed(
+@@ -1294,10 +1301,20 @@ void FetchManager::Loader::Failed(
    if (response_resolver_) {
      ScriptState::Scope scope(GetScriptState());
      if (dom_exception) {
@@ -177,7 +177,7 @@ diff --git a/third_party/blink/renderer/platform/loader/child_url_loader_factory
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
-@@ -3085,7 +3085,7 @@ void ResourceFetcher::PrepareForLeakDetection() {
+@@ -3086,7 +3086,7 @@ void ResourceFetcher::PrepareForLeakDetection() {
  void ResourceFetcher::StopFetchingInternal(StopFetchingTarget target) {
    // TODO(toyoshim): May want to suspend scheduler while canceling loaders so
    // that the cancellations below do not awake unnecessary scheduling.
@@ -189,7 +189,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -2092,8 +2092,8 @@
+@@ -2161,8 +2161,8 @@
      {
        // The Blink runtime-enabled feature name for the API's IDL.
        // https://chromestatus.com/feature/4654499737632768
@@ -199,5 +199,5 @@ diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 
 +      status: "experimental",  // by default
      },
      {
-       name: "FetchUploadStreaming",
+       name: "FetchRetry",
 --
