@@ -354,19 +354,6 @@ std::unique_ptr<base::Unwinder> CreateV8Unwinder(v8::Isolate* isolate) {
   return std::make_unique<V8Unwinder>(isolate);
 }
 
-// Web Share is conditionally enabled here in chrome/, to avoid it being
-// made available in other clients of content/ that do not have a Web Share
-// Mojo implementation (e.g. WebView).
-void MaybeEnableWebShare() {
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
-  if (base::FeatureList::IsEnabled(features::kWebShare))
-#endif
-#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || \
-    BUILDFLAG(IS_ANDROID)
-    blink::WebRuntimeFeatures::EnableWebShare(true);
-#endif
-}
-
 #if BUILDFLAG(ENABLE_NACL) && BUILDFLAG(ENABLE_EXTENSIONS) && \
     BUILDFLAG(IS_CHROMEOS)
 bool IsTerminalSystemWebAppNaClPage(GURL url) {
@@ -1701,7 +1688,12 @@ void ChromeContentRendererClient::
   // embedder only.
   blink::WebRuntimeFeatures::EnablePerformanceManagerInstrumentation(true);
 
-  MaybeEnableWebShare();
+// Web Share is conditionally enabled here in chrome/, to avoid it
+// being made available in WebView or Linux.
+#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_WIN) || \
+    BUILDFLAG(IS_MAC)
+  blink::WebRuntimeFeatures::EnableWebShare(true);
+#endif
 
   if (base::FeatureList::IsEnabled(
           autofill::features::kAutofillSharedAutofill)) {
@@ -1712,11 +1704,17 @@ void ChromeContentRendererClient::
     blink::WebRuntimeFeatures::EnableAdTagging(true);
 
   if (IsStandaloneContentExtensionProcess()) {
-    // These Web APIs are only exposed to workers in extensions.
+    // These Web API features are exposed in extensions.
     blink::WebRuntimeFeatures::EnableWebUSBOnServiceWorkers(true);
 #if !BUILDFLAG(IS_ANDROID)
     blink::WebRuntimeFeatures::EnableWebHIDOnServiceWorkers(true);
 #endif  // !BUILDFLAG(IS_ANDROID)
+    if (blink::WebRuntimeFeatures::IsAIPromptAPIForExtensionEnabled() &&
+        base::FeatureList::IsEnabled(
+            blink::features::kAIPromptAPIForExtension)) {
+      blink::WebRuntimeFeatures::EnableAIPromptAPI(true);
+    }
+    blink::WebRuntimeFeatures::EnableAIPromptAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableAIRewriterAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableAISummarizationAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableAIWriterAPIForWorkers(true);
