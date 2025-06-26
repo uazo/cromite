@@ -15,7 +15,7 @@ See also: https://github.com/bromite/bromite/issues/547
 Original License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- .../settings/PasswordSettings.java            | 83 ++++++++++++++++++-
+ .../settings/PasswordSettings.java            | 83 ++++++++++++++++-
  .../chrome/browser/settings/MainSettings.java |  3 +-
  .../chromium/chrome/browser/tab/TabImpl.java  | 41 +++++++--
  chrome/browser/about_flags.cc                 | 31 -------
@@ -25,7 +25,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/flag_descriptions.cc           |  6 --
  chrome/browser/flag_descriptions.h            |  3 -
  .../strings/android_chrome_strings.grd        |  6 ++
- .../ui/autofill/autofill_client_provider.cc   | 78 +----------------
+ .../ui/autofill/autofill_client_provider.cc   | 92 +------------------
  .../ui/autofill/autofill_client_provider.h    |  6 --
  chrome/browser/ui/tab_helpers.cc              |  4 +-
  components/android_autofill/browser/BUILD.gn  |  1 +
@@ -33,11 +33,11 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/android_autofill_manager.h        |  2 +
  .../autofill/AutofillManagerWrapper.java      |  5 +-
  .../components/autofill/AutofillProvider.java |  7 ++
- .../BrowserSelectionActionMenuDelegate.java   | 68 +++++++++++++++
+ .../BrowserSelectionActionMenuDelegate.java   | 68 ++++++++++++++
  .../browser/content_autofill_driver.cc        | 11 +++
- .../content/browser/content_autofill_driver.h | 10 +++
+ .../content/browser/content_autofill_driver.h | 10 ++
  .../content_autofill_driver_factory.cc        | 12 +++
- .../content/renderer/autofill_agent.cc        |  5 ++
+ .../content/renderer/autofill_agent.cc        |  5 +
  .../renderer/password_autofill_agent.cc       |  5 +-
  .../browser/foundations/autofill_driver.h     |  2 +
  .../foundations/autofill_driver_factory.cc    |  4 +
@@ -47,8 +47,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../autofill/core/common/autofill_features.cc |  2 +-
  .../autofill/core/common/autofill_features.h  | 22 -----
  .../autofill/core/common/autofill_prefs.cc    |  4 +-
- .../autofill/core/common/autofill_prefs.h     |  5 ++
- 33 files changed, 276 insertions(+), 165 deletions(-)
+ .../autofill/core/common/autofill_prefs.h     |  5 +
+ 33 files changed, 276 insertions(+), 179 deletions(-)
  create mode 100644 components/android_autofill/browser/java/src/org/chromium/components/autofill/BrowserSelectionActionMenuDelegate.java
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
@@ -426,7 +426,7 @@ diff --git a/chrome/browser/ui/autofill/autofill_client_provider.cc b/chrome/bro
  #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
  #include "components/android_autofill/browser/android_autofill_client.h"
  #endif  // BUILDFLAG(IS_ANDROID)
-@@ -24,67 +22,6 @@
+@@ -24,85 +22,13 @@
  namespace autofill {
  namespace {
  
@@ -491,11 +491,14 @@ diff --git a/chrome/browser/ui/autofill/autofill_client_provider.cc b/chrome/bro
 -#endif  // BUILDFLAG(IS_ANDROID)
 -}
 -
- #if BUILDFLAG(IS_ANDROID)
- std::string GetTrialGroupForPackage() {
-   JNIEnv* env = base::android::AttachCurrentThread();
-@@ -95,14 +32,11 @@ std::string GetTrialGroupForPackage() {
- 
+-#if BUILDFLAG(IS_ANDROID)
+-std::string GetTrialGroupForPackage() {
+-  JNIEnv* env = base::android::AttachCurrentThread();
+-  return base::android::ConvertJavaStringToUTF8(
+-      env, Java_AutofillClientProviderUtils_getTrialGroupForPackage(env));
+-}
+-#endif
+-
  }  // namespace
  
 -AutofillClientProvider::AutofillClientProvider(PrefService* prefs)
@@ -511,7 +514,7 @@ diff --git a/chrome/browser/ui/autofill/autofill_client_provider.cc b/chrome/bro
    if (base::FeatureList::IsEnabled(
            autofill::features::kAutofillVirtualViewStructureAndroid) &&
        base::FeatureList::IsEnabled(
-@@ -126,15 +60,7 @@ AutofillClientProvider::~AutofillClientProvider() = default;
+@@ -126,15 +52,7 @@ AutofillClientProvider::~AutofillClientProvider() = default;
  
  void AutofillClientProvider::CreateClientForWebContents(
      content::WebContents* web_contents) {
@@ -527,6 +530,19 @@ diff --git a/chrome/browser/ui/autofill/autofill_client_provider.cc b/chrome/bro
  }
  
  #if BUILDFLAG(IS_ANDROID)
+@@ -146,12 +64,6 @@ void AutofillClientProvider::RegisterSyntheticFieldTrialForPackage(
+ }
+ 
+ void AutofillClientProvider::DelayRegisteringFieldTrialForA11yDeprecation() {
+-  base::ThreadPool::PostTaskAndReplyWithResult(
+-      FROM_HERE, {base::TaskPriority::LOWEST},
+-      base::BindOnce(&GetTrialGroupForPackage),
+-      base::BindOnce(
+-          &AutofillClientProvider::RegisterSyntheticFieldTrialForPackage,
+-          weak_ptr_factory_.GetWeakPtr()));
+ }
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
 diff --git a/chrome/browser/ui/autofill/autofill_client_provider.h b/chrome/browser/ui/autofill/autofill_client_provider.h
 --- a/chrome/browser/ui/autofill/autofill_client_provider.h
 +++ b/chrome/browser/ui/autofill/autofill_client_provider.h

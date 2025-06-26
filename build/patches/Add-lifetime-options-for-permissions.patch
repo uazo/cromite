@@ -80,17 +80,17 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../permission_prompt_android.cc              |  8 +-
  .../permission_prompt_android.h               |  3 +-
  .../android/permissions_android_strings.grd   | 17 ++++
- .../geolocation_permission_context_android.cc | 34 ++++++--
- .../geolocation_permission_context_android.h  | 13 ++-
+ .../geolocation_permission_context_android.cc | 32 ++++++--
+ .../geolocation_permission_context_android.h  | 11 ++-
  .../embedded_permission_prompt_flow_model.cc  |  2 +-
- .../permissions/permission_context_base.cc    | 51 ++++++++++--
+ .../permissions/permission_context_base.cc    | 49 +++++++++--
  .../permissions/permission_context_base.h     | 20 ++++-
  components/permissions/permission_prompt.h    |  3 +-
- components/permissions/permission_request.cc  | 30 ++++++-
- components/permissions/permission_request.h   | 16 +++-
+ components/permissions/permission_request.cc  | 32 +++++++-
+ components/permissions/permission_request.h   | 18 +++-
  .../permissions/permission_request_manager.cc | 45 ++++++----
  .../permissions/permission_request_manager.h  | 11 ++-
- 38 files changed, 489 insertions(+), 71 deletions(-)
+ 38 files changed, 487 insertions(+), 71 deletions(-)
 
 diff --git a/chrome/browser/permissions/last_tab_standing_tracker.cc b/chrome/browser/permissions/last_tab_standing_tracker.cc
 --- a/chrome/browser/permissions/last_tab_standing_tracker.cc
@@ -842,19 +842,17 @@ diff --git a/components/permissions/android/permissions_android_strings.grd b/co
 diff --git a/components/permissions/contexts/geolocation_permission_context_android.cc b/components/permissions/contexts/geolocation_permission_context_android.cc
 --- a/components/permissions/contexts/geolocation_permission_context_android.cc
 +++ b/components/permissions/contexts/geolocation_permission_context_android.cc
-@@ -193,7 +193,20 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -193,7 +193,18 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
      bool is_one_time,
      bool is_final_decision) {
    DCHECK(is_final_decision);
-+  NotifyPermissionSetWithLifetime(id, requesting_origin, embedding_origin,
++  NotifyPermissionSetWithLifetime(request_data,
 +    std::move(callback), persist, content_setting, is_one_time, is_final_decision,
 +    content_settings::mojom::LifetimeMode::ALWAYS);
 +}
  
 +void GeolocationPermissionContextAndroid::NotifyPermissionSetWithLifetime(
-+    const PermissionRequestID& id,
-+    const GURL& requesting_origin,
-+    const GURL& embedding_origin,
++    const PermissionRequestData& request_data,
 +    BrowserPermissionCallback callback,
 +    bool persist,
 +    ContentSetting content_setting,
@@ -863,7 +861,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
    bool is_default_search =
        IsRequestingOriginDSE(request_data.requesting_origin);
    if (content_setting == CONTENT_SETTING_ALLOW &&
-@@ -208,7 +221,8 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -208,7 +219,8 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
        FinishNotifyPermissionSet(request_data.id, request_data.requesting_origin,
                                  request_data.embedding_origin,
                                  std::move(callback), false /* persist */,
@@ -873,7 +871,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
        return;
      }
  
-@@ -228,7 +242,8 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -228,7 +240,8 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
        FinishNotifyPermissionSet(request_data.id, request_data.requesting_origin,
                                  request_data.embedding_origin,
                                  std::move(callback), false /* persist */,
@@ -883,7 +881,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
        return;
      }
  
-@@ -241,13 +256,13 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -241,13 +254,13 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
              &GeolocationPermissionContextAndroid::OnLocationSettingsDialogShown,
              weak_factory_.GetWeakPtr(), request_data.requesting_origin,
              request_data.embedding_origin, persist, content_setting,
@@ -899,7 +897,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
  }
  
  content::PermissionResult
-@@ -425,7 +440,7 @@ void GeolocationPermissionContextAndroid::OnLocationSettingsDialogShown(
+@@ -425,7 +438,7 @@ void GeolocationPermissionContextAndroid::OnLocationSettingsDialogShown(
      const GURL& embedding_origin,
      bool persist,
      ContentSetting content_setting,
@@ -908,7 +906,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
      LocationSettingsDialogOutcome prompt_outcome) {
    bool is_default_search = IsRequestingOriginDSE(requesting_origin);
    if (prompt_outcome == GRANTED) {
-@@ -444,7 +459,8 @@ void GeolocationPermissionContextAndroid::OnLocationSettingsDialogShown(
+@@ -444,7 +457,8 @@ void GeolocationPermissionContextAndroid::OnLocationSettingsDialogShown(
    FinishNotifyPermissionSet(location_settings_dialog_request_id_,
                              requesting_origin, embedding_origin,
                              std::move(location_settings_dialog_callback_),
@@ -918,7 +916,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
  
    location_settings_dialog_request_id_ =
        PermissionRequestID(content::GlobalRenderFrameHostId(0, 0),
-@@ -458,8 +474,8 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
+@@ -458,8 +472,8 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
      BrowserPermissionCallback callback,
      bool persist,
      ContentSetting content_setting,
@@ -929,7 +927,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
        PermissionRequestData(this, id,
                              content::PermissionRequestDescription(
                                  content::PermissionDescriptorUtil::
-@@ -467,7 +483,7 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
+@@ -467,7 +481,7 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
                                          blink::PermissionType::GEOLOCATION)),
                              requesting_origin),
        std::move(callback), persist, content_setting, is_one_time,
@@ -941,13 +939,11 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
 diff --git a/components/permissions/contexts/geolocation_permission_context_android.h b/components/permissions/contexts/geolocation_permission_context_android.h
 --- a/components/permissions/contexts/geolocation_permission_context_android.h
 +++ b/components/permissions/contexts/geolocation_permission_context_android.h
-@@ -93,6 +93,15 @@ class GeolocationPermissionContextAndroid
+@@ -93,6 +93,13 @@ class GeolocationPermissionContextAndroid
                             ContentSetting content_setting,
                             bool is_one_time,
                             bool is_final_decision) override;
-+  void NotifyPermissionSetWithLifetime(const PermissionRequestID& id,
-+                           const GURL& requesting_origin,
-+                           const GURL& embedding_origin,
++  void NotifyPermissionSetWithLifetime(const PermissionRequestData& request_data,
 +                           BrowserPermissionCallback callback,
 +                           bool persist,
 +                           ContentSetting content_setting,
@@ -957,7 +953,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
    content::PermissionResult UpdatePermissionStatusWithDeviceStatus(
        content::WebContents* web_contents,
        content::PermissionResult result,
-@@ -138,6 +147,7 @@ class GeolocationPermissionContextAndroid
+@@ -138,6 +145,7 @@ class GeolocationPermissionContextAndroid
        bool persist,
        ContentSetting content_setting,
        bool is_one_time,
@@ -965,7 +961,7 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
        LocationSettingsDialogOutcome prompt_outcome);
  
    void FinishNotifyPermissionSet(const PermissionRequestID& id,
-@@ -146,7 +156,8 @@ class GeolocationPermissionContextAndroid
+@@ -146,7 +154,8 @@ class GeolocationPermissionContextAndroid
                                   BrowserPermissionCallback callback,
                                   bool persist,
                                   ContentSetting content_setting,
@@ -990,24 +986,24 @@ diff --git a/components/permissions/embedded_permission_prompt_flow_model.cc b/c
 diff --git a/components/permissions/permission_context_base.cc b/components/permissions/permission_context_base.cc
 --- a/components/permissions/permission_context_base.cc
 +++ b/components/permissions/permission_context_base.cc
-@@ -273,6 +273,17 @@ GURL PermissionContextBase::GetEffectiveEmbedderOrigin(
-   return PermissionUtil::GetLastCommittedOriginAsURL(rfh->GetMainFrame());
+@@ -253,6 +253,17 @@ PermissionContextBase::CreatePermissionRequest(
+       std::move(request_finished_callback), UsesAutomaticEmbargo());
  }
  
 +std::unique_ptr<PermissionRequest>
 +PermissionContextBase::CreatePermissionRequest(
 +    content::WebContents* web_contents,
-+    PermissionRequestData request_data,
++    std::unique_ptr<PermissionRequestData> request_data,
 +    PermissionRequest::PermissionDecidedCallbackWithLifetime permission_decided_callback,
-+    base::OnceClosure delete_callback) const {
++    base::OnceClosure request_finished_callback) const {
 +  return std::make_unique<PermissionRequest>(
 +      std::move(request_data), std::move(permission_decided_callback),
-+      std::move(delete_callback));
++      std::move(request_finished_callback), UsesAutomaticEmbargo());
 +}
 +
- content::PermissionResult PermissionContextBase::GetPermissionStatus(
-     const PermissionResolver& resolver,
-     content::RenderFrameHost* render_frame_host,
+ bool PermissionContextBase::UsesAutomaticEmbargo() const {
+   return true;
+ }
 @@ -540,7 +551,8 @@ void PermissionContextBase::PermissionDecided(
      ContentSetting content_setting,
      bool is_one_time,
@@ -1036,20 +1032,18 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    }
  }
  
-@@ -652,10 +665,26 @@ void PermissionContextBase::NotifyPermissionSet(
+@@ -652,10 +665,24 @@ void PermissionContextBase::NotifyPermissionSet(
      ContentSetting content_setting,
      bool is_one_time,
      bool is_final_decision) {
 +  DCHECK(is_one_time == false);
-+  NotifyPermissionSetWithLifetime(request_data, requesting_origin, embedding_origin, std::move(callback),
++  NotifyPermissionSetWithLifetime(request_data, std::move(callback),
 +     persist, content_setting, is_one_time, is_final_decision,
 +     content_settings::mojom::LifetimeMode::ALWAYS);
 +}
 +
 +void PermissionContextBase::NotifyPermissionSetWithLifetime(
 +    const PermissionRequestData& request_data,
-+    const GURL& requesting_origin,
-+    const GURL& embedding_origin,
 +    BrowserPermissionCallback callback,
 +    bool persist,
 +    ContentSetting content_setting,
@@ -1064,7 +1058,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    }
  
    if (is_final_decision) {
-@@ -696,6 +725,14 @@ void PermissionContextBase::UpdateContentSetting(
+@@ -696,6 +723,14 @@ void PermissionContextBase::UpdateContentSetting(
      const PermissionRequestData& request_data,
      ContentSetting content_setting,
      bool is_one_time) {
@@ -1079,7 +1073,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
    DCHECK_EQ(request_data.requesting_origin,
              request_data.requesting_origin.DeprecatedGetOriginAsURL());
    DCHECK_EQ(request_data.embedding_origin,
-@@ -707,6 +744,8 @@ void PermissionContextBase::UpdateContentSetting(
+@@ -707,6 +742,8 @@ void PermissionContextBase::UpdateContentSetting(
    constraints.set_session_model(
        is_one_time ? content_settings::mojom::SessionModel::ONE_TIME
                    : content_settings::mojom::SessionModel::DURABLE);
@@ -1122,9 +1116,9 @@ diff --git a/components/permissions/permission_context_base.h b/components/permi
  
 +  virtual std::unique_ptr<PermissionRequest> CreatePermissionRequest(
 +      content::WebContents* web_contents,
-+      PermissionRequestData request_data,
++      std::unique_ptr<PermissionRequestData> request_data,
 +      PermissionRequest::PermissionDecidedCallbackWithLifetime permission_decided_callback,
-+      base::OnceClosure delete_callback) const;
++      base::OnceClosure request_finished_callback) const;
 +
    // Implementors can override this method to avoid using automatic embargo.
    virtual bool UsesAutomaticEmbargo() const;
@@ -1156,22 +1150,24 @@ diff --git a/components/permissions/permission_prompt.h b/components/permissions
 diff --git a/components/permissions/permission_request.cc b/components/permissions/permission_request.cc
 --- a/components/permissions/permission_request.cc
 +++ b/components/permissions/permission_request.cc
-@@ -32,6 +32,14 @@ PermissionRequest::PermissionRequest(
+@@ -32,6 +32,16 @@ PermissionRequest::PermissionRequest(
        request_finished_callback_(std::move(request_finished_callback)),
        uses_automatic_embargo_(uses_automatic_embargo) {}
  
 +PermissionRequest::PermissionRequest(
-+    PermissionRequestData request_data,
++    std::unique_ptr<PermissionRequestData> request_data,
 +    PermissionDecidedCallbackWithLifetime permission_decided_callback,
-+    base::OnceClosure delete_callback)
++    base::OnceClosure request_finished_callback,
++    bool uses_automatic_embargo)
 +    : data_(std::move(request_data)),
 +      permission_decided_callback_withlifetime_(std::move(permission_decided_callback)),
-+      delete_callback_(std::move(delete_callback)) {}
++      request_finished_callback_(std::move(request_finished_callback)),
++      uses_automatic_embargo_(uses_automatic_embargo) {}
 +
  PermissionRequest::~PermissionRequest() {
    std::move(request_finished_callback_).Run();
  }
-@@ -412,19 +420,37 @@ bool PermissionRequest::ShouldUseTwoOriginPrompt() const {
+@@ -412,19 +422,37 @@ bool PermissionRequest::ShouldUseTwoOriginPrompt() const {
    return request_type() == RequestType::kStorageAccess;
  }
  
@@ -1180,7 +1176,7 @@ diff --git a/components/permissions/permission_request.cc b/components/permissio
 +                            content_settings::mojom::LifetimeMode lifetime_option) {
 +  if (permission_decided_callback_withlifetime_) {
 +    std::move(permission_decided_callback_withlifetime_)
-+        .Run(CONTENT_SETTING_ALLOW, is_one_time, /*is_final_decision=*/true, lifetime_option);
++        .Run(CONTENT_SETTING_ALLOW, is_one_time, /*is_final_decision=*/true, *data_, lifetime_option);
 +    return;
 +  }
    std::move(permission_decided_callback_)
@@ -1193,7 +1189,7 @@ diff --git a/components/permissions/permission_request.cc b/components/permissio
 +                            content_settings::mojom::LifetimeMode lifetime_option) {
 +  if (permission_decided_callback_withlifetime_) {
 +    std::move(permission_decided_callback_withlifetime_)
-+        .Run(CONTENT_SETTING_BLOCK, is_one_time, /*is_final_decision=*/true, lifetime_option);
++        .Run(CONTENT_SETTING_BLOCK, is_one_time, /*is_final_decision=*/true, *data_, lifetime_option);
 +    return;
 +  }
    std::move(permission_decided_callback_)
@@ -1204,7 +1200,7 @@ diff --git a/components/permissions/permission_request.cc b/components/permissio
  void PermissionRequest::Cancelled(bool is_final_decision) {
 +  if (permission_decided_callback_withlifetime_) {
 +    std::move(permission_decided_callback_withlifetime_)
-+        .Run(CONTENT_SETTING_DEFAULT, false, is_final_decision,
++        .Run(CONTENT_SETTING_DEFAULT, false, is_final_decision, *data_,
 +             content_settings::mojom::LifetimeMode::ALWAYS);
 +    return;
 +  }
@@ -1214,30 +1210,32 @@ diff --git a/components/permissions/permission_request.cc b/components/permissio
 diff --git a/components/permissions/permission_request.h b/components/permissions/permission_request.h
 --- a/components/permissions/permission_request.h
 +++ b/components/permissions/permission_request.h
-@@ -47,6 +47,11 @@ class PermissionRequest {
+@@ -47,6 +47,12 @@ class PermissionRequest {
        bool /*is_final_decision*/,
        const PermissionRequestData& /*request_data*/)>;
  
-+  using PermissionDecidedCallbackWithLifetime =
-+      base::OnceCallback<void(ContentSetting /*result*/, bool /*is_one_time*/,
-+        bool /*is_final_decision*/,
-+        content_settings::mojom::LifetimeMode /*lifetime_option*/)>;
++  using PermissionDecidedCallbackWithLifetime = base::RepeatingCallback<void(
++      ContentSetting /*result*/, bool /*is_one_time*/,
++      bool /*is_final_decision*/,
++      const PermissionRequestData& /*request_data*/,
++      content_settings::mojom::LifetimeMode /*lifetime_option*/)>;
 +
    // `permission_decided_callback` is called when the permission request is
    // resolved by the user (see comment on PermissionDecidedCallback above).
    // `request_finished_callback` is called when the permission request is being
-@@ -61,6 +66,10 @@ class PermissionRequest {
+@@ -61,6 +67,11 @@ class PermissionRequest {
        base::OnceClosure request_finished_callback = base::DoNothing(),
        bool uses_automatic_embargo = true);
  
-+  PermissionRequest(PermissionRequestData request_data,
++  PermissionRequest(std::unique_ptr<PermissionRequestData> request_data,
 +                    PermissionDecidedCallbackWithLifetime permission_decided_callback,
-+                    base::OnceClosure delete_callback);
++                    base::OnceClosure request_finished_callback = base::DoNothing(),
++                    bool uses_automatic_embargo = true);
 +
    PermissionRequest(const PermissionRequest&) = delete;
    PermissionRequest& operator=(const PermissionRequest&) = delete;
  
-@@ -167,10 +176,10 @@ class PermissionRequest {
+@@ -167,10 +178,10 @@ class PermissionRequest {
    // If |is_one_time| is true the permission will last until all tabs of
    // |origin| are closed or navigated away from, and then the permission will
    // automatically expire after 1 day.
@@ -1250,7 +1248,7 @@ diff --git a/components/permissions/permission_request.h b/components/permission
  
    // Called when the user has cancelled the permission request. This
    // corresponds to a denial, but is segregated in case the context needs to
-@@ -224,6 +233,9 @@ class PermissionRequest {
+@@ -224,6 +235,9 @@ class PermissionRequest {
    // Called once a decision is made about the permission.
    PermissionDecidedCallback permission_decided_callback_;
  

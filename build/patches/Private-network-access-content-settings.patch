@@ -7,29 +7,75 @@ user choice in desktop platforms.
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- .../browser/chrome_content_browser_client.cc  |  2 +-
+ .../browser/chrome_content_browser_client.cc  | 36 ++++++-
  ...eInsecurePrivateNetworkContentSetting.java | 93 +++++++++++++++++++
  .../insecure_private_network.grdp             | 18 ++++
- .../insecure_private_network.inc              | 16 ++++
+ .../insecure_private_network.inc              | 25 +++++
+ .../INSECURE_PRIVATE_NETWORK.inc              |  3 +
  services/network/cors/cors_url_loader.cc      |  8 +-
  .../network/private_network_access_checker.cc | 16 +++-
- 6 files changed, 144 insertions(+), 9 deletions(-)
+ 7 files changed, 188 insertions(+), 11 deletions(-)
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/BromiteInsecurePrivateNetworkContentSetting.java
  create mode 100644 components/browser_ui/strings/bromite_content_settings/insecure_private_network.grdp
  create mode 100644 components/content_settings/core/browser/bromite_content_settings/insecure_private_network.inc
+ create mode 100644 components/content_settings/core/common/bromite_content_settings/INSECURE_PRIVATE_NETWORK.inc
 
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -7529,7 +7529,7 @@ ChromeContentBrowserClient::ShouldOverridePrivateNetworkRequestPolicy(
+@@ -1335,6 +1335,31 @@ bool IsDefaultSearchEngine(Profile* profile, const GURL& url) {
+              url);
+ }
+ 
++bool ShouldAllowInsecurePrivateNetworkRequests(
++    const HostContentSettingsMap* map,
++    const url::Origin& origin) {
++  // Derive the base URL from the origin, since HostContentSettingsMap is keyed
++  // by URL and not by origin. However, this setting is conceptually keyed by
++  // origin, hence its public API uses url::Origin.
++  //
++  // This returns the default-constructed GURL for opaque origins, which should
++  // not match any content settings.
++  const GURL url = origin.GetURL();
++
++  const ContentSetting setting = map->GetContentSetting(
++      url, url, ContentSettingsType::INSECURE_PRIVATE_NETWORK);
++
++  switch (setting) {
++    case CONTENT_SETTING_ALLOW:
++      return true;
++    case CONTENT_SETTING_BLOCK:
++      return false;
++    default:
++      NOTREACHED()
++          << "Invalid content setting for insecure private network requests: "
++          << setting;
++  }
++}
+ }  // namespace
+ 
+ // static
+@@ -7528,12 +7553,17 @@ content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride
+ ChromeContentBrowserClient::ShouldOverridePrivateNetworkRequestPolicy(
      content::BrowserContext* browser_context,
      const url::Origin& origin) {
- #if BUILDFLAG(IS_ANDROID)
+-#if BUILDFLAG(IS_ANDROID)
 -  if (base::android::BuildInfo::GetInstance()->is_automotive()) {
++  if (HostContentSettingsMap* service =
++          HostContentSettingsMapFactory::GetForProfile(browser_context)) {
++    if (ShouldAllowInsecurePrivateNetworkRequests(service, origin)) {
++      return content::ContentBrowserClient::
++          PrivateNetworkRequestPolicyOverride::kForceAllow;
++    }
++  }
 +  if ((true)) {
      return content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride::
          kBlockInsteadOfWarn;
    }
+-#endif
+ 
+ // TODO(crbug.com/400455013): Add LNA support on Android
+ #if !BUILDFLAG(IS_ANDROID)
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/BromiteInsecurePrivateNetworkContentSetting.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/BromiteInsecurePrivateNetworkContentSetting.java
 new file mode 100644
 --- /dev/null
@@ -155,7 +201,16 @@ diff --git a/components/content_settings/core/browser/bromite_content_settings/i
 new file mode 100644
 --- /dev/null
 +++ b/components/content_settings/core/browser/bromite_content_settings/insecure_private_network.inc
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,25 @@
++  Register(ContentSettingsType::INSECURE_PRIVATE_NETWORK,
++           "insecure-private-network", CONTENT_SETTING_BLOCK,
++           WebsiteSettingsInfo::UNSYNCABLE, /*allowlisted_primary_schemes=*/{},
++           /*valid_settings=*/{CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
++           WebsiteSettingsInfo::REQUESTING_ORIGIN_ONLY_SCOPE,
++           WebsiteSettingsRegistry::ALL_PLATFORMS,
++           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
++           ContentSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
++
 +  content_settings::WebsiteSettingsRegistry::GetInstance()
 +    ->GetMutable(ContentSettingsType::INSECURE_PRIVATE_NETWORK)
 +    ->set_show_into_info_page()
@@ -172,6 +227,14 @@ new file mode 100644
 +    .set_blocked_exceptions_ui(IDS_WEBSITE_SETTINGS_CATEGORY_INSECURE_PRIVATE_NETWORK_ASK)
 +#endif
 +    .set_mid_sentence_ui(IDS_INSECURE_PRIVATE_NETWORK_PERMISSION_TITLE);
+diff --git a/components/content_settings/core/common/bromite_content_settings/INSECURE_PRIVATE_NETWORK.inc b/components/content_settings/core/common/bromite_content_settings/INSECURE_PRIVATE_NETWORK.inc
+new file mode 100644
+--- /dev/null
++++ b/components/content_settings/core/common/bromite_content_settings/INSECURE_PRIVATE_NETWORK.inc
+@@ -0,0 +1,3 @@
++  // Stores whether to allow insecure websites to make private network requests.
++  // See also: https://wicg.github.io/cors-rfc1918
++  INSECURE_PRIVATE_NETWORK,
 diff --git a/services/network/cors/cors_url_loader.cc b/services/network/cors/cors_url_loader.cc
 --- a/services/network/cors/cors_url_loader.cc
 +++ b/services/network/cors/cors_url_loader.cc
