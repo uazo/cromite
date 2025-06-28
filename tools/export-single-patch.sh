@@ -56,5 +56,7 @@ echo "--" >> ~/cromite/build/patches-new/$PATCH_FILE
 #echo "2.25.1" >> ~/cromite/build/patches-new/$PATCH_FILE
 #echo "" >> ~/cromite/build/patches-new/$PATCH_FILE
 
+#unix2dos ~/cromite/build/patches-new/$PATCH_FILE
+
 echo "   done."
 echo ""
