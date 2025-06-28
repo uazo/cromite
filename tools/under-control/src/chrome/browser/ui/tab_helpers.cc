@@ -86,8 +86,6 @@
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/focus_tab_after_navigation_helper.h"
 #include "chrome/browser/ui/passwords/manage_passwords_ui_controller.h"
-#include "chrome/browser/ui/performance_controls/memory_saver_chip_tab_helper.h"
-#include "chrome/browser/ui/performance_controls/tab_resource_usage_tab_helper.h"
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 #include "chrome/browser/ui/privacy_sandbox/privacy_sandbox_prompt_helper.h"
 #include "chrome/browser/ui/recently_audible_helper.h"
@@ -96,7 +94,6 @@
 #include "chrome/browser/ui/search_engines/search_engine_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tab_dialogs.h"
-#include "chrome/browser/ui/tab_ui_helper.h"
 #include "chrome/browser/ui/thumbnails/thumbnail_tab_helper.h"
 #include "chrome/browser/v8_compile_hints/v8_compile_hints_tab_helper.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
@@ -131,6 +128,7 @@
 #include "components/metrics_services_manager/metrics_services_manager.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/offline_pages/buildflags/buildflags.h"
+#include "components/omnibox/common/omnibox_feature_configs.h"
 #include "components/optimization_guide/core/optimization_guide_features.h"
 #include "components/page_info/core/features.h"
 #include "components/password_manager/core/browser/password_manager.h"
@@ -238,14 +236,18 @@
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api.h"
+#include "chrome/browser/extensions/app_tab_helper.h"
 #include "chrome/browser/extensions/navigation_extension_enabler.h"
-#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
 #include "chrome/browser/web_applications/policy/pre_redirection_url_observer.h"
 #include "chrome/browser/web_applications/web_app_utils.h"
 #include "extensions/browser/view_type_utils.h"  // nogncheck
 #include "extensions/common/extension_features.h"
 #include "extensions/common/mojom/view_type.mojom.h"
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/tab_helper.h"
 #endif
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
@@ -333,7 +335,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
 
   // --- Section 1: Common tab helpers ---
-  if (page_info::IsAboutThisSiteAsyncFetchingEnabled()) {
+  if (page_info::IsAboutThisSiteFeatureEnabled()) {
     if (auto* optimization_guide_decider =
             OptimizationGuideKeyedServiceFactory::GetForProfile(profile)) {
       AboutThisSiteTabHelper::CreateForWebContents(web_contents,
@@ -566,7 +568,6 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   }
 #endif
   HttpErrorTabHelper::CreateForWebContents(web_contents);
-  TabUIHelper::CreateForWebContents(web_contents);
   tasks::TaskTabHelper::CreateForWebContents(web_contents);
   tpcd::metadata::TpcdMetadataDevtoolsObserver::CreateForWebContents(
       web_contents);
@@ -666,15 +667,15 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   SadTabHelper::CreateForWebContents(web_contents);
   SearchTabHelper::CreateForWebContents(web_contents);
   TabDialogs::CreateForWebContents(web_contents);
-  MemorySaverChipTabHelper::CreateForWebContents(web_contents);
-  TabResourceUsageTabHelper::CreateForWebContents(web_contents);
   if (base::FeatureList::IsEnabled(features::kTabHoverCardImages) ||
       base::FeatureList::IsEnabled(features::kWebUITabStrip)) {
     ThumbnailTabHelper::CreateForWebContents(web_contents);
   }
   UMABrowsingActivityObserver::TabHelper::CreateForWebContents(web_contents);
   web_modal::WebContentsModalDialogManager::CreateForWebContents(web_contents);
-  if (OmniboxFieldTrial::IsZeroSuggestPrefetchingEnabled()) {
+  if (OmniboxFieldTrial::IsZeroSuggestPrefetchingEnabled() ||
+      omnibox_feature_configs::ContextualSearch::Get()
+          .IsEnabledWithPrefetch()) {
     ZeroSuggestPrefetchTabHelper::CreateForWebContents(web_contents);
   }
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -750,11 +751,14 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
     extensions::SetViewType(web_contents,
                             extensions::mojom::ViewType::kTabContents);
   }
-
-  extensions::TabHelper::CreateForWebContents(web_contents);
+  extensions::AppTabHelper::CreateForWebContents(web_contents);
   extensions::NavigationExtensionEnabler::CreateForWebContents(web_contents);
-
   extensions::WebNavigationTabObserver::CreateForWebContents(web_contents);
+#endif
+
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  // extensions::TabHelper is used on Win/Mac/Linux and desktop Android.
+  extensions::TabHelper::CreateForWebContents(web_contents);
 #endif
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
