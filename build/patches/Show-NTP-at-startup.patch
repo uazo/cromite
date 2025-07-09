@@ -16,20 +16,25 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  chrome/app/settings_strings.grdp              |  2 +-
  .../flags/android/chrome_feature_list.cc      |  1 +
  .../cromite/sShowNtpAtStartupAndroid.java     | 33 +++++++++++++++++++
+ .../policies/background_tab_loading_policy.cc |  2 ++
  .../preferences/ChromePreferenceKeys.java     |  2 ++
  .../LegacyChromePreferenceKeys.java           |  1 +
- .../on_startup_page/on_startup_page.ts        |  4 +--
- chrome/browser/sessions/tab_loader.cc         |  6 ++--
+ .../session_restore_policy.h                  |  2 +-
+ .../on_startup_page/on_startup_page.ts        |  1 +
+ chrome/browser/sessions/session_restore.cc    |  9 ++++-
+ chrome/browser/sessions/tab_loader.cc         |  7 ++--
  chrome/browser/sessions/tab_loader.h          |  2 +-
- .../res/layout/single_tab_module_layout.xml   | 12 +++----
+ .../res/layout/single_tab_module_layout.xml   | 17 +++++-----
  .../SingleTabSwitcherCoordinator.java         |  2 +-
  .../SingleTabSwitcherOnNtpMediator.java       |  5 +--
  .../show-ntp-at-startup.grdp                  |  9 +++++
+ chrome/browser/ui/browser_tabrestore.cc       |  2 +-
  .../startup/startup_browser_creator_impl.cc   |  8 +++++
+ components/performance_manager/features.cc    |  2 +-
  .../about_flags_cc/show-ntp-at-startup.inc    | 12 +++++++
  .../show-ntp-at-startup.inc                   |  5 +++
  .../show-ntp-at-startup.inc                   |  1 +
- 21 files changed, 127 insertions(+), 17 deletions(-)
+ 26 files changed, 142 insertions(+), 22 deletions(-)
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sShowNtpAtStartupAndroid.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/show-ntp-at-startup.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc
@@ -55,7 +60,7 @@ diff --git a/chrome/android/java/res/xml/homepage_preferences.xml b/chrome/andro
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/BrowserRestartActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/BrowserRestartActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/BrowserRestartActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/BrowserRestartActivity.java
-@@ -67,6 +67,7 @@ public class BrowserRestartActivity extends Activity {
+@@ -71,6 +71,7 @@ public class BrowserRestartActivity extends Activity {
              Intent restartIntent = new Intent(Intent.ACTION_MAIN);
              restartIntent.setPackage(context.getPackageName());
              restartIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -66,7 +71,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/BrowserRestartA
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivityTracker.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivityTracker.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivityTracker.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivityTracker.java
-@@ -12,8 +12,10 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
+@@ -15,8 +15,10 @@ import org.chromium.chrome.browser.lifecycle.ActivityLifecycleDispatcher;
  import org.chromium.chrome.browser.lifecycle.DestroyObserver;
  import org.chromium.chrome.browser.lifecycle.PauseResumeWithNativeObserver;
  import org.chromium.chrome.browser.lifecycle.StartStopWithNativeObserver;
@@ -77,7 +82,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivit
  
  /**
   * Manages pref that can track the delay since the last stop of the tracked activity.
-@@ -55,6 +57,18 @@ public class ChromeInactivityTracker
+@@ -59,6 +61,18 @@ public class ChromeInactivityTracker
          mLifecycleDispatcher.register(this);
      }
  
@@ -99,7 +104,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivit
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -2611,6 +2611,8 @@ public class ChromeTabbedActivity extends ChromeActivity {
+@@ -2689,6 +2689,8 @@ public class ChromeTabbedActivity extends ChromeActivity {
          mInactivityTracker =
                  new ChromeInactivityTracker(
                          ChromePreferenceKeys.TABBED_ACTIVITY_LAST_BACKGROUNDED_TIME_MS_PREF);
@@ -154,7 +159,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToC
 diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
 --- a/chrome/app/settings_strings.grdp
 +++ b/chrome/app/settings_strings.grdp
-@@ -1112,7 +1112,7 @@
+@@ -861,7 +861,7 @@
      Open a specific page or set of pages
    </message>
    <message name="IDS_SETTINGS_ON_STARTUP_CONTINUE_AND_OPEN_SPECIFIC" desc="Radio button option to continue where you left off and open a specific set of pages.">
@@ -166,7 +171,7 @@ diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
 diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browser/flags/android/chrome_feature_list.cc
 --- a/chrome/browser/flags/android/chrome_feature_list.cc
 +++ b/chrome/browser/flags/android/chrome_feature_list.cc
-@@ -358,6 +358,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
+@@ -371,6 +371,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
      &kSearchInCCT,
      &kSearchInCCTAlternateTapHandling,
      &kSearchResumptionModuleAndroid,
@@ -212,10 +217,29 @@ new file mode 100644
 +        return sInstance;
 +    }
 +}
+diff --git a/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc b/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc
+--- a/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc
++++ b/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc
+@@ -375,6 +375,7 @@ base::Value::Dict BackgroundTabLoadingPolicy::DescribeSystemNodeData(
+ 
+ bool BackgroundTabLoadingPolicy::ShouldLoad(
+     const PageNodeToLoadData& page_node_data) {
++  if ((true)) return false;
+   if (tab_loads_started_ < kMinTabsToLoad)
+     return true;
+ 
+@@ -565,6 +566,7 @@ void BackgroundTabLoadingPolicy::MaybeLoadSomeTabs() {
+   // Continue to load tabs while possible. This is in a loop with a
+   // recalculation of GetMaxNewTabLoads() as reentrancy can cause conditions
+   // to change as each tab load is initiated.
++  if ((false))
+   while (GetMaxNewTabLoads() > 0)
+     LoadNextTab();
+ 
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/ChromePreferenceKeys.java
-@@ -844,6 +844,8 @@ public final class ChromePreferenceKeys {
+@@ -847,6 +847,8 @@ public final class ChromePreferenceKeys {
  
      public static final String TABBED_ACTIVITY_LAST_BACKGROUNDED_TIME_MS_PREF =
              "ChromeTabbedActivity.BackgroundTimeMs";
@@ -227,7 +251,7 @@ diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/bro
 diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/LegacyChromePreferenceKeys.java b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/LegacyChromePreferenceKeys.java
 --- a/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/LegacyChromePreferenceKeys.java
 +++ b/chrome/browser/preferences/android/java/src/org/chromium/chrome/browser/preferences/LegacyChromePreferenceKeys.java
-@@ -116,6 +116,7 @@ public class LegacyChromePreferenceKeys {
+@@ -115,6 +115,7 @@ public class LegacyChromePreferenceKeys {
                  ChromePreferenceKeys.SNAPSHOT_DATABASE_REMOVED,
                  ChromePreferenceKeys.SYNC_ERROR_MESSAGE_SHOWN_AT_TIME,
                  ChromePreferenceKeys.TABBED_ACTIVITY_LAST_BACKGROUNDED_TIME_MS_PREF,
@@ -235,20 +259,22 @@ diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/bro
                  ChromePreferenceKeys.TABMODEL_ACTIVE_TAB_ID,
                  ChromePreferenceKeys.TABMODEL_HAS_COMPUTED_MAX_ID,
                  ChromePreferenceKeys.TABMODEL_HAS_RUN_FILE_MIGRATION,
+diff --git a/chrome/browser/resource_coordinator/session_restore_policy.h b/chrome/browser/resource_coordinator/session_restore_policy.h
+--- a/chrome/browser/resource_coordinator/session_restore_policy.h
++++ b/chrome/browser/resource_coordinator/session_restore_policy.h
+@@ -31,7 +31,7 @@ class SessionRestorePolicy {
+  public:
+   // Minimum site engagement score for a tab to be restored, if it doesn't
+   // communicate in the background.
+-  static constexpr uint32_t kMinSiteEngagementToRestore = 15;
++  static constexpr uint32_t kMinSiteEngagementToRestore = 999999;
+ 
+   // Callback that is used by the policy engine to notify its embedder (the
+   // TabLoaderDelegate) of changes to tab priorities as they occur. Zero or one
 diff --git a/chrome/browser/resources/settings/on_startup_page/on_startup_page.ts b/chrome/browser/resources/settings/on_startup_page/on_startup_page.ts
 --- a/chrome/browser/resources/settings/on_startup_page/on_startup_page.ts
 +++ b/chrome/browser/resources/settings/on_startup_page/on_startup_page.ts
-@@ -81,8 +81,7 @@ export class SettingsOnStartupPageElement extends
-    *     pages" is selected.
-    */
-   private showStartupUrls_(restoreOnStartup: PrefValues): boolean {
--    return restoreOnStartup === PrefValues.OPEN_SPECIFIC ||
--        restoreOnStartup === PrefValues.CONTINUE_AND_OPEN_SPECIFIC;
-+    return restoreOnStartup === PrefValues.OPEN_SPECIFIC;
-   }
- 
-   /**
-@@ -93,6 +92,7 @@ export class SettingsOnStartupPageElement extends
+@@ -93,6 +93,7 @@ export class SettingsOnStartupPageElement extends
     */
    private showContinueAndOpenSpecific_(pref: chrome.settingsPrivate.PrefObject):
        boolean {
@@ -256,10 +282,36 @@ diff --git a/chrome/browser/resources/settings/on_startup_page/on_startup_page.t
      return pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED ||
          pref.enforcement === chrome.settingsPrivate.Enforcement.RECOMMENDED;
    }
+diff --git a/chrome/browser/sessions/session_restore.cc b/chrome/browser/sessions/session_restore.cc
+--- a/chrome/browser/sessions/session_restore.cc
++++ b/chrome/browser/sessions/session_restore.cc
+@@ -908,7 +908,13 @@ class SessionRestoreImpl : public BrowserListObserver {
+       // be selected as ShowBrowser() will load the selected tab.
+       bool is_selected_tab =
+           (initial_tab_count == 0) && (i == selected_tab_index);
+-
++      if (is_selected_tab && !startup_tabs_.empty()) {
++        is_selected_tab = false;
++        if (browser != browser_) {
++          browser->set_is_session_restore(false);
++          did_show_browser = true;
++        }
++      }
+       // Convert the last active time because WebContents needs a TimeTicks.
+       const base::TimeDelta delta = tab.last_active_time - epoch_time;
+       const base::TimeTicks last_active_time_ticks = epoch_time_ticks + delta;
+@@ -1155,6 +1161,7 @@ class SessionRestoreImpl : public BrowserListObserver {
+     }
+     if (last_normal_browser && !normal_startup_tabs.empty()) {
+       AppendURLsToBrowser(last_normal_browser, normal_startup_tabs);
++      last_normal_browser->window()->Show();
+     }
+     if (!startup_tabs_from_last_and_urls_pref.empty()) {
+       Browser::CreateParams params =
 diff --git a/chrome/browser/sessions/tab_loader.cc b/chrome/browser/sessions/tab_loader.cc
 --- a/chrome/browser/sessions/tab_loader.cc
 +++ b/chrome/browser/sessions/tab_loader.cc
-@@ -52,7 +52,7 @@ struct ScoredTabComparator {
+@@ -51,7 +51,7 @@ struct ScoredTabComparator {
  };
  
  // Testing seams.
@@ -268,7 +320,7 @@ diff --git a/chrome/browser/sessions/tab_loader.cc b/chrome/browser/sessions/tab
  base::RepeatingCallback<void(TabLoader*)>* g_construction_callback = nullptr;
  
  // Determines if the given browser (can be null) is closing.
-@@ -384,7 +384,7 @@ void TabLoader::OnMemoryPressure(
+@@ -383,7 +383,7 @@ void TabLoader::OnMemoryPressure(
  
  bool TabLoader::ShouldStopLoadingTabs() const {
    DCHECK(reentry_depth_ > 0);  // This can only be called internally.
@@ -277,7 +329,7 @@ diff --git a/chrome/browser/sessions/tab_loader.cc b/chrome/browser/sessions/tab
        scheduled_to_load_count_ >= g_max_loaded_tab_count_for_testing) {
      return true;
    }
-@@ -425,7 +425,7 @@ size_t TabLoader::GetMaxNewTabLoads() const {
+@@ -424,7 +424,7 @@ size_t TabLoader::GetMaxNewTabLoads() const {
    tabs_to_load = std::min(tabs_to_load, tabs_to_load_.size());
  
    // Finally, enforce testing tab load limits.
@@ -286,6 +338,14 @@ diff --git a/chrome/browser/sessions/tab_loader.cc b/chrome/browser/sessions/tab
      size_t tabs_remaining_for_testing =
          g_max_loaded_tab_count_for_testing - scheduled_to_load_count_;
      tabs_to_load = std::min(tabs_to_load, tabs_remaining_for_testing);
+@@ -782,6 +782,7 @@ void TabLoader::MoveToSortedPosition(TabVector::iterator it) {
+ }
+ 
+ size_t TabLoader::MaxSimultaneousLoads() const {
++  if ((true)) return 0;
+   if (max_simultaneous_loads_for_testing_ != 0)
+     return max_simultaneous_loads_for_testing_;
+   return delegate_->GetMaxSimultaneousTabLoads();
 diff --git a/chrome/browser/sessions/tab_loader.h b/chrome/browser/sessions/tab_loader.h
 --- a/chrome/browser/sessions/tab_loader.h
 +++ b/chrome/browser/sessions/tab_loader.h
@@ -301,7 +361,13 @@ diff --git a/chrome/browser/sessions/tab_loader.h b/chrome/browser/sessions/tab_
 diff --git a/chrome/browser/single_tab/android/java/res/layout/single_tab_module_layout.xml b/chrome/browser/single_tab/android/java/res/layout/single_tab_module_layout.xml
 --- a/chrome/browser/single_tab/android/java/res/layout/single_tab_module_layout.xml
 +++ b/chrome/browser/single_tab/android/java/res/layout/single_tab_module_layout.xml
-@@ -72,7 +72,7 @@ found in the LICENSE file.
+@@ -67,12 +67,12 @@ found in the LICENSE file.
+ 
+       <LinearLayout
+           android:layout_width="wrap_content"
+-          android:layout_height="match_parent">
++          android:layout_height="@dimen/single_tab_module_tab_thumbnail_size">
+ 
            <RelativeLayout
                android:id="@+id/tab_images"
                android:layout_width="wrap_content"
@@ -310,7 +376,25 @@ diff --git a/chrome/browser/single_tab/android/java/res/layout/single_tab_module
                android:background="@drawable/single_tab_thumbnail_background"
                tools:ignore="UselessParent">
  
-@@ -123,21 +123,21 @@ found in the LICENSE file.
+@@ -85,8 +85,6 @@ found in the LICENSE file.
+                   android:layout_marginStart="@dimen/single_tab_thumbnail_margin"
+                   android:layout_marginEnd="@dimen/single_tab_thumbnail_margin"
+                   android:layout_alignParentStart="true"
+-                  android:layout_alignParentBottom="true"
+-                  android:layout_alignParentTop="true"
+                   android:adjustViewBounds="false"
+                   android:gravity="center_horizontal"
+                   android:importantForAccessibility="no"
+@@ -117,7 +115,7 @@ found in the LICENSE file.
+       <LinearLayout
+           android:id="@+id/tab_info"
+           android:layout_width="0dp"
+-          android:layout_height="match_parent"
++          android:layout_height="wrap_content"
+           android:layout_weight="1"
+           android:paddingStart="@dimen/single_tab_module_padding_bottom"
+           android:baselineAligned="false"
+@@ -125,21 +123,22 @@ found in the LICENSE file.
            <TextView
                android:id="@+id/tab_title_view"
                android:layout_width="match_parent"
@@ -328,9 +412,9 @@ diff --git a/chrome/browser/single_tab/android/java/res/layout/single_tab_module
                android:id="@+id/tab_url_view"
 +              android:layout_weight="1"
                android:layout_width="match_parent"
--              android:layout_height="wrap_content"
-+              android:layout_height="match_parent"
+               android:layout_height="wrap_content"
                android:layout_marginBottom="2dp"
++              android:minLines="6"
                android:gravity="start"
 -              android:singleLine="true"
 +              android:singleLine="false"
@@ -391,6 +475,18 @@ new file mode 100644
 +        Enable showing a NewTabPage at startup and allows selection of the last open tab
 +    </message>
 +</grit-part>
+diff --git a/chrome/browser/ui/browser_tabrestore.cc b/chrome/browser/ui/browser_tabrestore.cc
+--- a/chrome/browser/ui/browser_tabrestore.cc
++++ b/chrome/browser/ui/browser_tabrestore.cc
+@@ -234,7 +234,7 @@ WebContents* AddRestoredTabImpl(std::unique_ptr<WebContents> web_contents,
+ 
+   // Immediate load if the browser activeness is true or unknown. That is, do
+   // not do immediate load for browsers that are known to be inactive.
+-  bool should_load = is_active_browser.value_or(true);
++  bool should_load = false;
+ 
+ // On OS_MAC, `LoadRestoredTabIfVisible` by default so that its tab loading
+ // behaves like other platforms to make FirstWebContentsProfiler wor
 diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 --- a/chrome/browser/ui/startup/startup_browser_creator_impl.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator_impl.cc
@@ -409,6 +505,18 @@ diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/
      // Potentially add a tab appropriate to display the Privacy Sandbox
      // confirmaton dialog on top of. Ideally such a tab will already exist
      // in |tabs|, and no additional tab will be required.
+diff --git a/components/performance_manager/features.cc b/components/performance_manager/features.cc
+--- a/components/performance_manager/features.cc
++++ b/components/performance_manager/features.cc
+@@ -23,7 +23,7 @@ BASE_FEATURE_PARAM(size_t,
+                    kBackgroundTabLoadingMinSiteEngagement,
+                    &kBackgroundTabLoadingFromPerformanceManager,
+                    "min_site_engagement",
+-                   0);
++                   999999);
+ 
+ BASE_FEATURE_PARAM(bool,
+                    kBackgroundTabLoadingRestoreMainFrameState,
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc b/cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc
 new file mode 100644
 --- /dev/null

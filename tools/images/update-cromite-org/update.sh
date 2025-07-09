@@ -19,7 +19,7 @@ while true
 do
 
   pushd filters
-  
+
   KO=0
   curl -O https://easylist-downloads.adblockplus.org/abpindo.txt || KO=1
   curl -O https://easylist-downloads.adblockplus.org/abpvn.txt || KO=1
@@ -78,6 +78,9 @@ do
   curl -O https://easylist-downloads.adblockplus.org/global-filters+easylist.txt || KO=1
   curl -O https://easylist-downloads.adblockplus.org/turkish-filters+easylist.txt || KO=1
 
+  curl -o badmojr-1Hosts-master-Pro-adblock.txt https://raw.githubusercontent.com/badmojr/1Hosts/master/Pro/adblock.txt || KO=1
+  curl -O https://badblock.celenity.dev/abp/badblock_lite.txt || KO=1
+
   NOW=$(date +"%Y-%m-%dT%H:%M:%S%z")
   echo Last Update $NOW > LAST-UPDATE.txt
 
@@ -87,6 +90,6 @@ do
   $rclone sync filters ftp:www.cromite.org/filters --log-level INFO
 
   echo "You can stop now"
-  sleep 1h
+  sleep 24h
 
 done

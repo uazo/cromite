@@ -8,7 +8,7 @@ suit Cromite logic.
  .../android/java/res/xml/main_preferences.xml |   19 +-
  .../adblock_chrome_content_browser_client.cc  |    6 +
  .../adblock_chrome_content_browser_client.h   |    4 +
- chrome/browser/adblock/android/BUILD.gn       |    2 +-
+ chrome/browser/adblock/android/BUILD.gn       |    3 +-
  .../adblock/android/adblock_strings.grd       |   56 +-
  .../java/res/layout/adblock_custom_item.xml   |   14 +-
  .../layout/adblock_filter_lists_list_item.xml |   15 +
@@ -16,14 +16,15 @@ suit Cromite logic.
  .../AdblockAllowedDomainsFragment.java        |    7 +-
  .../AdblockCustomFilterListsFragment.java     |   37 +-
  .../AdblockCustomFiltersFragment.java         |    7 +-
- .../settings/AdblockCustomItemFragment.java   |   20 +-
+ .../settings/AdblockCustomItemFragment.java   |   26 +-
  .../settings/AdblockFilterListsAdapter.java   |    6 +
- .../settings/AdblockSettingsFragment.java     |   79 +-
+ .../settings/AdblockFilterListsFragment.java  |    8 +-
+ .../settings/AdblockSettingsFragment.java     |   96 +-
  .../browser/chrome_content_browser_client.cc  |    6 +-
  .../browser/chrome_content_browser_client.h   |    6 +-
  .../adblock_private/adblock_private_api.cc    |   76 +-
  .../api/adblock_private/adblock_private_api.h |   49 +
- .../eyeo_filtering_private_api.cc             |   24 +-
+ .../eyeo_filtering_private_api.cc             |   25 +-
  .../api/settings_private/prefs_util.cc        |   14 +
  ...hrome_browser_main_extra_parts_profiles.cc |    2 -
  chrome/browser/resources/settings/BUILD.gn    |    2 +
@@ -125,7 +126,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 120 files changed, 9192 insertions(+), 617 deletions(-)
+ 121 files changed, 9224 insertions(+), 618 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -166,7 +167,7 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
  
      <PreferenceCategory
          android:key="advanced_section"
-@@ -134,6 +120,11 @@ for the previous order (main_preferences_legacy). -->
+@@ -135,6 +121,11 @@ for the previous order (main_preferences_legacy). -->
          android:key="adblock"
          android:order="13"
          android:title="@string/prefs_adblock"/>
@@ -214,7 +215,15 @@ diff --git a/chrome/browser/adblock/adblock_chrome_content_browser_client.h b/ch
 diff --git a/chrome/browser/adblock/android/BUILD.gn b/chrome/browser/adblock/android/BUILD.gn
 --- a/chrome/browser/adblock/android/BUILD.gn
 +++ b/chrome/browser/adblock/android/BUILD.gn
-@@ -148,7 +148,7 @@ android_resources("java_ui_resources") {
+@@ -113,6 +113,7 @@ android_library("adblock_ui_java") {
+     "//build/android:build_java",
+     "//chrome/browser/preferences:java",
+     "//chrome/browser/profiles/android:java",
++    "//chrome/browser/settings:java",
+     "//components/adblock/android:adblock_controller_java",
+     "//components/browser_ui/settings/android:java",
+     "//components/prefs/android:java",
+@@ -148,7 +149,7 @@ android_resources("java_ui_resources") {
      "java/res/layout/adblock_custom_item_settings.xml",
      "java/res/layout/adblock_filter_lists_list_item.xml",
      "java/res/xml/adblock_more_options.xml",
@@ -550,16 +559,32 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
 diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockCustomItemFragment.java b/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockCustomItemFragment.java
 --- a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockCustomItemFragment.java
 +++ b/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockCustomItemFragment.java
-@@ -33,7 +33,7 @@ import org.chromium.chrome.browser.adblock.R;
+@@ -30,10 +30,11 @@ import android.widget.TextView;
+ import androidx.preference.PreferenceFragmentCompat;
+ 
+ import org.chromium.chrome.browser.adblock.R;
++import org.chromium.components.browser_ui.settings.SettingsFragment;
  
  import java.util.List;
  
 -public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat {
-+public abstract class AdblockCustomItemFragment<T> extends PreferenceFragmentCompat {
++public abstract class AdblockCustomItemFragment<T> extends PreferenceFragmentCompat implements SettingsFragment {
      private EditText mItem;
      private ImageView mAddButton;
      private ListView mListView;
-@@ -75,7 +75,7 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
+@@ -41,6 +42,11 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
+ 
+     public AdblockCustomItemFragment() {}
+ 
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
+     @Override
+     public View onCreateView(
+             LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+@@ -75,7 +81,7 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
  
      protected abstract void removeItemImpl(String item);
  
@@ -568,7 +593,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
  
      protected abstract String getCustomItemTextViewText();
  
-@@ -90,10 +90,12 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
+@@ -90,10 +96,12 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
      // Holder for listview items
      private class Holder {
          TextView mItem;
@@ -581,7 +606,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
              mRemoveButton = rootView.findViewById(R.id.fragment_adblock_custom_item_remove);
              mRemoveButton.setContentDescription(
                      AdblockCustomItemFragment.this.getCustomItemRemoveButtonContentDescription());
-@@ -107,6 +109,7 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
+@@ -107,6 +115,7 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
                      String item = (String) v.getTag();
                      removeItemImpl(item);
                      mAdapter.notifyDataSetChanged();
@@ -589,7 +614,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
                  }
              };
  
-@@ -134,16 +137,23 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
+@@ -134,16 +143,23 @@ public abstract class AdblockCustomItemFragment extends PreferenceFragmentCompat
                  convertView.setTag(new Holder(convertView));
              }
  
@@ -643,10 +668,34 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
          return view;
      }
  
+diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockFilterListsFragment.java b/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockFilterListsFragment.java
+--- a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockFilterListsFragment.java
++++ b/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockFilterListsFragment.java
+@@ -26,8 +26,9 @@ import androidx.fragment.app.ListFragment;
+ import org.chromium.chrome.browser.adblock.R;
+ import org.chromium.chrome.browser.profiles.ProfileManager;
+ import org.chromium.components.adblock.AdblockController;
++import org.chromium.components.browser_ui.settings.SettingsFragment;
+ 
+-public class AdblockFilterListsFragment extends ListFragment {
++public class AdblockFilterListsFragment extends ListFragment implements SettingsFragment {
+     private AdblockFilterListsAdapter mFilterListsAdapter;
+ 
+     @Override
+@@ -54,4 +55,9 @@ public class AdblockFilterListsFragment extends ListFragment {
+         super.onStart();
+         mFilterListsAdapter.start();
+     }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
+ }
 diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockSettingsFragment.java b/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockSettingsFragment.java
 --- a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockSettingsFragment.java
 +++ b/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser/adblock/settings/AdblockSettingsFragment.java
-@@ -13,6 +13,7 @@
+@@ -13,27 +13,46 @@
  package org.chromium.chrome.browser.adblock.settings;
  
  import android.os.Bundle;
@@ -654,20 +703,25 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
  
  import androidx.preference.Preference;
  import androidx.preference.PreferenceFragmentCompat;
-@@ -20,20 +21,33 @@ import androidx.preference.PreferenceFragmentCompat;
+ 
++import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.ObservableSupplierImpl;
++
  import org.chromium.build.BuildConfig;
  import org.chromium.chrome.browser.adblock.R;
  import org.chromium.chrome.browser.preferences.Pref;
 +import org.chromium.chrome.browser.profiles.Profile;
  import org.chromium.chrome.browser.profiles.ProfileManager;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
  import org.chromium.components.adblock.AdblockController;
  import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsFragment;
  import org.chromium.components.user_prefs.UserPrefs;
  
 -public class AdblockSettingsFragment extends PreferenceFragmentCompat
 -        implements Preference.OnPreferenceChangeListener {
 +public class AdblockSettingsFragment
-+        extends PreferenceFragmentCompat implements Preference.OnPreferenceChangeListener {
++        extends ChromeBaseSettingsFragment implements Preference.OnPreferenceChangeListener {
      private ChromeSwitchPreference mAdblockEnabled;
      private ChromeSwitchPreference mAcceptableAdsEnabled;
      private ChromeSwitchPreference mAutoInstalledEnabled;
@@ -691,9 +745,22 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
      private static final String SETTINGS_ENABLED_KEY = "fragment_adblock_settings_enabled_key";
      private static final String SETTINGS_FILTER_LISTS_KEY =
              "fragment_adblock_settings_filter_lists_key";
-@@ -52,9 +66,21 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
+@@ -51,10 +70,34 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
+     private static final int ON_OFF_TOGGLE_COUNT_TIME_WINDOW_MS = 3000;
      private long mOnOffTogleTimestamp;
  
++    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
++
++    @Override
++    public @SettingsFragment.AnimationType int getAnimationType() {
++        return SettingsFragment.AnimationType.PROPERTY;
++    }
++
++    @Override
++    public ObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
      private void bindPreferences() {
 +        mStartUpdate = findPreference(START_UPDATE_KEY);
 +        mStartUpdate.setOnPreferenceClickListener(preference -> {
@@ -713,7 +780,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
          mAutoInstalledEnabled =
                  (ChromeSwitchPreference) findPreference(SETTINGS_AUTO_INSTALL_ENABLED_KEY);
          mAllowedDomains = findPreference(SETTINGS_ALLOWED_DOMAINS_KEY);
-@@ -62,35 +88,43 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
+@@ -62,35 +105,43 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
      }
  
      private boolean areMoreOptionsEnabled() {
@@ -769,7 +836,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
          mAutoInstalledEnabled.setOnPreferenceChangeListener(this);
      }
  
-@@ -122,7 +156,7 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
+@@ -122,7 +173,7 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
  
      @Override
      public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
@@ -778,7 +845,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
          bindPreferences();
          synchronizePreferences();
      }
-@@ -137,19 +171,16 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
+@@ -137,19 +188,16 @@ public class AdblockSettingsFragment extends PreferenceFragmentCompat
      public boolean onPreferenceChange(Preference preference, Object newValue) {
          if (preference.getKey().equals(SETTINGS_ENABLED_KEY)) {
              AdblockController.getInstance(ProfileManager.getLastUsedRegularProfile())
@@ -806,7 +873,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6748,7 +6748,9 @@ ChromeContentBrowserClient::
+@@ -6349,7 +6349,9 @@ ChromeContentBrowserClient::
  }
  
  bool ChromeContentBrowserClient::WillInterceptWebSocket(
@@ -817,7 +884,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
    if (!frame) {
      return false;
-@@ -6770,9 +6772,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
+@@ -6372,9 +6374,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
  }
  
  void ChromeContentBrowserClient::CreateWebSocket(
@@ -832,7 +899,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
 diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
 --- a/chrome/browser/chrome_content_browser_client.h
 +++ b/chrome/browser/chrome_content_browser_client.h
-@@ -703,11 +703,15 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+@@ -720,11 +720,15 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
    CreateURLLoaderHandlerForServiceWorkerNavigationPreload(
        content::FrameTreeNodeId frame_tree_node_id,
        const network::ResourceRequest& resource_request) override;
@@ -1029,15 +1096,18 @@ diff --git a/chrome/browser/extensions/api/adblock_private/adblock_private_api.h
 diff --git a/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering_private_api.cc b/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering_private_api.cc
 --- a/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering_private_api.cc
 +++ b/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering_private_api.cc
-@@ -17,6 +17,7 @@
+@@ -17,8 +17,10 @@
  
  #include "base/containers/flat_map.h"
  #include "base/i18n/time_formatting.h"
 +#include "base/strings/utf_string_conversions.h"
  #include "base/logging.h"
  #include "base/no_destructor.h"
++#include "base/strings/stringprintf.h"
  #include "base/values.h"
-@@ -30,6 +31,7 @@
+ #include "chrome/browser/extensions/extension_tab_util.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -30,6 +32,7 @@
  #include "components/adblock/core/common/adblock_prefs.h"
  #include "components/adblock/core/common/adblock_utils.h"
  #include "components/adblock/core/common/content_type.h"
@@ -1045,7 +1115,7 @@ diff --git a/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering
  #include "components/adblock/core/configuration/filtering_configuration.h"
  #include "components/adblock/core/configuration/persistent_filtering_configuration.h"
  #include "components/adblock/core/session_stats.h"
-@@ -95,24 +97,6 @@ std::vector<api::eyeo_filtering_private::SessionStatsEntry> CopySessionsStats(
+@@ -95,24 +98,6 @@ std::vector<api::eyeo_filtering_private::SessionStatsEntry> CopySessionsStats(
    return result;
  }
  
@@ -1070,7 +1140,7 @@ diff --git a/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering
  std::vector<api::eyeo_filtering_private::Subscription> CopySubscriptions(
      const std::vector<scoped_refptr<adblock::Subscription>>
          current_subscriptions) {
-@@ -123,12 +107,12 @@ std::vector<api::eyeo_filtering_private::Subscription> CopySubscriptions(
+@@ -123,12 +108,12 @@ std::vector<api::eyeo_filtering_private::Subscription> CopySubscriptions(
      js_sub.title = sub->GetTitle();
      js_sub.current_version = sub->GetCurrentVersion();
      js_sub.installation_state =
@@ -1119,7 +1189,7 @@ diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chro
 diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 --- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -244,7 +244,6 @@
+@@ -247,7 +247,6 @@
  #include "chrome/common/buildflags.h"
  #include "chrome/common/chrome_features.h"
  #include "components/adblock/content/browser/factories/adblock_request_throttle_factory.h"
@@ -1127,7 +1197,7 @@ diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  #include "components/adblock/content/browser/factories/content_security_policy_injector_factory.h"
  #include "components/adblock/content/browser/factories/element_hider_factory.h"
  #include "components/adblock/content/browser/factories/resource_classification_runner_factory.h"
-@@ -916,7 +915,6 @@ void ChromeBrowserMainExtraPartsProfiles::
+@@ -929,7 +928,6 @@ void ChromeBrowserMainExtraPartsProfiles::
    // Makes manual testing possible.
    FakeSmartCardDeviceServiceFactory::GetInstance();
  #endif
@@ -1146,7 +1216,7 @@ diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resourc
      "appearance_page/appearance_fonts_page.ts",
      "appearance_page/appearance_page.ts",
      "appearance_page/home_url_input.ts",
-@@ -378,6 +379,7 @@ build_webui("build") {
+@@ -382,6 +383,7 @@ build_webui("build") {
    ts_definitions = [
      "//tools/typescript/definitions/autofill_private.d.ts",
      "//tools/typescript/definitions/chrome_event.d.ts",
@@ -1682,7 +1752,7 @@ new file mode 100644
 diff --git a/chrome/browser/resources/settings/basic_page/basic_page.html b/chrome/browser/resources/settings/basic_page/basic_page.html
 --- a/chrome/browser/resources/settings/basic_page/basic_page.html
 +++ b/chrome/browser/resources/settings/basic_page/basic_page.html
-@@ -57,6 +57,13 @@
+@@ -53,6 +53,13 @@
              </settings-section>
            </template>
          </template>
@@ -1721,7 +1791,7 @@ diff --git a/chrome/browser/resources/settings/page_visibility.ts b/chrome/brows
 diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
 --- a/chrome/browser/resources/settings/route.ts
 +++ b/chrome/browser/resources/settings/route.ts
-@@ -251,6 +251,10 @@ function createRoutes(): SettingsRoutes {
+@@ -236,6 +236,10 @@ function createRoutes(): SettingsRoutes {
      r.FONTS = r.APPEARANCE.createChild('/fonts');
    }
  
@@ -1757,7 +1827,7 @@ diff --git a/chrome/browser/resources/settings/settings.ts b/chrome/browser/reso
 diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html b/chrome/browser/resources/settings/settings_menu/settings_menu.html
 --- a/chrome/browser/resources/settings/settings_menu/settings_menu.html
 +++ b/chrome/browser/resources/settings/settings_menu/settings_menu.html
-@@ -149,6 +149,11 @@
+@@ -148,6 +148,11 @@
            $i18n{a11yPageTitle}
            <cr-ripple></cr-ripple>
          </a>
@@ -1772,7 +1842,7 @@ diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html 
 diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 --- a/chrome/browser/ui/tab_helpers.cc
 +++ b/chrome/browser/ui/tab_helpers.cc
-@@ -351,7 +351,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+@@ -353,7 +353,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
    auto* original_profile = profile->GetOriginalProfile();
    adblock::EnsureBackgroundServicesStarted(original_profile);
    adblock::RegisterAdblockWebContentObserver<
@@ -1785,8 +1855,8 @@ diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 diff --git a/chrome/common/extensions/api/_permission_features.json b/chrome/common/extensions/api/_permission_features.json
 --- a/chrome/common/extensions/api/_permission_features.json
 +++ b/chrome/common/extensions/api/_permission_features.json
-@@ -66,13 +66,6 @@
-       "extension"
+@@ -60,13 +60,6 @@
+       "5107DE9024C329EEA9C9A72D94C16723790C6422"   // Apps Developer Tool Dev.
      ]
    },
 -  "adblockPrivate": {
@@ -1799,8 +1869,8 @@ diff --git a/chrome/common/extensions/api/_permission_features.json b/chrome/com
    "autofillPrivate": {
      "channel": "trunk",
      "extension_types": ["extension", "platform_app"],
-@@ -392,13 +385,6 @@
-     "channel": "beta",
+@@ -386,13 +379,6 @@
+     "channel": "stable",
      "command_line_switch": "extension-ai-data-collection"
    },
 -  "eyeoFilteringPrivate": {
@@ -12335,7 +12405,7 @@ diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/br
 diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -1118,7 +1118,7 @@ void ContentBrowserClient::WillCreateURLLoaderFactory(
+@@ -1142,7 +1142,7 @@ void ContentBrowserClient::WillCreateURLLoaderFactory(
    DCHECK(browser_context);
  }
  
@@ -12344,7 +12414,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
    return false;
  }
  
-@@ -1127,9 +1127,11 @@ uint32_t ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
+@@ -1151,9 +1151,11 @@ uint32_t ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
  }
  
  void ContentBrowserClient::CreateWebSocket(
@@ -12359,7 +12429,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
 diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
 --- a/content/public/browser/content_browser_client.h
 +++ b/content/public/browser/content_browser_client.h
-@@ -2076,7 +2076,7 @@ class CONTENT_EXPORT ContentBrowserClient {
+@@ -2108,7 +2108,7 @@ class CONTENT_EXPORT ContentBrowserClient {
        scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner);
  
    // Returns true when the embedder wants to intercept a websocket connection.
@@ -12368,7 +12438,7 @@ diff --git a/content/public/browser/content_browser_client.h b/content/public/br
  
    // Returns the WebSocket creation options.
    virtual uint32_t GetWebSocketOptions(RenderFrameHost* frame);
-@@ -2098,9 +2098,11 @@ class CONTENT_EXPORT ContentBrowserClient {
+@@ -2130,9 +2130,11 @@ class CONTENT_EXPORT ContentBrowserClient {
    // Always called on the UI thread and only when the Network Service is
    // enabled.
    virtual void CreateWebSocket(
@@ -12432,7 +12502,7 @@ diff --git a/third_party/blink/renderer/core/css/style_engine.cc b/third_party/b
 diff --git a/third_party/blink/renderer/core/css/style_engine.h b/third_party/blink/renderer/core/css/style_engine.h
 --- a/third_party/blink/renderer/core/css/style_engine.h
 +++ b/third_party/blink/renderer/core/css/style_engine.h
-@@ -281,6 +281,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
+@@ -282,6 +282,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
        const ComputedStyle* embedder_style) const;
    void ViewportStyleSettingChanged();
  
@@ -12458,7 +12528,7 @@ diff --git a/third_party/blink/renderer/core/dom/events/event_target.cc b/third_
 diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_party/blink/renderer/core/exported/web_document.cc
 --- a/third_party/blink/renderer/core/exported/web_document.cc
 +++ b/third_party/blink/renderer/core/exported/web_document.cc
-@@ -292,6 +292,16 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
+@@ -298,6 +298,16 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
    Document* document = Unwrap<Document>();
    DCHECK(document);
  
@@ -12475,7 +12545,7 @@ diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_pa
    auto* parsed_sheet = MakeGarbageCollected<StyleSheetContents>(
        MakeGarbageCollected<CSSParserContext>(*document));
    parsed_sheet->ParseString(source_code);
-@@ -313,9 +323,6 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
+@@ -319,9 +329,6 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
          {SchedulingPolicy::DisableBackForwardCache()});
    }
  
@@ -12488,7 +12558,7 @@ diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_pa
 diff --git a/third_party/blink/renderer/core/html/html_element.cc b/third_party/blink/renderer/core/html/html_element.cc
 --- a/third_party/blink/renderer/core/html/html_element.cc
 +++ b/third_party/blink/renderer/core/html/html_element.cc
-@@ -2436,13 +2436,7 @@ void HTMLElement::setSpellcheck(bool enable) {
+@@ -2498,13 +2498,7 @@ void HTMLElement::setSpellcheck(bool enable) {
  }
  
  void HTMLElement::click() {
