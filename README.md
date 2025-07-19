@@ -106,7 +106,7 @@ ChromiumUpdateUrl=https://github.com/uazo/cromite/releases/latest/download/updat
 # Command line for Chromium (string):
 # note --user-data-dir= works better if path is absolute
 # See here: http://peter.sh/experiments/chromium-command-line-switches/
-ChromiumCommandLine=--user-data-dir="C:\Users\<my user>\AppData\Local\Cromite\User Data" --no-default-browser-check
+ChromiumCommandLine=--user-data-dir="%LOCALAPPDATA%\Cromite\User Data" --no-default-browser-check
 
 # to enable full logging in c:\temp\log.txt (daily rotate, no automatic deletion)
 # ChromiumCommandLine=--enable-logging --v=0 --log-file=C:\temp\log.txt --user-data-dir=".\User Data" --no-default-browser-check
