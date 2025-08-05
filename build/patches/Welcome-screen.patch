@@ -13,15 +13,16 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/android/java/res/values/styles.xml     |  24 ++
  .../DefaultSearchEngineFirstRunFragment.java  |   3 -
  .../browser/firstrun/FirstRunActivity.java    |  23 +-
- .../firstrun/FirstRunFlowSequencer.java       |  58 +--
+ .../firstrun/FirstRunFlowSequencer.java       |  55 +--
  .../browser/firstrun/FirstRunUtils.java       |   1 +
  .../firstrun/ToSAndUMAFirstRunFragment.java   | 321 +++++++++++++++++
  .../firstrun/TosAndUmaFragmentView.java       | 336 ++++++++++++++++++
+ .../signin/AppRestrictionSupplier.java        |   4 +
  .../signin/ChildAccountStatusSupplier.java    |   4 +
  ...creenSigninAndHistorySyncActivityBase.java |   6 +-
  .../browser/locale/LocaleManagerDelegate.java |   5 +-
  .../Welcome-screen.grdp                       |  27 ++
- 15 files changed, 903 insertions(+), 79 deletions(-)
+ 16 files changed, 907 insertions(+), 76 deletions(-)
  create mode 100644 chrome/android/java/res/layout/fre_tosanduma.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/firstrun/ToSAndUMAFirstRunFragment.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/firstrun/TosAndUmaFragmentView.java
@@ -30,7 +31,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
 --- a/chrome/android/chrome_java_resources.gni
 +++ b/chrome/android/chrome_java_resources.gni
-@@ -515,6 +515,7 @@ chrome_java_resources = [
+@@ -514,6 +514,7 @@ chrome_java_resources = [
    "java/res/layout/find_in_page.xml",
    "java/res/layout/find_toolbar.xml",
    "java/res/layout/fre_tos_privacy_disclaimer.xml",
@@ -41,7 +42,7 @@ diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_ja
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -613,6 +613,8 @@ chrome_java_sources = [
+@@ -618,6 +618,8 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/firstrun/LightweightFirstRunActivity.java",
    "java/src/org/chromium/chrome/browser/firstrun/SkipTosDialogPolicyListener.java",
    "java/src/org/chromium/chrome/browser/firstrun/TosDialogBehaviorSharedPrefInvalidator.java",
@@ -218,7 +219,7 @@ new file mode 100644
 diff --git a/chrome/android/java/res/values/dimens.xml b/chrome/android/java/res/values/dimens.xml
 --- a/chrome/android/java/res/values/dimens.xml
 +++ b/chrome/android/java/res/values/dimens.xml
-@@ -106,6 +106,17 @@ found in the LICENSE file.
+@@ -109,6 +109,17 @@ found in the LICENSE file.
      <dimen name="fre_loading_spinner_size">48dp</dimen>
      <dimen name="fre_policy_privacy_disclaimer_icon_size">18dp</dimen>
      <dimen name="fre_policy_privacy_disclaimer_icon_padding">8dp</dimen>
@@ -239,7 +240,7 @@ diff --git a/chrome/android/java/res/values/dimens.xml b/chrome/android/java/res
 diff --git a/chrome/android/java/res/values/styles.xml b/chrome/android/java/res/values/styles.xml
 --- a/chrome/android/java/res/values/styles.xml
 +++ b/chrome/android/java/res/values/styles.xml
-@@ -288,6 +288,30 @@ found in the LICENSE file.
+@@ -298,6 +298,30 @@ found in the LICENSE file.
          <item name="android:layout_weight">1</item>
      </style>
  
@@ -292,8 +293,8 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/Defaul
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunActivity.java
-@@ -37,8 +37,7 @@ import org.chromium.chrome.browser.metrics.UmaUtils;
- import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+@@ -41,8 +41,7 @@ import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+ import org.chromium.chrome.browser.metrics.UmaUtils;
  import org.chromium.chrome.browser.profiles.Profile;
  import org.chromium.chrome.browser.search_engines.TemplateUrlServiceFactory;
 -import org.chromium.chrome.browser.signin.SigninCheckerProvider;
@@ -302,7 +303,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
  import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
  import org.chromium.chrome.browser.ui.signin.DialogWhenLargeContentLayout;
  import org.chromium.chrome.browser.ui.signin.SigninUtils;
-@@ -235,7 +234,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
+@@ -231,7 +230,7 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
      /** Creates first page and sets up adapter. Should result UI being shown on the screen. */
      private void createFirstPage() {
          BooleanSupplier showWelcomePage = () -> !FirstRunStatus.shouldSkipWelcomePage();
@@ -311,15 +312,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
          mFreProgressStates.add(MobileFreProgress.WELCOME_SHOWN);
          mPagerAdapter = new FirstRunPagerAdapter(FirstRunActivity.this, mPages);
          mPager.setAdapter(mPagerAdapter);
-@@ -260,7 +259,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
+@@ -256,7 +255,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
          //
          // TODO(b/245912657): explicitly sign in supervised users in {@link
          // FullscreenSigninMediator#handleContinueWithNative} rather than relying on SigninChecker.
 -        SigninCheckerProvider.get(getProfileProviderSupplier().get().getOriginalProfile());
  
+         assumeNonNull(mFreProperties);
          mFirstRunFlowSequencer.updateFirstRunProperties(mFreProperties);
- 
-@@ -275,18 +273,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
+@@ -272,18 +270,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
              mFreProgressStates.add(MobileFreProgress.DEFAULT_SEARCH_ENGINE_SHOWN);
          }
  
@@ -338,7 +339,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
          if (mPagerAdapter != null) {
              mPagerAdapter.notifyDataSetChanged();
          }
-@@ -702,11 +688,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
+@@ -663,11 +649,6 @@ public class FirstRunActivity extends FirstRunActivityBase implements FirstRunPa
      public void acceptTermsOfService(boolean allowMetricsAndCrashUploading) {
          assert mNativeInitializationPromise.isFulfilled();
  
@@ -353,11 +354,10 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstRunFlowSequencer.java
-@@ -30,15 +30,9 @@ import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomiza
+@@ -34,14 +34,9 @@ import org.chromium.chrome.browser.partnercustomizations.PartnerBrowserCustomiza
  import org.chromium.chrome.browser.profiles.Profile;
  import org.chromium.chrome.browser.profiles.ProfileProvider;
  import org.chromium.chrome.browser.search_engines.SearchEnginePromoType;
--import org.chromium.chrome.browser.signin.AppRestrictionSupplier;
 -import org.chromium.chrome.browser.signin.services.IdentityServicesProvider;
 -import org.chromium.chrome.browser.signin.services.SigninPreferencesManager;
 -import org.chromium.chrome.browser.ui.signin.history_sync.HistorySyncHelper;
@@ -366,10 +366,10 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
  import org.chromium.components.embedder_support.util.UrlConstants;
 -import org.chromium.components.signin.AccountManagerFacadeProvider;
 -import org.chromium.components.signin.identitymanager.ConsentLevel;
+ import org.chromium.components.signin.identitymanager.IdentityManager;
  
  /**
-  * A helper to determine what should be the sequence of First Run Experience screens, and whether it
-@@ -63,29 +57,13 @@ public abstract class FirstRunFlowSequencer {
+@@ -68,30 +63,13 @@ public abstract class FirstRunFlowSequencer {
          }
  
          boolean shouldShowHistorySyncOptIn(boolean isChild) {
@@ -384,9 +384,10 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
 -                return false;
 -            }
 -            // Show the page only to signed-in users.
--            return IdentityServicesProvider.get()
--                    .getIdentityManager(profile)
--                    .hasPrimaryAccount(ConsentLevel.SIGNIN);
+-            IdentityManager identityManager =
+-                    IdentityServicesProvider.get().getIdentityManager(profile);
+-            assumeNonNull(identityManager);
+-            return identityManager.hasPrimaryAccount(ConsentLevel.SIGNIN);
 +            return false;
          }
  
@@ -401,7 +402,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
          }
      }
  
-@@ -136,18 +114,6 @@ public abstract class FirstRunFlowSequencer {
+@@ -142,18 +120,6 @@ public abstract class FirstRunFlowSequencer {
       * method.
       */
      void start() {
@@ -420,7 +421,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
      }
  
      @VisibleForTesting
-@@ -166,9 +132,6 @@ public abstract class FirstRunFlowSequencer {
+@@ -172,9 +138,6 @@ public abstract class FirstRunFlowSequencer {
      }
  
      private void maybeProcessFreEnvironmentPreNative() {
@@ -430,7 +431,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
          if (mIsFlowKnown) return;
          mIsFlowKnown = true;
          onFlowIsKnown(mIsChild);
-@@ -180,8 +143,8 @@ public abstract class FirstRunFlowSequencer {
+@@ -186,8 +149,8 @@ public abstract class FirstRunFlowSequencer {
       * @param freProperties Resulting FRE properties bundle.
       */
      public void updateFirstRunProperties(Bundle freProperties) {
@@ -441,7 +442,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
          assert freProperties != null;
          freProperties.putBoolean(
                  FirstRunActivity.SHOW_HISTORY_SYNC_PAGE, shouldShowHistorySyncOptIn());
-@@ -200,8 +163,6 @@ public abstract class FirstRunFlowSequencer {
+@@ -206,8 +169,6 @@ public abstract class FirstRunFlowSequencer {
  
          // Mark the FRE flow as complete.
          FirstRunStatus.setFirstRunFlowComplete(true);
@@ -450,17 +451,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/firstrun/FirstR
      }
  
      /**
-@@ -300,9 +261,6 @@ public abstract class FirstRunFlowSequencer {
-         Log.d(TAG, "Redirecting user through FRE.");
-         CrashKeys.getInstance().set(CrashKeyIndex.FIRST_RUN, "yes");
- 
--        // Launch the async restriction checking as soon as we know we'll be running FRE.
--        AppRestrictionSupplier.startInitializationHint();
--
-         if (inSameTask) {
-             FreIntentCreator intentCreator = new FreIntentCreator();
-             Intent freIntent =
-@@ -328,13 +286,17 @@ public abstract class FirstRunFlowSequencer {
+@@ -331,13 +292,17 @@ public abstract class FirstRunFlowSequencer {
              if (!(caller instanceof Activity)) {
                  freIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
              }
@@ -1158,10 +1149,24 @@ new file mode 100644
 +        return mLastWidth > mLastHeight;
 +    }
 +}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/signin/AppRestrictionSupplier.java b/chrome/android/java/src/org/chromium/chrome/browser/signin/AppRestrictionSupplier.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/signin/AppRestrictionSupplier.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/signin/AppRestrictionSupplier.java
+@@ -67,6 +67,10 @@ public class AppRestrictionSupplier implements OneshotSupplier<Boolean> {
+     private void initialize() {
+         ThreadUtils.assertOnUiThread();
+         long startTime = SystemClock.elapsedRealtime();
++        if ((true)) {
++            onRestrictionDetected(false, startTime);
++            return;
++        }
+ 
+         // This is an imperfect system, and can sometimes return true when there will not actually
+         // be any app restrictions. But we do not have parsing logic in Java to understand if the
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/signin/ChildAccountStatusSupplier.java b/chrome/android/java/src/org/chromium/chrome/browser/signin/ChildAccountStatusSupplier.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/signin/ChildAccountStatusSupplier.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/signin/ChildAccountStatusSupplier.java
-@@ -41,7 +41,11 @@ public class ChildAccountStatusSupplier implements OneshotSupplier<Boolean> {
+@@ -42,7 +42,11 @@ public class ChildAccountStatusSupplier implements OneshotSupplier<Boolean> {
       */
      public ChildAccountStatusSupplier(
              AccountManagerFacade accountManagerFacade, AppRestrictionSupplier appRestrictionInfo) {
@@ -1171,7 +1176,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/signin/ChildAcc
 +        mValue.set(false);
 +        if ((true)) return;
  
-         appRestrictionInfo.getHasAppRestriction(this::onAppRestrictionDetected);
+         appRestrictionInfo.onAvailable(this::onAppRestrictionDetected);
  
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/signin/FullscreenSigninAndHistorySyncActivityBase.java b/chrome/android/java/src/org/chromium/chrome/browser/signin/FullscreenSigninAndHistorySyncActivityBase.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/signin/FullscreenSigninAndHistorySyncActivityBase.java
@@ -1185,7 +1190,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/signin/Fullscre
  
  /** Base class for First run experience and fullscreen signin and history sync promos. */
  public abstract class FullscreenSigninAndHistorySyncActivityBase extends AsyncInitializationActivity
-@@ -91,9 +89,7 @@ public abstract class FullscreenSigninAndHistorySyncActivityBase extends AsyncIn
+@@ -90,9 +88,7 @@ public abstract class FullscreenSigninAndHistorySyncActivityBase extends AsyncIn
      @Override
      @CallSuper
      public void triggerLayoutInflation() {

@@ -7,71 +7,28 @@ granted by user
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- .../blink/renderer/core/frame/screen.cc       | 25 +++++++++++++++++--
- .../blink/renderer/core/frame/screen.h        | 10 ++++++++
- 2 files changed, 33 insertions(+), 2 deletions(-)
+ third_party/blink/renderer/core/frame/screen.cc | 2 +-
+ third_party/blink/renderer/core/frame/screen.h  | 4 ++++
+ 2 files changed, 5 insertions(+), 1 deletion(-)
 
 diff --git a/third_party/blink/renderer/core/frame/screen.cc b/third_party/blink/renderer/core/frame/screen.cc
 --- a/third_party/blink/renderer/core/frame/screen.cc
 +++ b/third_party/blink/renderer/core/frame/screen.cc
-@@ -35,13 +35,33 @@
- #include "third_party/blink/renderer/core/frame/local_frame.h"
- #include "third_party/blink/renderer/core/frame/settings.h"
- #include "third_party/blink/renderer/core/page/chrome_client.h"
-+#include "third_party/blink/renderer/modules/permissions/permission_utils.h"
- #include "ui/display/screen_info.h"
- #include "ui/display/screen_infos.h"
- 
- namespace blink {
- 
- Screen::Screen(LocalDOMWindow* window, int64_t display_id)
--    : ExecutionContextClient(window), display_id_(display_id) {}
-+    : ExecutionContextClient(window), display_id_(display_id),
-+      permission_service_(window) {
-+  if (!permission_service_.is_bound()) {
-+    ConnectToPermissionService(
-+        window, permission_service_.BindNewPipeAndPassReceiver(
-+                    window->GetTaskRunner(TaskType::kMiscPlatformAPI)));
-+  }
-+
-+  permission_service_->HasPermission(
-+      CreatePermissionDescriptor(mojom::blink::PermissionName::WINDOW_MANAGEMENT),
-+      WTF::BindOnce(&Screen::DidGetPermissionState,
-+                    WrapPersistent(this)));
-+}
-+
-+void Screen::DidGetPermissionState(
-+    mojom::blink::PermissionStatus status) {
-+  has_permission_ =
-+    status == mojom::blink::PermissionStatus::GRANTED;
-+  permission_service_.reset();
-+}
- 
- // static
- bool Screen::AreWebExposedScreenPropertiesEqual(
-@@ -179,6 +199,7 @@ int Screen::availWidth() const {
- }
- 
- void Screen::Trace(Visitor* visitor) const {
-+  visitor->Trace(permission_service_);
-   EventTarget::Trace(visitor);
-   ExecutionContextClient::Trace(visitor);
-   Supplementable<Screen>::Trace(visitor);
-@@ -208,7 +229,7 @@ bool Screen::isExtended() const {
+@@ -226,7 +226,7 @@ bool Screen::isExtended() const {
      return false;
    }
  
 -  return GetScreenInfo().is_extended;
-+  return GetScreenInfo().is_extended && has_permission_;
++  return GetScreenInfo().is_extended && window_management_permission_granted_;
  }
  
  gfx::Rect Screen::GetRect(bool available) const {
 diff --git a/third_party/blink/renderer/core/frame/screen.h b/third_party/blink/renderer/core/frame/screen.h
 --- a/third_party/blink/renderer/core/frame/screen.h
 +++ b/third_party/blink/renderer/core/frame/screen.h
-@@ -33,10 +33,14 @@
- #include "third_party/blink/renderer/core/dom/events/event_target.h"
+@@ -34,10 +34,14 @@
  #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
+ #include "third_party/blink/renderer/core/frame/cached_permission_status.h"
  #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 +#include "third_party/blink/public/mojom/permissions/permission.mojom-blink.h"
 +#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
@@ -84,17 +41,4 @@ diff --git a/third_party/blink/renderer/core/frame/screen.h b/third_party/blink/
  namespace display {
  struct ScreenInfo;
  }
-@@ -95,6 +99,12 @@ class CORE_EXPORT Screen : public EventTarget,
- 
-   // The internal id of the underlying display, to support multi-screen devices.
-   int64_t display_id_;
-+
-+ private:
-+  void DidGetPermissionState(mojom::blink::PermissionStatus status);
-+
-+  bool has_permission_ = false;
-+  HeapMojoRemote<mojom::blink::PermissionService> permission_service_;
- };
- 
- }  // namespace blink
 --
