@@ -480,7 +480,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
       extensions_v8::LoadTimesExtension::Get());
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
-  if (command_line->HasSwitch(variations::switches::kEnableBenchmarking)) {
+  if (command_line->HasSwitch(variations::switches::kEnableBenchmarkingApi)) {
     blink::WebScriptController::RegisterExtension(
         extensions_v8::BenchmarkingExtension::Get());
   }
@@ -727,8 +727,15 @@ void ChromeContentRendererClient::RenderFrameCreated(
     subresource_filter_agent->Initialize();
   }
 
-  if (fingerprinting_protection_filter::features::
-          IsFingerprintingProtectionFeatureEnabled() &&
+  if (render_frame->IsMainFrame() && !render_frame->IsInFencedFrameTree()) {
+    // This web pref applies at the level of the current browser session and may
+    // change when settings are modified, so we copy the latest value every time
+    // a new top-level main frame is created for a new page.
+    content_based_fingerprinting_protection_enabled_ =
+        render_frame->GetBlinkPreferences()
+            .content_based_fingerprinting_protection_enabled;
+  }
+  if (content_based_fingerprinting_protection_enabled_ &&
       fingerprinting_protection_ruleset_dealer_) {
     auto* fingerprinting_protection_renderer_agent =
         new fingerprinting_protection_filter::RendererAgent(
@@ -1887,6 +1894,11 @@ void ChromeContentRendererClient::AppendContentSecurityPolicy(
                   network::mojom::ContentSecurityPolicyType::kEnforce,
                   network::mojom::ContentSecurityPolicySource::kHTTP});
 #endif
+}
+
+bool ChromeContentRendererClient::
+    IsContentBasedFingerprintingProtectionEnabled() {
+  return content_based_fingerprinting_protection_enabled_;
 }
 
 std::unique_ptr<blink::WebLinkPreviewTriggerer>
