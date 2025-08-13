@@ -28,21 +28,21 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../chrome/browser/app/ChromeActivity.java    |   4 +
  .../AppMenuPropertiesDelegateImpl.java        |   7 +-
  .../ChromeContextMenuPopulator.java           |   6 +-
- .../CustomTabActivityLifecycleUmaTracker.java |  39 -----
+ .../CustomTabActivityLifecycleUmaTracker.java |  39 ----
  .../CustomTabAppMenuPropertiesDelegate.java   |   4 +
- .../CustomTabIntentDataProvider.java          |  10 ++
+ .../CustomTabIntentDataProvider.java          |  10 +
  .../browser/download/DownloadUtils.java       |  13 +-
  .../history/HistoryContentManager.java        |   7 +-
  .../browser/history/HistoryManager.java       |  27 ++-
  .../chrome/browser/history/HistoryPage.java   |  16 ++
  .../native_page/NativePageFactory.java        |   4 +-
  .../chrome/browser/ntp/RecentTabsManager.java |  28 ++-
- .../privacy/settings/IncognitoSettings.java   | 162 ++++++++++++++++++
+ .../privacy/settings/IncognitoSettings.java   | 175 ++++++++++++++++++
  .../settings/FragmentDependencyProvider.java  |   4 +
  .../HistoricalTabModelObserver.java           |   5 +-
  .../tab/tab_restore/HistoricalTabSaver.java   |   2 +-
  .../tab_restore/HistoricalTabSaverImpl.java   |  17 +-
- .../TabbedAppMenuPropertiesDelegate.java      |   9 +
+ .../TabbedAppMenuPropertiesDelegate.java      |   6 +-
  .../tabbed_mode/TabbedRootUiCoordinator.java  |   4 +-
  .../browser/tabmodel/ChromeTabCreator.java    |   5 +-
  .../tabmodel/TabModelSelectorImpl.java        |   3 +
@@ -55,17 +55,17 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../remote_suggestions_service_factory.cc     |   5 +
  .../bookmarks/android/bookmark_bridge.cc      |   7 +
  .../host_content_settings_map_factory.cc      |  22 ++-
- chrome/browser/history/history_tab_helper.cc  |  20 +++
+ chrome/browser/history/history_tab_helper.cc  |  20 ++
  chrome/browser/history/history_tab_helper.h   |  10 +-
  .../android/offline_page_bridge.cc            |  11 +-
- .../android/offline_page_model_factory.cc     |  20 ++-
+ .../android/offline_page_model_factory.cc     |  20 +-
  .../android/request_coordinator_factory.cc    |  33 +++-
  .../offline_page_model_factory.h              |   1 +
  .../offline_pages/recent_tab_helper.cc        |  31 +++-
  .../browser/offline_pages/recent_tab_helper.h |   5 +
  .../request_coordinator_factory.h             |   4 +-
  chrome/browser/prefs/browser_prefs.cc         |   5 +
- chrome/browser/profiles/profile_selections.cc |  10 ++
+ chrome/browser/profiles/profile_selections.cc |  10 +
  chrome/browser/profiles/profile_selections.h  |   7 +-
  .../browser/ui/android/native_page/BUILD.gn   |   2 +
  .../browser/ui/native_page/NativePage.java    |  22 ++-
@@ -88,7 +88,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../add-an-always-incognito-mode.inc          |   1 +
  .../add-an-always-incognito-mode.inc          |   3 +
  .../add-an-always-incognito-mode.inc          |   1 +
- 69 files changed, 791 insertions(+), 112 deletions(-)
+ 69 files changed, 800 insertions(+), 113 deletions(-)
  create mode 100644 chrome/android/java/res/xml/incognito_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/AlwaysIncognitoLinkInterceptor.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoSettings.java
@@ -700,7 +700,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoSettings.java
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,175 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -733,7 +733,10 @@ new file mode 100644
 +import androidx.preference.PreferenceFragmentCompat;
 +import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
 +
++import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.ObservableSupplierImpl;
 +import org.chromium.base.supplier.Supplier;
++
 +import org.chromium.chrome.R;
 +import org.chromium.chrome.browser.preferences.Pref;
 +import org.chromium.chrome.browser.profiles.Profile;
@@ -743,8 +746,11 @@ new file mode 100644
 +import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
 +import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
 +import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++
 +import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
 +import org.chromium.components.browser_ui.settings.SettingsUtils;
++import org.chromium.components.browser_ui.settings.SettingsFragment;
 +import org.chromium.components.prefs.PrefService;
 +import org.chromium.components.user_prefs.UserPrefs;
 +
@@ -752,8 +758,8 @@ new file mode 100644
 + * Fragment to keep track of the all the always incognito related preferences.
 + */
 +public class IncognitoSettings
-+        extends PreferenceFragmentCompat implements Preference.OnPreferenceChangeListener,
-+                                                    INeedSnackbarManager {
++        extends ChromeBaseSettingsFragment implements Preference.OnPreferenceChangeListener,
++                                                      INeedSnackbarManager {
 +    private Supplier<SnackbarManager> mSnackbarManagerSupplier;
 +    private Snackbar mSnackbar;
 +
@@ -762,16 +768,23 @@ new file mode 100644
 +    private static final String PREF_INCOGNITO_SAVE_SITE_SETTING = "incognito_save_site_setting";
 +
 +    private final PrefService prefService = UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
++    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
++
++    @Override
++    public ObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @SettingsFragment.AnimationType int getAnimationType() {
++        return SettingsFragment.AnimationType.PROPERTY;
++    }
 +
 +    @Override
 +    public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
-+        PrivacyPreferencesManagerImpl privacyPrefManager =
-+                PrivacyPreferencesManagerImpl.getInstance();
++        mPageTitle.set(getString(R.string.incognito_settings_title));
 +        SettingsUtils.addPreferencesFromResource(this, R.xml.incognito_preferences);
-+        getActivity().setTitle(R.string.incognito_settings_title);
-+
 +        setHasOptionsMenu(true);
-+
 +        updatePreferences();
 +    }
 +
@@ -1001,28 +1014,18 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
  import org.chromium.chrome.browser.ActivityTabProvider;
  import org.chromium.chrome.browser.ai.AiAssistantService;
  import org.chromium.chrome.browser.app.appmenu.AppMenuPropertiesDelegateImpl;
-@@ -186,6 +187,13 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
-     }
- 
-     private void populatePageModeMenu(MVCListAdapter.ModelList modelList) {
-+        boolean always_incognito = AlwaysIncognitoLinkInterceptor.isAlwaysIncognito();
-+        if (always_incognito) {
-+            final MenuItem newTabOption = menu.findItem(R.id.new_tab_menu_id);
-+            if (newTabOption != null)
-+                newTabOption.setVisible(false);
-+        }
-+
-         Tab currentTab = mActivityTabProvider.get();
- 
-         GURL url = currentTab != null ? currentTab.getUrl() : GURL.emptyGURL();
-@@ -375,6 +383,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+@@ -219,7 +220,10 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
          }
  
-         Add exit menu item
-+        Add always incognito item
-     }
+         // New Tab
+-        modelList.add(buildNewTabItem());
++        boolean always_incognito = AlwaysIncognitoLinkInterceptor.isAlwaysIncognito();
++        if (!always_incognito) {
++            modelList.add(buildNewTabItem());
++        }
  
-     private Runnable buildUpdateStateChangedObserver() {
+         // New Incognito Tab
+         modelList.add(buildNewIncognitoTabItem());
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java

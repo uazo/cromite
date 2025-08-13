@@ -10,7 +10,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../metrics/chrome_feature_list_creator.cc    |  12 ++
  .../search_engine_preconnector.cc             |   1 +
  .../policy/chrome_browser_policy_connector.cc |   3 -
- ...nfiguration_policy_handler_list_factory.cc |   6 +-
+ ...nfiguration_policy_handler_list_factory.cc |  10 +-
  .../account_consistency_mode_manager.cc       |   7 +-
  ...ccount_consistency_mode_manager_factory.cc |   2 +-
  .../throttled_gaia_auth_fetcher.cc            |   5 +
@@ -22,12 +22,13 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../commerce/core/commerce_feature_list.cc    |  64 ++------
  .../core/browser/browser_policy_connector.cc  |   3 +
  .../common/command_line_policy_provider.cc    |   3 +
- .../core/common/policy_loader_command_line.cc | 137 ++++++++++++++++--
+ .../core/common/policy_loader_command_line.cc | 138 ++++++++++++++++--
  .../policy/core/common/policy_pref_names.cc   |   3 +
  .../policy/core/common/policy_pref_names.h    |   1 +
  .../policy/core/common/policy_service_impl.cc |   3 +
  .../policy/core/common/policy_switches.cc     |   2 +
  .../policy/core/common/policy_switches.h      |   1 +
+ .../ExtensionManifestV2Availability.yaml      |   5 +-
  .../Miscellaneous/SyncDisabled.yaml           |   2 +-
  .../policy/resources/webui/policy_row.html    |   1 +
  .../policy/resources/webui/policy_row.ts      |  12 ++
@@ -35,9 +36,10 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  components/search/ntp_features.cc             |   1 +
  components/signin/features.gni                |   2 +-
  .../gaia_cookie_manager_service.cc            |   4 +
+ extensions/common/extension_features.cc       |   1 +
  google_apis/gaia/gaia_auth_fetcher.cc         |   1 +
  net/socket/ssl_client_socket_impl.cc          |   3 +
- 33 files changed, 321 insertions(+), 158 deletions(-)
+ 35 files changed, 329 insertions(+), 161 deletions(-)
 
 diff --git a/base/win/win_util.cc b/base/win/win_util.cc
 --- a/base/win/win_util.cc
@@ -239,6 +241,17 @@ diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc 
  }
  
  }  // namespace
+@@ -3261,6 +3261,10 @@ std::unique_ptr<ConfigurationPolicyHandlerList> BuildHandlerList(
+       extensions::pref_names::kExtensionUnpublishedAvailability,
+       /*min=*/0, /*max=*/1, /*clamp=*/false));
+   handlers->AddHandler(std::make_unique<ExtensionDeveloperModePolicyHandler>());
++  handlers->AddHandler(std::make_unique<IntRangePolicyHandler>(
++      key::kExtensionManifestV2Availability,
++      extensions::pref_names::kManifestV2Availability, /*min=*/0, /*max=*/3,
++      /*clamp=*/false));
+ 
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ 
 diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/browser/signin/account_consistency_mode_manager.cc
 --- a/chrome/browser/signin/account_consistency_mode_manager.cc
 +++ b/chrome/browser/signin/account_consistency_mode_manager.cc
@@ -694,7 +707,7 @@ diff --git a/components/policy/core/common/policy_loader_command_line.cc b/compo
  
  namespace policy {
  
-@@ -21,25 +46,105 @@ PolicyLoaderCommandLine::~PolicyLoaderCommandLine() = default;
+@@ -21,25 +46,106 @@ PolicyLoaderCommandLine::~PolicyLoaderCommandLine() = default;
  
  PolicyBundle PolicyLoaderCommandLine::Load() {
    PolicyBundle bundle;
@@ -786,6 +799,7 @@ diff --git a/components/policy/core/common/policy_loader_command_line.cc b/compo
 +
 +#if BUILDFLAG(IS_WIN)
 +  AddPolicy(disabled_policies_list, policy_map, policy::key::kExtensionManifestV2Availability, base::Value(/*Enabled*/ 2));
++  //kExtensionUnpublishedAvailability
 +  AddPolicy(disabled_policies_list, policy_map, policy::key::kDynamicCodeSettings, base::Value(/*DisabledForBrowser*/ 1));
 +#endif
 +
@@ -876,6 +890,21 @@ diff --git a/components/policy/core/common/policy_switches.h b/components/policy
  #if BUILDFLAG(IS_CHROMEOS)
  extern const char kDisablePolicyKeyVerification[];
  #endif  // BUILDFLAG(IS_CHROMEOS)
+diff --git a/components/policy/resources/templates/policy_definitions/Extensions/ExtensionManifestV2Availability.yaml b/components/policy/resources/templates/policy_definitions/Extensions/ExtensionManifestV2Availability.yaml
+--- a/components/policy/resources/templates/policy_definitions/Extensions/ExtensionManifestV2Availability.yaml
++++ b/components/policy/resources/templates/policy_definitions/Extensions/ExtensionManifestV2Availability.yaml
+@@ -17,9 +17,8 @@ desc: |-
+ 
+   Extensions availability are still controlled by other policies.
+ supported_on:
+-- chrome.*:110-138
+-- chrome_os:110-138
+-deprecated: true
++- chrome.*:110-
++- chrome_os:110-
+ future_on:
+ - fuchsia
+ features:
 diff --git a/components/policy/resources/templates/policy_definitions/Miscellaneous/SyncDisabled.yaml b/components/policy/resources/templates/policy_definitions/Miscellaneous/SyncDisabled.yaml
 --- a/components/policy/resources/templates/policy_definitions/Miscellaneous/SyncDisabled.yaml
 +++ b/components/policy/resources/templates/policy_definitions/Miscellaneous/SyncDisabled.yaml
@@ -1007,6 +1036,17 @@ diff --git a/components/signin/internal/identity_manager/gaia_cookie_manager_ser
    // Pop the completed request.
    requests_.pop_front();
    OptimizeListAccounts();
+diff --git a/extensions/common/extension_features.cc b/extensions/common/extension_features.cc
+--- a/extensions/common/extension_features.cc
++++ b/extensions/common/extension_features.cc
+@@ -118,6 +118,7 @@ BASE_FEATURE(kExtensionWARForRedirect,
+ BASE_FEATURE(kExtensionsManifestV3Only,
+              "ExtensionsManifestV3Only",
+              base::FEATURE_DISABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_DISABLED(kExtensionsManifestV3Only);
+ 
+ BASE_FEATURE(kExtensionsMenuAccessControl,
+              "ExtensionsMenuAccessControl",
 diff --git a/google_apis/gaia/gaia_auth_fetcher.cc b/google_apis/gaia/gaia_auth_fetcher.cc
 --- a/google_apis/gaia/gaia_auth_fetcher.cc
 +++ b/google_apis/gaia/gaia_auth_fetcher.cc

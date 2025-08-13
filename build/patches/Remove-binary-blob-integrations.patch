@@ -93,10 +93,12 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/omnibox/common/BUILD.gn            |   1 -
  .../components/omnibox/OmniboxFeatures.java   |   8 -
  components/signin/public/android/BUILD.gn     |   3 -
- components/webauthn/android/BUILD.gn          |  16 -
+ components/webauthn/android/BUILD.gn          |  16 +-
  .../webauthn/AuthenticatorImpl.java           |  89 +--
  .../webauthn/ConditionalUiState.java          |  15 +
+ .../webauthn/GmsCoreGetCredentialsHelper.java |  72 +--
  .../components/webauthn/GmsCoreUtils.java     |  31 +-
+ .../webauthn/IdentityCredentialsHelper.java   |  77 +--
  .../webauthn/WebauthnModeProvider.java        |  15 -
  .../webauthn/cred_man/CredManHelper.java      |  15 +-
  .../cred_man/CredManMetricsHelper.java        |   2 +-
@@ -104,7 +106,6 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  content/public/android/BUILD.gn               |   4 -
  content/test/BUILD.gn                         |   4 -
  device/BUILD.gn                               |   3 -
- device/fido/features.cc                       |   1 +
  services/BUILD.gn                             |  10 -
  services/device/geolocation/BUILD.gn          |   4 -
  services/shape_detection/BUILD.gn             |   2 -
@@ -114,7 +115,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../gms/ChromiumPlayServicesAvailability.java |  10 +-
  third_party/androidx/customizations.gni       |  14 +-
  third_party/cardboard/BUILD.gn                |   4 -
- 90 files changed, 124 insertions(+), 2469 deletions(-)
+ 91 files changed, 130 insertions(+), 2611 deletions(-)
  create mode 100644 components/webauthn/android/java/src/org/chromium/components/webauthn/ConditionalUiState.java
 
 diff --git a/android_webview/expectations/system_webview_bundle.AndroidManifest.expected b/android_webview/expectations/system_webview_bundle.AndroidManifest.expected
@@ -3330,7 +3331,7 @@ diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/
      "java/src/org/chromium/components/webauthn/InternalAuthenticator.java",
      "java/src/org/chromium/components/webauthn/WebauthnBrowserBridge.java",
      "java/src/org/chromium/components/webauthn/WebauthnModeProvider.java",
-@@ -37,13 +35,7 @@ android_library("java") {
+@@ -37,12 +35,8 @@ android_library("java") {
      "java/src/org/chromium/components/webauthn/AuthenticatorImpl.java",
      "java/src/org/chromium/components/webauthn/Barrier.java",
      "java/src/org/chromium/components/webauthn/CreateConfirmationUiDelegate.java",
@@ -3340,11 +3341,11 @@ diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/
 -    "java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java",
 -    "java/src/org/chromium/components/webauthn/FidoErrorResponseCallback.java",
      "java/src/org/chromium/components/webauthn/FidoIntentSender.java",
--    "java/src/org/chromium/components/webauthn/GetAssertionResponseCallback.java",
++    "java/src/org/chromium/components/webauthn/ConditionalUiState.java",
+     "java/src/org/chromium/components/webauthn/GetAssertionResponseCallback.java",
      "java/src/org/chromium/components/webauthn/GetMatchingCredentialIdsResponseCallback.java",
      "java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java",
-     "java/src/org/chromium/components/webauthn/GmsCoreUtils.java",
-@@ -69,10 +61,6 @@ android_library("java") {
+@@ -69,10 +63,6 @@ android_library("java") {
    ]
  
    deps = [
@@ -3355,7 +3356,7 @@ diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/
      "//base:base_java",
      "//base:service_loader_java",
      "//base/version_info/android:version_constants_java",
-@@ -143,8 +131,6 @@ android_library("test_support_java") {
+@@ -143,8 +133,6 @@ android_library("test_support_java") {
  source_set("android") {
    sources = [
      "cred_man_support.h",
@@ -3364,7 +3365,7 @@ diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/
      "internal_authenticator_android.cc",
      "internal_authenticator_android.h",
      "webauthn_browser_bridge.cc",
-@@ -215,8 +201,6 @@ robolectric_library("junit") {
+@@ -215,8 +203,6 @@ robolectric_library("junit") {
    deps = [
      ":java",
      ":test_support_java",
@@ -3570,6 +3571,102 @@ new file mode 100644
 +    CANCEL_PENDING,
 +    CANCEL_PENDING_RP_ID_VALIDATION_COMPLETE,
 +}
+diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java
+--- a/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java
++++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java
+@@ -8,8 +8,6 @@ import android.os.SystemClock;
+ 
+ import androidx.annotation.VisibleForTesting;
+ 
+-import com.google.android.gms.tasks.OnFailureListener;
+-
+ import org.chromium.base.ResettersForTesting;
+ import org.chromium.base.metrics.RecordHistogram;
+ import org.chromium.build.annotations.NullMarked;
+@@ -69,6 +67,9 @@ public class GmsCoreGetCredentialsHelper {
+     public interface GetCredentialsCallback {
+         void onCredentialsReceived(List<WebauthnCredentialDetails> credentials);
+     }
++    public interface OnFailureListener {
++        void onFailure(Exception exception);
++    }
+ 
+     public static GmsCoreGetCredentialsHelper getInstance() {
+         if (sInstance == null) {
+@@ -98,72 +99,7 @@ public class GmsCoreGetCredentialsHelper {
+             Reason reason,
+             GetCredentialsCallback successCallback,
+             OnFailureListener failureCallback) {
+-        final long startTimeMs = SystemClock.elapsedRealtime();
+-        if (reason == Reason.GET_ASSERTION_NON_GOOGLE
+-                && GmsCoreUtils.isPasskeyCacheSupported()
+-                && DeviceFeatureMap.isEnabled(
+-                        DeviceFeatureList.WEBAUTHN_ANDROID_PASSKEY_CACHE_MIGRATION)) {
+-            Fido2ApiCallHelper.getInstance()
+-                    .invokePasskeyCacheGetCredentials(
+-                            authenticationContextProvider,
+-                            relyingPartyId,
+-                            (credentials) -> {
+-                                recordSuccessMetrics(
+-                                        credentials,
+-                                        reason,
+-                                        GmsCoreGetCredentialsResult.CACHE_SUCCESS,
+-                                        startTimeMs);
+-                                successCallback.onCredentialsReceived(credentials);
+-                            },
+-                            (e) ->
+-                                    getCredentialsFromFido2Api(
+-                                            authenticationContextProvider,
+-                                            relyingPartyId,
+-                                            reason,
+-                                            successCallback,
+-                                            failureCallback,
+-                                            GmsCoreGetCredentialsResult
+-                                                    .CACHE_FAILURE_FALLBACK_SUCCESS,
+-                                            GmsCoreGetCredentialsResult
+-                                                    .CACHE_FAILURE_FALLBACK_FAILURE,
+-                                            startTimeMs));
+-        } else {
+-            getCredentialsFromFido2Api(
+-                    authenticationContextProvider,
+-                    relyingPartyId,
+-                    reason,
+-                    successCallback,
+-                    failureCallback,
+-                    GmsCoreGetCredentialsResult.FIDO2_SUCCESS,
+-                    GmsCoreGetCredentialsResult.FIDO2_FAILURE,
+-                    startTimeMs);
+-        }
+-    }
+-
+-    private void getCredentialsFromFido2Api(
+-            AuthenticationContextProvider authenticationContextProvider,
+-            String relyingPartyId,
+-            Reason reason,
+-            GetCredentialsCallback successCallback,
+-            OnFailureListener failureCallback,
+-            @GmsCoreGetCredentialsResult int successMetric,
+-            @GmsCoreGetCredentialsResult int failureMetric,
+-            long startTimeMs) {
+-        Fido2ApiCallHelper.getInstance()
+-                .invokeFido2GetCredentials(
+-                        authenticationContextProvider,
+-                        relyingPartyId,
+-                        (credentials) -> {
+-                            recordSuccessMetrics(credentials, reason, successMetric, startTimeMs);
+-                            successCallback.onCredentialsReceived(credentials);
+-                        },
+-                        (e) -> {
+-                            RecordHistogram.recordEnumeratedHistogram(
+-                                    GET_CREDENTIALS_RESULT_HISTOGRAM,
+-                                    failureMetric,
+-                                    GmsCoreGetCredentialsResult.NUM_ENTRIES);
+-                            failureCallback.onFailure(e);
+-                        });
++        failureCallback.onFailure(new Exception());
+     }
+ 
+     private void recordSuccessMetrics(
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreUtils.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreUtils.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreUtils.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreUtils.java
@@ -3633,6 +3730,105 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
 -        sGmsCorePackageVersion = version;
 +        return false;
      }
+ }
+diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/IdentityCredentialsHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/IdentityCredentialsHelper.java
+--- a/components/webauthn/android/java/src/org/chromium/components/webauthn/IdentityCredentialsHelper.java
++++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/IdentityCredentialsHelper.java
+@@ -10,11 +10,6 @@ import android.os.Bundle;
+ 
+ import androidx.annotation.VisibleForTesting;
+ 
+-import com.google.android.gms.identitycredentials.CreateCredentialHandle;
+-import com.google.android.gms.identitycredentials.CreateCredentialRequest;
+-import com.google.android.gms.identitycredentials.IdentityCredentialClient;
+-import com.google.android.gms.identitycredentials.IdentityCredentialManager;
+-
+ import org.jni_zero.JNINamespace;
+ 
+ import org.chromium.base.Log;
+@@ -53,49 +48,8 @@ public class IdentityCredentialsHelper {
+             byte @Nullable [] clientDataHash,
+             MakeCredentialResponseCallback responseCallback,
+             ErrorCallback errorCallback) {
+-        try {
+-            IdentityCredentialClient client =
+-                    IdentityCredentialManager.Companion.getClient(
+-                            assertNonNull(mAuthenticationContextProvider.getContext()));
+-            client.createCredential(buildConditionalCreateRequest(options, origin, clientDataHash))
+-                    .addOnSuccessListener(
+-                            (handle) ->
+-                                    onConditionalCreateSuccess(
+-                                            clientDataJson,
+-                                            options,
+-                                            responseCallback,
+-                                            errorCallback,
+-                                            handle))
+-                    .addOnFailureListener(
+-                            (exception) -> onConditionalCreateFailure(errorCallback, exception));
+-        } catch (Exception e) {
+-            Log.d(TAG, "CreateCredential failed ", e);
+-            errorCallback.onResult(
+-                    AuthenticatorStatus.NOT_ALLOWED_ERROR, MakeCredentialOutcome.OTHER_FAILURE);
+-            return;
+-        }
+-    }
+-
+-    private void onConditionalCreateSuccess(
+-            byte @Nullable [] clientDataJson,
+-            PublicKeyCredentialCreationOptions options,
+-            MakeCredentialResponseCallback responseCallback,
+-            ErrorCallback errorCallback,
+-            CreateCredentialHandle handle) {
+-        Bundle data = assertNonNull(handle.getCreateCredentialResponse()).getData();
+-        MakeCredentialAuthenticatorResponse response =
+-                CredManHelper.parseCreateCredentialResponseData(data);
+-        if (response == null) {
+-            Log.d(TAG, "parseCreateCredentialResponseData() failed");
+-            errorCallback.onResult(
+-                    AuthenticatorStatus.NOT_ALLOWED_ERROR, MakeCredentialOutcome.OTHER_FAILURE);
+-            return;
+-        }
+-        if (clientDataJson != null) {
+-            response.info.clientDataJson = clientDataJson;
+-        }
+-        response.echoCredProps = options.credProps;
+-        responseCallback.onRegisterResponse(AuthenticatorStatus.SUCCESS, response);
++        errorCallback.onResult(
++                AuthenticatorStatus.NOT_ALLOWED_ERROR, MakeCredentialOutcome.OTHER_FAILURE);
+     }
+ 
+     private void onConditionalCreateFailure(ErrorCallback errorCallback, Exception e) {
+@@ -115,31 +69,4 @@ public class IdentityCredentialsHelper {
+                 CRED_MAN_PREFIX + "BUNDLE_KEY_CLIENT_DATA_HASH", clientDataHash);
+         return credentialData;
+     }
+-
+-    @VisibleForTesting
+-    public CreateCredentialRequest buildConditionalCreateRequest(
+-            PublicKeyCredentialCreationOptions options,
+-            String origin,
+-            byte @Nullable [] clientDataHash) {
+-        String requestJson =
+-                Fido2CredentialRequestJni.get().createOptionsToJson(options.serialize());
+-
+-        Bundle credentialData = requestBundle(requestJson, clientDataHash);
+-        Bundle displayInfo = new Bundle();
+-        displayInfo.putCharSequence(CRED_MAN_PREFIX + "BUNDLE_KEY_USER_ID", options.user.name);
+-        displayInfo.putCharSequence(
+-                CRED_MAN_PREFIX + "BUNDLE_KEY_USER_DISPLAY_NAME", options.user.displayName);
+-        credentialData.putBundle(CRED_MAN_PREFIX + "BUNDLE_KEY_REQUEST_DISPLAY_INFO", displayInfo);
+-
+-        Bundle candidateQueryData = requestBundle(requestJson, clientDataHash);
+-        candidateQueryData.putBoolean(CRED_MAN_PREFIX + "BUNDLE_KEY_IS_CONDITIONAL_REQUEST", true);
+-
+-        return new CreateCredentialRequest(
+-                CRED_MAN_PREFIX + "TYPE_PUBLIC_KEY_CREDENTIAL",
+-                credentialData,
+-                candidateQueryData,
+-                origin,
+-                requestJson,
+-                null);
+-    }
  }
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnModeProvider.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnModeProvider.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnModeProvider.java
@@ -3784,17 +3980,6 @@ diff --git a/device/BUILD.gn b/device/BUILD.gn
        "//base:base_java",
        "//base:base_java_test_support",
        "//base:base_junit_test_support",
-diff --git a/device/fido/features.cc b/device/fido/features.cc
---- a/device/fido/features.cc
-+++ b/device/fido/features.cc
-@@ -103,6 +103,7 @@ BASE_FEATURE(kWebAuthnEnclaveAuthenticatorDelay,
- BASE_FEATURE(kWebAuthnAmbientSignin,
-              "WebAuthenticationAmbientSignin",
-              base::FEATURE_DISABLED_BY_DEFAULT);
-+SET_CROMITE_FEATURE_DISABLED(kWebAuthnHybridLinking);
- 
- // This is a deprecation flag. It is now enabled by default, but we want to
- // disable it eventually.
 diff --git a/services/BUILD.gn b/services/BUILD.gn
 --- a/services/BUILD.gn
 +++ b/services/BUILD.gn

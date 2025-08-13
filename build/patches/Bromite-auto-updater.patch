@@ -36,12 +36,13 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../safety_hub/SafetyHubFetchService.java     |   5 -
  .../strings/android_chrome_strings.grd        |  23 +-
  .../ui/lens/lens_overlay_query_controller.cc  |   1 +
- .../endpoint_fetcher/endpoint_fetcher.cc      | 124 ++++++--
+ .../endpoint_fetcher/endpoint_fetcher.cc      | 123 ++++++--
  .../endpoint_fetcher/endpoint_fetcher.h       |  25 ++
  components/manta/base_provider.cc             |   1 +
+ .../composebox/composebox_query_controller.cc |   2 +-
  .../Bromite-auto-updater.inc                  |   3 +
  .../Bromite-auto-updater.inc                  |   1 +
- 33 files changed, 1235 insertions(+), 92 deletions(-)
+ 34 files changed, 1235 insertions(+), 93 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/CromiteUpdateStatusProvider.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/BromiteInlineUpdateController.java
  create mode 100644 chrome/browser/endpoint_fetcher/BUILD.gn
@@ -1767,7 +1768,15 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
    }
    return HttpMethod::kUndefined;
  }
-@@ -150,9 +159,11 @@ EndpointFetcher::EndpointFetcher(
+@@ -110,6 +119,7 @@ EndpointFetcher::EndpointFetcher(
+     RequestParams request_params)
+     : url_loader_factory_(url_loader_factory),
+       identity_manager_(identity_manager),
++      intercept_redirect_(false),
+       request_params_(std::move(request_params)) {
+   if (request_params_.auth_type() == OAUTH) {
+     DCHECK(identity_manager_)
+@@ -150,9 +160,11 @@ EndpointFetcher::EndpointFetcher(
      const std::vector<std::string>& headers,
      const std::vector<std::string>& cors_exempt_headers,
      version_info::Channel channel,
@@ -1779,7 +1788,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
        request_params_(EndpointFetcher::RequestParams::Builder(request_params)
                            .SetAuthType(CHROME_API_KEY)
                            .SetUrl(url)
-@@ -171,6 +182,7 @@ EndpointFetcher::EndpointFetcher(
+@@ -171,6 +183,7 @@ EndpointFetcher::EndpointFetcher(
      const net::NetworkTrafficAnnotationTag& annotation_tag)
      : url_loader_factory_(url_loader_factory),
        identity_manager_(nullptr),
@@ -1787,7 +1796,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
        request_params_(EndpointFetcher::RequestParams::Builder(HttpMethod::kGet,
                                                                annotation_tag)
                            .SetAuthType(NO_AUTH)
-@@ -193,6 +205,7 @@ EndpointFetcher::EndpointFetcher(
+@@ -193,6 +206,7 @@ EndpointFetcher::EndpointFetcher(
      signin::ConsentLevel consent_level)
      : url_loader_factory_(url_loader_factory),
        identity_manager_(identity_manager),
@@ -1795,7 +1804,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
        request_params_(
            EndpointFetcher::RequestParams::Builder(GetHttpMethod(http_method),
                                                    annotation_tag)
-@@ -212,6 +225,7 @@ EndpointFetcher::EndpointFetcher(
+@@ -212,6 +226,7 @@ EndpointFetcher::EndpointFetcher(
  EndpointFetcher::EndpointFetcher(
      const net::NetworkTrafficAnnotationTag& annotation_tag)
      : identity_manager_(nullptr),
@@ -1803,7 +1812,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
        request_params_(
            EndpointFetcher::RequestParams::Builder(HttpMethod::kUndefined,
                                                    annotation_tag)
-@@ -219,6 +233,27 @@ EndpointFetcher::EndpointFetcher(
+@@ -219,6 +234,25 @@ EndpointFetcher::EndpointFetcher(
                .SetSanitizeResponse(true)
                .Build()) {}
  
@@ -1818,8 +1827,6 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
 +    : url_loader_factory_(url_loader_factory),
 +      identity_manager_(nullptr),
 +      intercept_redirect_(intercept_redirect),
-+      consent_level_(std::nullopt),
-+      sanitize_response_(false),
 +      request_params_(
 +          EndpointFetcher::RequestParams::Builder(GetHttpMethod(http_method),
 +                                                  annotation_tag)
@@ -1831,7 +1838,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  EndpointFetcher::~EndpointFetcher() = default;
  
  void EndpointFetcher::Fetch(EndpointFetcherCallback endpoint_fetcher_callback) {
-@@ -301,13 +336,10 @@ void EndpointFetcher::PerformHttpRequest(
+@@ -301,13 +335,10 @@ void EndpointFetcher::PerformHttpRequest(
    auto resource_request = std::make_unique<network::ResourceRequest>();
    resource_request->method = GetHttpMethodString(request_params_.http_method());
    resource_request->url = request_params_.url();
@@ -1848,7 +1855,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
    // Add Content-Type header if post data is present.
    if (request_params_.http_method() == HttpMethod::kPost &&
        request_params_.post_data()) {
-@@ -346,8 +378,23 @@ void EndpointFetcher::PerformHttpRequest(
+@@ -346,8 +377,23 @@ void EndpointFetcher::PerformHttpRequest(
        break;
    }
  
@@ -1872,7 +1879,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  
    if (request_params_.http_method() == HttpMethod::kPost &&
        request_params_.post_data()) {
-@@ -361,9 +408,18 @@ void EndpointFetcher::PerformHttpRequest(
+@@ -361,9 +407,18 @@ void EndpointFetcher::PerformHttpRequest(
  
    simple_url_loader_->SetRetryOptions(GetMaxRetries(),
                                        network::SimpleURLLoader::RETRY_ON_5XX);
@@ -1894,7 +1901,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
    network::SimpleURLLoader::BodyAsStringCallbackDeprecated
        body_as_string_callback = base::BindOnce(
            &EndpointFetcher::OnResponseFetched, weak_ptr_factory_.GetWeakPtr(),
-@@ -453,21 +509,6 @@ void EndpointFetcher::OnSanitizationResult(
+@@ -453,21 +508,6 @@ void EndpointFetcher::OnSanitizationResult(
    std::move(endpoint_fetcher_callback).Run(std::move(response));
  }
  
@@ -1916,7 +1923,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  int EndpointFetcher::GetMaxRetries() const {
    if (!request_params_.max_retries.has_value()) {
      return kNumRetries;
-@@ -493,4 +534,39 @@ std::string EndpointFetcher::GetUrlForTesting() {
+@@ -493,4 +533,39 @@ std::string EndpointFetcher::GetUrlForTesting() {
    return request_params_.url().spec();
  }
  
@@ -2056,6 +2063,18 @@ diff --git a/components/manta/base_provider.cc b/components/manta/base_provider.
        EndpointFetcher::RequestParams::Builder(kHttpMethod, annotation_tag)
            .Build());
  }
+diff --git a/components/omnibox/composebox/composebox_query_controller.cc b/components/omnibox/composebox/composebox_query_controller.cc
+--- a/components/omnibox/composebox/composebox_query_controller.cc
++++ b/components/omnibox/composebox/composebox_query_controller.cc
+@@ -312,7 +312,7 @@ ComposeboxQueryController::CreateEndpointFetcher(
+       /*post_data=*/std::move(request_string),
+       /*headers=*/request_headers,
+       /*cors_exempt_headers=*/cors_exempt_headers,
+-      /*channel=*/channel_,
++      /*channel=*/channel_, kTrafficAnnotationTag,
+       /*request_params=*/
+       EndpointFetcher::RequestParams::Builder(http_method,
+                                               kTrafficAnnotationTag)
 diff --git a/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Bromite-auto-updater.inc b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Bromite-auto-updater.inc
 new file mode 100644
 --- /dev/null
