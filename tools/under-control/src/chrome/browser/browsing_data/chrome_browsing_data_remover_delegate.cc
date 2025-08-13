@@ -24,6 +24,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
+#include "base/notimplemented.h"
 #include "base/strings/strcat.h"
 #include "base/task/bind_post_task.h"
 #include "base/task/thread_pool.h"
@@ -87,6 +88,7 @@
 #include "chrome/common/buildflags.h"
 #include "chrome/common/url_constants.h"
 #include "components/autofill/core/browser/data_manager/addresses/address_data_manager.h"
+#include "components/autofill/core/browser/data_manager/autofill_ai/entity_data_manager.h"
 #include "components/autofill/core/browser/data_manager/payments/payments_data_manager.h"
 #include "components/autofill/core/browser/data_manager/personal_data_manager.h"
 #include "components/autofill/core/browser/strike_databases/strike_database.h"
@@ -95,6 +97,7 @@
 #include "components/autofill/core/common/autofill_payments_features.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/browsing_data/content/browsing_data_helper.h"
+#include "components/browsing_data/core/features.h"
 #include "components/content_settings/core/browser/content_settings_registry.h"
 #include "components/content_settings/core/browser/content_settings_utils.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
@@ -762,6 +765,21 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
       browser_bound_key_deleter->RemoveInvalidBBKs();
     }
 #endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+    if (base::FeatureList::IsEnabled(
+            browsing_data::features::kDbdRevampDesktop) &&
+        ash::SystemProxyManager::Get()) {
+      // Sends a request to the System-proxy daemon to clear the proxy user
+      // credentials. System-proxy retrieves proxy username and password from
+      // the NetworkService, but not the creation time of the credentials. The
+      // |ClearUserCredentials| request will remove all the cached proxy
+      // credentials. If credentials prior to |delete_begin_| are removed from
+      // System-proxy, the daemon will send a D-Bus request to Chrome to fetch
+      // them from the NetworkService when needed.
+      ash::SystemProxyManager::Get()->ClearUserCredentials();
+    }
+#endif  // BUILDFLAG(IS_CHROMEOS)
   }
 
   //////////////////////////////////////////////////////////////////////////////
@@ -978,17 +996,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
             CreateTaskCompletionClosureForMojo(
                 TracingDataType::kHttpAuthCache));
 
-    scoped_refptr<payments::PaymentManifestWebDataService> web_data_service =
-        webdata_services::WebDataServiceWrapperFactory::
-            GetPaymentManifestWebDataServiceForBrowserContext(
-                profile_, ServiceAccessType::EXPLICIT_ACCESS);
-    if (web_data_service) {
-      web_data_service->ClearSecurePaymentConfirmationCredentials(
-          delete_begin_, delete_end_,
-          CreateTaskCompletionClosure(
-              TracingDataType::kSecurePaymentConfirmationCredentials));
-    }
-
 #if BUILDFLAG(IS_CHROMEOS)
     if (ash::SystemProxyManager::Get()) {
       // Sends a request to the System-proxy daemon to clear the proxy user
@@ -1117,6 +1124,26 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
       web_data_service->GetDBTaskRunner()->PostTaskAndReply(
           FROM_HERE, base::DoNothing(),
           CreateTaskCompletionClosure(TracingDataType::kAutofillData));
+    }
+  }
+
+  if ((remove_mask & constants::DATA_TYPE_PASSWORDS)
+#if !BUILDFLAG(IS_ANDROID)
+      ||
+      ((remove_mask & constants::DATA_TYPE_FORM_DATA) &&
+       base::FeatureList::IsEnabled(browsing_data::features::kDbdRevampDesktop))
+#endif  // !BUILDFLAG(IS_ANDROID)
+  ) {
+    scoped_refptr<payments::PaymentManifestWebDataService>
+        payment_web_data_service =
+            webdata_services::WebDataServiceWrapperFactory::
+                GetPaymentManifestWebDataServiceForBrowserContext(
+                    profile_, ServiceAccessType::EXPLICIT_ACCESS);
+    if (payment_web_data_service) {
+      payment_web_data_service->ClearSecurePaymentConfirmationCredentials(
+          delete_begin_, delete_end_,
+          CreateTaskCompletionClosure(
+              TracingDataType::kSecurePaymentConfirmationCredentials));
     }
   }
 

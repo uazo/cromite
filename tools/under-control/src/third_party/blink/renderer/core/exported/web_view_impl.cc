@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/debug/alias.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
 #include "base/memory/scoped_refptr.h"
@@ -250,16 +251,6 @@ const double WebView::kMaxTextSizeMultiplier = 3.0;
 HashSet<WebViewImpl*>& WebViewImpl::AllInstances() {
   DEFINE_STATIC_LOCAL(HashSet<WebViewImpl*>, all_instances, ());
   return all_instances;
-}
-
-static bool g_should_use_external_popup_menus = false;
-
-void WebView::SetUseExternalPopupMenus(bool use_external_popup_menus) {
-  g_should_use_external_popup_menus = use_external_popup_menus;
-}
-
-bool WebViewImpl::UseExternalPopupMenus() {
-  return g_should_use_external_popup_menus;
 }
 
 namespace {
@@ -800,8 +791,8 @@ float WebViewImpl::MaximumLegiblePageScale() const {
 }
 
 void WebViewImpl::ComputeScaleAndScrollForBlockRect(
-    const gfx::Point& hit_point_in_root_frame,
-    const gfx::Rect& block_rect_in_root_frame,
+    gfx::Rect hit_rect_in_root_frame,
+    gfx::Rect block_rect_in_root_frame,
     float padding,
     float default_scale_when_already_legible,
     float& scale,
@@ -810,9 +801,7 @@ void WebViewImpl::ComputeScaleAndScrollForBlockRect(
   scale = PageScaleFactor();
   scroll = gfx::Point();
 
-  gfx::Rect rect = block_rect_in_root_frame;
-
-  if (!rect.IsEmpty()) {
+  if (!block_rect_in_root_frame.IsEmpty()) {
     float default_margin = doubleTapZoomContentDefaultMargin;
     float minimum_margin = doubleTapZoomContentMinimumMargin;
     // We want the margins to have the same physical size, which means we
@@ -821,11 +810,15 @@ void WebViewImpl::ComputeScaleAndScrollForBlockRect(
     // we express them as a fraction of the target rectangle: this will be
     // correct if we end up fully zooming to it, and won't matter if we
     // don't.
-    rect = WidenRectWithinPageBounds(
-        rect, static_cast<int>(default_margin * rect.width() / size_.width()),
-        static_cast<int>(minimum_margin * rect.width() / size_.width()));
+    block_rect_in_root_frame = WidenRectWithinPageBounds(
+        block_rect_in_root_frame,
+        base::ClampFloor(default_margin * block_rect_in_root_frame.width() /
+                         size_.width()),
+        base::ClampFloor(minimum_margin * block_rect_in_root_frame.width() /
+                         size_.width()));
     // Fit block to screen, respecting limits.
-    scale = static_cast<float>(size_.width()) / rect.width();
+    scale =
+        static_cast<float>(size_.width()) / block_rect_in_root_frame.width();
     scale = std::min(scale, MaximumLegiblePageScale());
     if (PageScaleFactor() < default_scale_when_already_legible)
       scale = std::max(scale, default_scale_when_already_legible);
@@ -839,32 +832,57 @@ void WebViewImpl::ComputeScaleAndScrollForBlockRect(
   // double-tap zoom strategy (fitting the containing block to the screen)
   // though.
 
-  float screen_width = size_.width() / scale;
-  float screen_height = size_.height() / scale;
+  float viewport_width = size_.width() / scale;
+  float viewport_height = size_.height() / scale;
 
-  // Scroll to vertically align the block.
-  if (rect.height() < screen_height) {
-    // Vertically center short blocks.
-    rect.Offset(0, -0.5 * (screen_height - rect.height()));
+  if (RuntimeEnabledFeatures::AlignZoomToCenterEnabled()) {
+    const float kMarginPadding = 20 / scale;
+    hit_rect_in_root_frame.Intersect(
+        gfx::Rect(hit_rect_in_root_frame.origin(),
+                  gfx::Size(viewport_width - kMarginPadding,
+                            viewport_height - kMarginPadding)));
+    // If the block fits in the viewport, center the block.
+    // Otherwise center the target point.
+    gfx::Point center_point_in_root_frame(
+        block_rect_in_root_frame.width() <= viewport_width
+            ? block_rect_in_root_frame.CenterPoint().x()
+            : hit_rect_in_root_frame.CenterPoint().x(),
+        block_rect_in_root_frame.height() <= viewport_height
+            ? block_rect_in_root_frame.CenterPoint().y()
+            : hit_rect_in_root_frame.CenterPoint().y());
+    gfx::Vector2d viewport_center(viewport_width * 0.5, viewport_height * 0.5);
+    gfx::Point frame_offset = center_point_in_root_frame - viewport_center;
+    scroll = MainFrameImpl()->GetFrameView()->RootFrameToDocument(frame_offset);
   } else {
-    // Ensure position we're zooming to (+ padding) isn't off the bottom of
-    // the screen.
-    rect.set_y(std::max<float>(
-        rect.y(), hit_point_in_root_frame.y() + padding - screen_height));
-  }  // Otherwise top align the block.
+    // TODO(crbug.com/422382412): Remove this branch once the above
+    // lands in stable.
+    // Scroll to vertically align the block.
+    if (block_rect_in_root_frame.height() < viewport_height) {
+      // Vertically center short blocks.
+      block_rect_in_root_frame.Offset(
+          0, -0.5 * (viewport_height - block_rect_in_root_frame.height()));
+    } else {
+      // Ensure position we're zooming to (+ padding) isn't off the bottom of
+      // the screen.
+      block_rect_in_root_frame.set_y(std::max<float>(
+          block_rect_in_root_frame.y(),
+          hit_rect_in_root_frame.y() + padding - viewport_height));
+    }  // Otherwise top align the block.
 
-  // Do the same thing for horizontal alignment.
-  if (rect.width() < screen_width) {
-    rect.Offset(-0.5 * (screen_width - rect.width()), 0);
-  } else {
-    rect.set_x(std::max<float>(
-        rect.x(), hit_point_in_root_frame.x() + padding - screen_width));
+    // Do the same thing for horizontal alignment.
+    if (block_rect_in_root_frame.width() < viewport_width) {
+      block_rect_in_root_frame.Offset(
+          -0.5 * (viewport_width - block_rect_in_root_frame.width()), 0);
+    } else {
+      block_rect_in_root_frame.set_x(std::max<float>(
+          block_rect_in_root_frame.x(),
+          hit_rect_in_root_frame.x() + padding - viewport_width));
+    }
+    scroll.set_x(block_rect_in_root_frame.x());
+    scroll.set_y(block_rect_in_root_frame.y());
+    scale = ClampPageScaleFactorToLimits(scale);
+    scroll = MainFrameImpl()->GetFrameView()->RootFrameToDocument(scroll);
   }
-  scroll.set_x(rect.x());
-  scroll.set_y(rect.y());
-
-  scale = ClampPageScaleFactorToLimits(scale);
-  scroll = MainFrameImpl()->GetFrameView()->RootFrameToDocument(scroll);
   scroll =
       GetPage()->GetVisualViewport().ClampDocumentOffsetAtScale(scroll, scale);
 }
@@ -950,9 +968,9 @@ void WebViewImpl::AnimateDoubleTapZoom(const gfx::Point& point_in_root_frame,
 
   float scale;
   gfx::Point scroll;
-
+  gfx::Rect rect_in_root_frame(point_in_root_frame, gfx::Size(1, 1));
   ComputeScaleAndScrollForBlockRect(
-      point_in_root_frame, rect_to_zoom, touchPointPadding,
+      rect_in_root_frame, rect_to_zoom, touchPointPadding,
       MinimumPageScaleFactor() * doubleTapZoomAlreadyLegibleRatio, scale,
       scroll);
 
@@ -1007,7 +1025,7 @@ void WebViewImpl::ZoomToFindInPageRect(const gfx::Rect& rect_in_root_frame) {
   float scale;
   gfx::Point scroll;
 
-  ComputeScaleAndScrollForBlockRect(rect_in_root_frame.origin(), block_bounds,
+  ComputeScaleAndScrollForBlockRect(rect_in_root_frame, block_bounds,
                                     nonUserInitiatedPointPadding,
                                     MinimumPageScaleFactor(), scale, scroll);
 
@@ -1905,6 +1923,10 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
 
   RuntimeEnabledFeatures::SetPaymentRequestEnabled(
       prefs.payment_request_enabled);
+
+  if (prefs.api_based_fingerprinting_interventions_enabled) {
+    RuntimeEnabledFeatures::SetReduceScreenSizeEnabled(true);
+  }
 }
 
 void WebViewImpl::ThemeChanged() {
@@ -3836,35 +3858,6 @@ Element* WebViewImpl::FocusedElement() const {
     return nullptr;
 
   return document->FocusedElement();
-}
-
-WebHitTestResult WebViewImpl::HitTestResultForTap(
-    const gfx::Point& tap_point_window_pos,
-    const gfx::Size& tap_area) {
-  auto* main_frame = DynamicTo<LocalFrame>(page_->MainFrame());
-  if (!main_frame)
-    return HitTestResult();
-
-  WebGestureEvent tap_event(WebInputEvent::Type::kGestureTap,
-                            WebInputEvent::kNoModifiers, base::TimeTicks::Now(),
-                            WebGestureDevice::kTouchscreen);
-  // GestureTap is only ever from a touchscreen.
-  tap_event.SetPositionInWidget(gfx::PointF(tap_point_window_pos));
-  tap_event.data.tap.tap_count = 1;
-  tap_event.data.tap.width = tap_area.width();
-  tap_event.data.tap.height = tap_area.height();
-
-  WebGestureEvent scaled_event =
-      TransformWebGestureEvent(MainFrameImpl()->GetFrameView(), tap_event);
-
-  HitTestResult result =
-      main_frame->GetEventHandler()
-          .HitTestResultForGestureEvent(
-              scaled_event, HitTestRequest::kReadOnly | HitTestRequest::kActive)
-          .GetHitTestResult();
-
-  result.SetToShadowHostIfInUAShadowRoot();
-  return result;
 }
 
 void WebViewImpl::SetTabsToLinks(bool enable) {

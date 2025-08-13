@@ -14,6 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/callback_helpers.h"
 #include "base/no_destructor.h"
+#include "base/notimplemented.h"
 #include "base/notreached.h"
 #include "base/supports_user_data.h"
 #include "base/task/sequenced_task_runner.h"
@@ -724,6 +725,12 @@ bool ContentBrowserClient::IsPrefetchWithServiceWorkerAllowed(
   return true;
 }
 
+bool ContentBrowserClient::IsServiceWorkerSyntheticResponseAllowed(
+    content::BrowserContext* browser_context,
+    const GURL& url) {
+  return false;
+}
+
 void ContentBrowserClient::GrantCookieAccessDueToHeuristic(
     content::BrowserContext* browser_context,
     const net::SchemefulSite& top_frame_site,
@@ -736,6 +743,10 @@ bool ContentBrowserClient::AreThirdPartyCookiesGenerallyAllowed(
     content::WebContents* web_contents) {
   return true;
 }
+
+void ContentBrowserClient::PrewarmServiceWorkerRegistrationForDSE(
+    BrowserContext* browser_context,
+    ServiceWorkerContext& service_worker_context) {}
 
 bool ContentBrowserClient::CanSendSCTAuditingReport(
     BrowserContext* browser_context) {
@@ -957,7 +968,7 @@ ContentBrowserClient::GetDevToolsBackgroundServiceExpirations(
 }
 
 std::unique_ptr<TracingDelegate> ContentBrowserClient::CreateTracingDelegate() {
-  return nullptr;
+  return std::make_unique<TracingDelegate>();
 }
 
 bool ContentBrowserClient::IsSystemWideTracingEnabled() {
@@ -1778,16 +1789,6 @@ ContentBrowserClient::CreateResponsivenessCalculatorDelegate() {
   return nullptr;
 }
 
-bool ContentBrowserClient::CanBackForwardCachedPageReceiveCookieChanges(
-    content::BrowserContext& browser_context,
-    const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
-    const url::Origin& top_frame_origin,
-    const net::CookieSettingOverrides overrides,
-    base::optional_ref<const net::CookiePartitionKey> cookie_partition_key) {
-  return true;
-}
-
 void ContentBrowserClient::GetCloudIdentifiers(
     const storage::FileSystemURL& url,
     FileSystemAccessPermissionContext::HandleType handle_type,
@@ -2000,6 +2001,12 @@ ContentBrowserClient::MaybeCreateKeepAliveRequestTracker(
     KeepAliveRequestTracker::IsContextDetachedCallback
         is_context_detached_callback) {
   return nullptr;
+}
+
+std::optional<std::vector<std::u16string>>
+ContentBrowserClient::GetClipboardTypesIfPolicyApplied(
+    const ui::ClipboardSequenceNumberToken& seqno) {
+  return std::nullopt;
 }
 
 }  // namespace content

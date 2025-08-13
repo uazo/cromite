@@ -23,6 +23,7 @@
 #include "base/command_line.h"
 #include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
+#include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -269,6 +270,10 @@
 #include "content/public/browser/document_picture_in_picture_window_controller.h"
 #include "content/public/browser/picture_in_picture_window_controller.h"
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+#include "content/browser/ios/nfc_host.h"
+#endif
 
 namespace content {
 
@@ -2086,6 +2091,25 @@ RenderWidgetHostView* WebContentsImpl::GetTopLevelRenderWidgetHostView() {
   return GetRenderManager()->GetRenderWidgetHostView();
 }
 
+RenderWidgetHost* WebContentsImpl::FindWidgetAtPoint(const gfx::PointF& point) {
+  if (GetOuterWebContents()) {
+    return GetOuterWebContents()->FindWidgetAtPoint(point);
+  }
+  gfx::PointF transformed_point;
+  input::RenderWidgetHostViewInput* rwhvi =
+      GetInputEventRouter()->GetRenderWidgetHostViewInputAtPoint(
+          static_cast<RenderWidgetHostViewBase*>(
+              GetTopLevelRenderWidgetHostView()),
+          point, &transformed_point);
+
+  RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+      static_cast<RenderWidgetHostViewBase*>(rwhvi)->GetRenderWidgetHost());
+  if (!widget_host) {
+    return nullptr;
+  }
+  return widget_host;
+}
+
 WebContentsView* WebContentsImpl::GetView() const {
   return view_.get();
 }
@@ -3771,10 +3795,6 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
 
 #if BUILDFLAG(IS_ANDROID)
   prefs.device_scale_adjustment = GetDeviceScaleAdjustment(min_width_in_dp);
-
-  if (base::FeatureList::IsEnabled(blink::features::kForceOffTextAutosizing)) {
-    prefs.text_autosizing_enabled = false;
-  }
 #endif  // BUILDFLAG(IS_ANDROID)
 
   // GuestViews in the same StoragePartition need to find each other's frames.
@@ -5993,9 +6013,9 @@ device::mojom::WakeLockContext* WebContentsImpl::GetWakeLockContext() {
   return wake_lock_context_host_->GetWakeLockContext();
 }
 
-#if BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(IS_ANDROID) || (BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS))
 void WebContentsImpl::GetNFC(
-    RenderFrameHost* render_frame_host,
+    RenderFrameHostImpl* render_frame_host,
     mojo::PendingReceiver<device::mojom::NFC> receiver) {
   if (!nfc_host_) {
     nfc_host_ = std::make_unique<NFCHost>(this);
@@ -8134,6 +8154,13 @@ void WebContentsImpl::UnregisterProtocolHandler(RenderFrameHostImpl* source,
   }
 
   delegate_->UnregisterProtocolHandler(source, protocol, url, user_gesture);
+}
+
+base::ScopedClosureRunner WebContentsImpl::MarkAudible() {
+  auto audible_client = audio_stream_monitor_.RegisterAudibleClient(
+      GetPrimaryMainFrame()->GetGlobalId());
+  return base::ScopedClosureRunner(
+      base::DoNothingWithBoundArgs(std::move(audible_client)));
 }
 
 void WebContentsImpl::DomOperationResponse(RenderFrameHost* render_frame_host,
@@ -10684,8 +10711,6 @@ void WebContentsImpl::UpdateWindowControlsOverlay(
           GetPrimaryMainFrame()->GetRenderWidgetHost()) {
     render_widget_host->SynchronizeVisualProperties();
   }
-
-  view_->UpdateWindowControlsOverlay(bounding_rect);
 }
 
 BrowserPluginEmbedder* WebContentsImpl::GetBrowserPluginEmbedder() const {
@@ -11396,6 +11421,13 @@ void WebContentsImpl::IsClipboardPasteAllowedWrapperCallback(
   --suppress_unresponsive_renderer_count_;
 }
 
+std::optional<std::vector<std::u16string>>
+WebContentsImpl::GetClipboardTypesIfPolicyApplied(
+    const ui::ClipboardSequenceNumberToken& seqno) {
+  return GetContentClient()->browser()->GetClipboardTypesIfPolicyApplied(
+      seqno);
+}
+
 void WebContentsImpl::BindScreenOrientation(
     RenderFrameHost* rfh,
     mojo::PendingAssociatedReceiver<device::mojom::ScreenOrientation>
@@ -11982,9 +12014,11 @@ std::unique_ptr<PrefetchHandle> WebContentsImpl::StartPrefetch(
     const blink::mojom::Referrer& referrer,
     const std::optional<url::Origin>& referring_origin,
     std::optional<net::HttpNoVarySearchData> no_vary_search_hint,
+    std::optional<PrefetchPriority> priority,
     scoped_refptr<PreloadPipelineInfo> preload_pipeline_info,
     base::WeakPtr<PreloadingAttempt> attempt,
-    std::optional<PreloadingHoldbackStatus> holdback_status_override) {
+    std::optional<PreloadingHoldbackStatus> holdback_status_override,
+    std::optional<base::TimeDelta> ttl) {
   if (!base::FeatureList::IsEnabled(
           features::kPrefetchBrowserInitiatedTriggers)) {
     return nullptr;
@@ -12000,9 +12034,9 @@ std::unique_ptr<PrefetchHandle> WebContentsImpl::StartPrefetch(
                              use_prefetch_proxy);
   auto container = std::make_unique<PrefetchContainer>(
       *this, prefetch_url, prefetch_type, embedder_histogram_suffix, referrer,
-      referring_origin, std::move(no_vary_search_hint),
+      referring_origin, std::move(no_vary_search_hint), std::move(priority),
       std::move(preload_pipeline_info), std::move(attempt),
-      holdback_status_override);
+      holdback_status_override, std::move(ttl));
 
   return prefetch_service->AddPrefetchContainerWithHandle(std::move(container));
 }
