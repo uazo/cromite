@@ -1,0 +1,136 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Mon, 18 Aug 2025 13:46:14 +0000
+Subject: Enable snackbar swipe
+
+Allows swipe of snackbar notifications
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ .../ui/messages/snackbar/SnackbarView.java    | 78 ++++++++++++++++++-
+ 1 file changed, 76 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/ui/messages/android/java/src/org/chromium/chrome/browser/ui/messages/snackbar/SnackbarView.java b/chrome/browser/ui/messages/android/java/src/org/chromium/chrome/browser/ui/messages/snackbar/SnackbarView.java
+--- a/chrome/browser/ui/messages/android/java/src/org/chromium/chrome/browser/ui/messages/snackbar/SnackbarView.java
++++ b/chrome/browser/ui/messages/android/java/src/org/chromium/chrome/browser/ui/messages/snackbar/SnackbarView.java
+@@ -10,9 +10,11 @@ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+ import android.animation.ObjectAnimator;
+ import android.app.Activity;
++import android.content.Context;
+ import android.graphics.Rect;
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.GradientDrawable;
++import android.view.MotionEvent;
+ import android.view.Gravity;
+ import android.view.LayoutInflater;
+ import android.view.SurfaceView;
+@@ -35,6 +37,9 @@ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerFactory;
+ import org.chromium.chrome.ui.messages.R;
+ import org.chromium.components.browser_ui.edge_to_edge.EdgeToEdgePadAdjuster;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener;
++import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.ScrollDirection;
++import org.chromium.components.browser_ui.widget.gesture.SwipeGestureListener.SwipeHandler;
+ import org.chromium.components.browser_ui.widget.text.TemplatePreservingTextView;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.insets.InsetObserver;
+@@ -47,7 +52,7 @@ import org.chromium.ui.interpolators.Interpolators;
+ // TODO (jianli): Change this class and its methods back to package protected after the offline
+ // indicator experiment is done.
+ @NullMarked
+-public class SnackbarView implements InsetObserver.WindowInsetObserver {
++public class SnackbarView implements InsetObserver.WindowInsetObserver, View.OnTouchListener, SwipeHandler {
+     private static final int MAX_LINES = 5;
+ 
+     private final @Nullable WindowAndroid mWindowAndroid;
+@@ -88,6 +93,16 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
+                 }
+             };
+ 
++    private final SwipeGestureListenerImpl mSwipeGestureListener;
++    private final OnClickListener mDismissListener;
++    private final float mHorizontalTranslationPx;
++
++    private class SwipeGestureListenerImpl extends SwipeGestureListener {
++        public SwipeGestureListenerImpl(Context context, SwipeHandler handler) {
++            super(context, handler);
++        }
++    }
++
+     /**
+      * Creates an instance of the {@link SnackbarView}.
+      *
+@@ -149,7 +164,12 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
+ 
+         // Make sure clicks are not consumed by content beneath the container view.
+         mContainerView.setClickable(true);
+-
++        mSwipeGestureListener = new SwipeGestureListenerImpl(mContainerView.getContext(), this);
++        if (!snackbar.isTypePersistent()) {
++            mContainerView.setOnTouchListener(this);
++        }
++        mDismissListener = dismissListener;
++        mHorizontalTranslationPx = mContainerView.getResources().getDisplayMetrics().widthPixels / 3;
+         mSnackbarView = mContainerView.findViewById(R.id.snackbar);
+         mAnimationDuration =
+                 mContainerView.getResources().getInteger(android.R.integer.config_mediumAnimTime);
+@@ -502,4 +522,58 @@ public class SnackbarView implements InsetObserver.WindowInsetObserver {
+     public @Nullable EdgeToEdgePadAdjuster getEdgeToEdgePadAdjusterForTesting() {
+         return mEdgeToEdgePadAdjuster;
+     }
++
++    @Override
++    public boolean onTouch(View v, MotionEvent event) {
++        return mSwipeGestureListener.onTouchEvent(event);
++    }
++
++    private boolean mSwipeStarted;
++    private float mCurrentSwipePosition;
++
++    @Override
++    public void onSwipeStarted(@ScrollDirection int direction, MotionEvent ev) {
++        mContainerView.setTranslationX(0);
++        mSwipeStarted = true;
++    }
++
++    @Override
++    public void onSwipeUpdated(MotionEvent current, float tx, float ty, float dx, float dy) {
++        if (!mSwipeStarted) return;
++        mCurrentSwipePosition = Math.abs(tx);
++        mContainerView.setTranslationX(tx);
++    }
++
++     @Override
++    public void onSwipeFinished() {
++        if (!mSwipeStarted) return;
++        mSwipeStarted = false;
++        if (mCurrentSwipePosition >= mHorizontalTranslationPx) {
++            mDismissListener.onClick(mDismissButtonView);
++            return;
++        }
++        mContainerView.setTranslationX(0);
++    }
++
++    @Override
++    public void onFling(
++            @ScrollDirection int direction,
++            MotionEvent current,
++            float tx,
++            float ty,
++            float vx,
++            float vy) {
++        if (!mSwipeStarted) return;
++        mSwipeStarted = false;
++        if (mCurrentSwipePosition >= mHorizontalTranslationPx) {
++            mDismissListener.onClick(mDismissButtonView);
++            return;
++        }
++        mContainerView.setTranslationX(0);
++    }
++
++    @Override
++    public boolean isSwipeEnabled(@ScrollDirection int direction) {
++        return direction == ScrollDirection.LEFT || direction == ScrollDirection.RIGHT;
++    }
+ }
+--
