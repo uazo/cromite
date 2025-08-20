@@ -25,7 +25,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../extension_safety_check_utils.cc           |  3 +-
  .../browser/extensions/extension_service.cc   |  4 +-
  .../chrome_extension_downloader_factory.cc    |  1 -
- .../extensions/updater/extension_updater.cc   | 40 ++++++++-----
+ .../extensions/updater/extension_updater.cc   | 40 +++++++-----
  .../extensions/updater/extension_updater.h    |  4 ++
  .../extensions/webstore_install_helper.cc     |  2 +-
  .../browser/extensions/webstore_installer.cc  |  2 +-
@@ -34,22 +34,22 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../browser/resources/extensions/service.ts   |  5 ++
  .../browser/resources/extensions/toolbar.css  |  5 ++
  .../resources/extensions/toolbar.html.ts      |  7 +++
- .../browser/resources/extensions/toolbar.ts   | 17 ++++++
+ .../browser/resources/extensions/toolbar.ts   | 17 +++++
  .../resources/webstore_app/manifest.json      |  7 +--
  .../ui/webui/extensions/extensions_ui.cc      |  7 +++
  .../chrome_update_query_params_delegate.cc    | 13 ++--
  .../extensions/api/developer_private.idl      |  2 +
  .../update_client/update_query_params.cc      |  7 +--
  .../about_flags_cc/Webstore-protection.inc    | 19 ++++++
- .../browser/api/management/management_api.cc  | 60 ++++++++++++-------
- .../browser/updater/extension_downloader.cc   | 53 +++++++---------
+ .../browser/api/management/management_api.cc  | 62 +++++++++++++------
+ .../browser/updater/extension_downloader.cc   | 53 ++++++----------
  .../browser/updater/extension_downloader.h    |  1 -
  .../browser/updater/manifest_fetch_data.cc    |  8 +--
  .../browser/updater/safe_manifest_parser.cc   |  1 +
  extensions/common/extension_features.cc       | 14 +++++
  extensions/common/extension_features.h        |  2 +
  .../definitions/developer_private.d.ts        |  2 +
- 36 files changed, 252 insertions(+), 108 deletions(-)
+ 36 files changed, 254 insertions(+), 108 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Webstore-protection.inc
 
 diff --git a/chrome/app/extensions_strings.grdp b/chrome/app/extensions_strings.grdp
@@ -820,7 +820,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
  #include "extensions/common/extension_id.h"
  #include "extensions/common/extension_urls.h"
  #include "extensions/common/icons/extension_icon_set.h"
-@@ -92,6 +96,27 @@ std::vector<std::string> CreateWarningsList(const Extension* extension) {
+@@ -92,6 +96,29 @@ std::vector<std::string> CreateWarningsList(const Extension* extension) {
    return warnings_list;
  }
  
@@ -829,11 +829,13 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
 +                                  const std::string& id,
 +                                  int include_mask) {
 +  bool enabled = base::FeatureList::IsEnabled(extensions_features::kEnableExtensionManagementToChromeStore);
-+  if (content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame()) {
-+    url::Origin top_frame_origin = rfh->GetMainFrame()->GetLastCommittedOrigin();
-+    std::string scheme = top_frame_origin.scheme();
-+    if (scheme == content::kChromeUIScheme) {
-+      enabled = true;
++  if (web_contents) {
++    if (content::RenderFrameHost* rfh = web_contents->GetPrimaryMainFrame()) {
++      url::Origin top_frame_origin = rfh->GetMainFrame()->GetLastCommittedOrigin();
++      std::string scheme = top_frame_origin.scheme();
++      if (scheme == content::kChromeUIScheme) {
++        enabled = true;
++      }
 +    }
 +  }
 +  if (!enabled)
@@ -848,7 +850,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
  std::vector<management::LaunchType> GetAvailableLaunchTypes(
      const Extension& extension) {
    std::vector<management::LaunchType> launch_type_list;
-@@ -269,6 +294,8 @@ void AddExtensionInfo(const Extension* source_extension,
+@@ -269,6 +296,8 @@ void AddExtensionInfo(const Extension* source_extension,
                        const ExtensionSet& extensions,
                        ExtensionInfoList* extension_list,
                        content::BrowserContext* context) {
@@ -857,7 +859,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    for (ExtensionSet::const_iterator iter = extensions.begin();
         iter != extensions.end(); ++iter) {
      const Extension& extension = **iter;
-@@ -311,10 +338,9 @@ ExtensionFunction::ResponseAction ManagementGetFunction::Run() {
+@@ -311,10 +340,9 @@ ExtensionFunction::ResponseAction ManagementGetFunction::Run() {
    std::optional<management::Get::Params> params =
        management::Get::Params::Create(args());
    EXTENSION_FUNCTION_VALIDATE(params);
@@ -869,7 +871,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    if (!target_extension) {
      return RespondNow(Error(keys::kNoExtensionError, params->id));
    }
-@@ -335,8 +361,7 @@ ManagementGetPermissionWarningsByIdFunction::Run() {
+@@ -335,8 +363,7 @@ ManagementGetPermissionWarningsByIdFunction::Run() {
    EXTENSION_FUNCTION_VALIDATE(params);
  
    const Extension* extension =
@@ -879,7 +881,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    if (!extension) {
      return RespondNow(Error(keys::kNoExtensionError, params->id));
    }
-@@ -404,8 +429,7 @@ ExtensionFunction::ResponseAction ManagementLaunchAppFunction::Run() {
+@@ -404,8 +431,7 @@ ExtensionFunction::ResponseAction ManagementLaunchAppFunction::Run() {
    }
  
    const Extension* extension =
@@ -889,7 +891,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    if (!extension) {
      return RespondNow(Error(keys::kNoExtensionError, params->id));
    }
-@@ -547,8 +571,8 @@ void ManagementSetEnabledFunction::CheckPermissionsIncrease() {
+@@ -547,8 +573,8 @@ void ManagementSetEnabledFunction::CheckPermissionsIncrease() {
    // Extension could have been uninstalled externally while previous check was
    // happening.
    const Extension* extension =
@@ -900,7 +902,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    if (!extension) {
      FinishEnable(Error(keys::kNoExtensionError));
      return;
-@@ -591,8 +615,8 @@ void ManagementSetEnabledFunction::CheckManifestV2Deprecation() {
+@@ -591,8 +617,8 @@ void ManagementSetEnabledFunction::CheckManifestV2Deprecation() {
    // Extension can be uninstalled externally while the previous check was
    // happening async.
    const Extension* extension =
@@ -911,7 +913,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    if (!extension) {
      FinishEnable(Error(keys::kNoExtensionError));
      return;
-@@ -736,8 +760,8 @@ void ManagementSetEnabledFunction::OnSupervisedExtensionApprovalDone(
+@@ -736,8 +762,8 @@ void ManagementSetEnabledFunction::OnSupervisedExtensionApprovalDone(
  }
  
  const Extension* ManagementSetEnabledFunction::GetExtension() {
@@ -922,7 +924,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
  }
  
  ManagementUninstallFunctionBase::ManagementUninstallFunctionBase() = default;
-@@ -762,8 +786,7 @@ ExtensionFunction::ResponseAction ManagementUninstallFunctionBase::Uninstall(
+@@ -762,8 +788,7 @@ ExtensionFunction::ResponseAction ManagementUninstallFunctionBase::Uninstall(
                                                ->GetDelegate();
    target_extension_id_ = target_extension_id;
    const Extension* target_extension =
@@ -932,7 +934,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
                               ExtensionRegistry::EVERYTHING);
    if (!target_extension || !ShouldExposeViaManagementAPI(*target_extension)) {
      return RespondNow(Error(keys::kNoExtensionError, target_extension_id_));
-@@ -828,8 +851,7 @@ void ManagementUninstallFunctionBase::UninstallExtension() {
+@@ -828,8 +853,7 @@ void ManagementUninstallFunctionBase::UninstallExtension() {
    // The extension can be uninstalled in another window while the UI was
    // showing. Do nothing in that case.
    const Extension* target_extension =
@@ -942,7 +944,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
                               ExtensionRegistry::EVERYTHING);
    std::string error;
    bool success = false;
-@@ -909,8 +931,7 @@ ExtensionFunction::ResponseAction ManagementCreateAppShortcutFunction::Run() {
+@@ -909,8 +933,7 @@ ExtensionFunction::ResponseAction ManagementCreateAppShortcutFunction::Run() {
        management::CreateAppShortcut::Params::Create(args());
    EXTENSION_FUNCTION_VALIDATE(params);
    const Extension* extension =
@@ -952,7 +954,7 @@ diff --git a/extensions/browser/api/management/management_api.cc b/extensions/br
    if (!extension) {
      return RespondNow(Error(
          ErrorUtils::FormatErrorMessage(keys::kNoExtensionError, params->id)));
-@@ -964,8 +985,7 @@ ExtensionFunction::ResponseAction ManagementSetLaunchTypeFunction::Run() {
+@@ -964,8 +987,7 @@ ExtensionFunction::ResponseAction ManagementSetLaunchTypeFunction::Run() {
        management::SetLaunchType::Params::Create(args());
    EXTENSION_FUNCTION_VALIDATE(params);
    const Extension* extension =
