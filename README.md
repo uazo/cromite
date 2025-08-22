@@ -188,10 +188,11 @@ thanks to [austinhuang0131](https://github.com/austinhuang0131) for the svg icon
 If you want, you can donate to support cromite development through [paypal](https://www.paypal.com/pools/c/9e5lO2OIzb).
 
 Current link:
-- https://www.paypal.com/pools/c/9e5lO2OIzb
+- https://www.paypal.com/pools/c/9hEHZ6tElk
 
 Historical fundraisings links:
 - https://www.paypal.com/pools/c/9cwNgAQhRL
+- https://www.paypal.com/pools/c/9e5lO2OIzb
 
 # License
 
