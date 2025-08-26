@@ -1,0 +1,932 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Fri, 22 Aug 2025 15:41:58 +0000
+Subject: Add cromite test support
+
+Allows the activation of specific APIs used for cromite testing.
+API are only available on the chrome://version page.
+It allows the use of tools such as Browserstack for test automation.
+Do not activate the corresponding options (available in the developer
+settings) if you do not know what you are doing.
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ .../java/res/xml/developer_preferences.xml    |  12 ++
+ .../init/ProcessInitializationHandler.java    |   6 +-
+ .../tracing/settings/DeveloperSettings.java   |   2 +-
+ chrome/browser/BUILD.gn                       |   5 +
+ chrome/browser/android/devtools_server.cc     |  10 +
+ ...ontent_browser_client_receiver_bindings.cc |  10 +
+ .../cromite/cromite_private_api_host.cc       |  74 +++++++
+ .../cromite/cromite_private_api_host.h        |  54 +++++
+ .../browser/flags/cromite/sActAsWebView.java  |  33 +++
+ .../cromite/sEnableCromiteTestSupport.java    |  33 +++
+ .../NotificationPermissionController.java     |   1 +
+ chrome/browser/ui/startup/bad_flags_prompt.cc |   1 +
+ chrome/common/BUILD.gn                        |   1 +
+ .../cromite_private_api_extension.mojom       |   7 +
+ chrome/renderer/BUILD.gn                      |   2 +
+ .../chrome_content_renderer_client.cc         |   2 +
+ .../cromite/cromite_private_api_extension.cc  | 203 ++++++++++++++++++
+ .../cromite/cromite_private_api_extension.h   |  65 ++++++
+ .../component_updater_service.h               |   1 +
+ .../browser/devtools/devtools_http_handler.cc |   7 +-
+ content/browser/log_console_message.cc        |  15 +-
+ content/browser/log_console_message.h         |   3 +-
+ .../renderer_host/render_frame_host_impl.cc   |  13 +-
+ .../about_flags_cc/Enable-test-support.inc    |  19 ++
+ .../Enable-test-support.inc                   |   7 +
+ .../Enable-test-support.inc                   |   2 +
+ 26 files changed, 581 insertions(+), 7 deletions(-)
+ create mode 100644 chrome/browser/cromite/cromite_private_api_host.cc
+ create mode 100644 chrome/browser/cromite/cromite_private_api_host.h
+ create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sActAsWebView.java
+ create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sEnableCromiteTestSupport.java
+ create mode 100644 chrome/common/cromite_private_api_extension.mojom
+ create mode 100644 chrome/renderer/cromite/cromite_private_api_extension.cc
+ create mode 100644 chrome/renderer/cromite/cromite_private_api_extension.h
+ create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Enable-test-support.inc
+ create mode 100644 cromite_flags/content/public/common/content_features_cc/Enable-test-support.inc
+ create mode 100644 cromite_flags/content/public/common/content_features_h/Enable-test-support.inc
+
+diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/android/java/res/xml/developer_preferences.xml
+--- a/chrome/android/java/res/xml/developer_preferences.xml
++++ b/chrome/android/java/res/xml/developer_preferences.xml
+@@ -12,6 +12,18 @@ found in the LICENSE file.
+         android:fragment="org.chromium.chrome.browser.tracing.settings.TracingSettings"
+         android:key="tracing"
+         android:title="Tracing" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="enable_cromite_test_support"
++        android:title="Enable support for cromite test"
++        android:summary="Setting allows the activation of specific APIs used for cromite testing. Do not activate if you do not know what you are doing."
++        app:featureName="enable-cromite-test-support"
++        app:needRestart="true" />
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="act_as_webview"
++        android:title="Enable webview support for cromite test"
++        android:summary="Setting allows the activation of specific APIs used for cromite testing. Do not activate if you do not know what you are doing."
++        app:featureName="act-as-webview"
++        app:needRestart="true" />
+     <Preference
+         android:key="test_gwp_asan"
+         android:title="Test Gwp Asan"/>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/init/ProcessInitializationHandler.java
+@@ -139,6 +139,7 @@ import org.chromium.ui.base.PhotoPickerListener;
+ import org.chromium.ui.base.SelectFileDialog;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.url.GURL;
++import org.chromium.chrome.browser.flags.cromite.sActAsWebView;
+ 
+ import java.io.File;
+ import java.nio.charset.StandardCharsets;
+@@ -698,7 +699,10 @@ public class ProcessInitializationHandler {
+ 
+         tasks.add(
+                 () -> {
+-                    mDevToolsServer = new DevToolsServer(DEV_TOOLS_SERVER_SOCKET_PREFIX);
++                    String socketPrefix = DEV_TOOLS_SERVER_SOCKET_PREFIX;
++                    if (sActAsWebView.getInstance().isEnabled())
++                        socketPrefix = "weblayer";
++                    mDevToolsServer = new DevToolsServer(socketPrefix);
+                     mDevToolsServer.setRemoteDebuggingEnabled(
+                             true, DevToolsServer.Security.ALLOW_DEBUG_PERMISSION);
+                 });
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tracing/settings/DeveloperSettings.java
+@@ -37,7 +37,7 @@ public class DeveloperSettings extends ChromeBaseSettingsFragment implements Emb
+     private final ObservableSupplier<String> mPageTitle =
+             new ObservableSupplierImpl<>(MSG_DEVELOPER_OPTIONS_TITLE);
+ 
+-    private static @Nullable Boolean sIsEnabledForTests;
++    private static @Nullable Boolean sIsEnabledForTests = true;
+ 
+     public static boolean shouldShowDeveloperSettings() {
+         // Always enabled on canary, dev and local builds, otherwise can be enabled by tapping the
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -194,6 +194,11 @@ source_set("shell_integration") {
+ # require many files from it. This makes linking more efficient.
+ static_library("browser") {
+   sources = [
++    "cromite/cromite_private_api_host.cc",
++    "cromite/cromite_private_api_host.h",
++  ]
++
++  sources += [
+     "about_flags.cc",
+     "accessibility/accessibility_labels_service.cc",
+     "accessibility/accessibility_labels_service.h",
+diff --git a/chrome/browser/android/devtools_server.cc b/chrome/browser/android/devtools_server.cc
+--- a/chrome/browser/android/devtools_server.cc
++++ b/chrome/browser/android/devtools_server.cc
+@@ -12,6 +12,7 @@
+ #include "base/command_line.h"
+ #include "base/compiler_specific.h"
+ #include "base/files/file_path.h"
++#include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/strings/string_number_conversions.h"
+@@ -32,6 +33,7 @@
+ #include "content/public/browser/render_view_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_delegate.h"
++#include "content/public/common/content_features.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/url_constants.h"
+ #include "net/base/net_errors.h"
+@@ -64,6 +66,8 @@ const int kBackLog = 10;
+ 
+ bool AuthorizeSocketAccessWithDebugPermission(
+     const net::UnixDomainServerSocket::Credentials& credentials) {
++  if (base::FeatureList::IsEnabled(features::kEnableCromiteTestSupport))
++    return true;
+   JNIEnv* env = base::android::AttachCurrentThread();
+   return Java_DevToolsServer_checkDebugPermission(env, credentials.process_id,
+                                                   credentials.user_id) ||
+@@ -127,6 +131,10 @@ DevToolsServer::DevToolsServer(const std::string& socket_name_prefix)
+     : socket_name_(base::StringPrintf(kDevToolsChannelNameFormat,
+                                       socket_name_prefix.c_str())),
+       is_started_(false) {
++  if (base::FeatureList::IsEnabled(features::kActAsWebView)) {
++    socket_name_ = base::StringPrintf("%s_devtools_remote_%d",
++        socket_name_prefix.c_str(), getpid());
++  }
+   // Override the socket name if one is specified on the command line.
+   const base::CommandLine& command_line =
+       *base::CommandLine::ForCurrentProcess();
+@@ -144,6 +152,8 @@ void DevToolsServer::Start(bool allow_debug_permission) {
+   if (is_started_)
+     return;
+ 
++  DLOG(INFO) << "---DevToolsServer::Start allow_debug_permission=" << allow_debug_permission;
++  DLOG(INFO) << "---socket_name_=" << socket_name_;
+   net::UnixDomainServerSocket::AuthCallback auth_callback =
+       allow_debug_permission
+           ? base::BindRepeating(&AuthorizeSocketAccessWithDebugPermission)
+diff --git a/chrome/browser/chrome_content_browser_client_receiver_bindings.cc b/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
+--- a/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
++++ b/chrome/browser/chrome_content_browser_client_receiver_bindings.cc
+@@ -10,6 +10,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/chrome_browser_interface_binders.h"
++#include "chrome/browser/cromite/cromite_private_api_host.h"
+ #include "chrome/browser/chrome_browser_interface_binders_webui.h"
+ #include "chrome/browser/chrome_content_browser_client.h"
+ #include "chrome/browser/chrome_content_browser_client_parts.h"
+@@ -499,6 +500,15 @@ void ChromeContentBrowserClient::
+                                                     render_frame_host);
+       },
+       &render_frame_host));
++  associated_registry.AddInterface<
++      chrome::mojom::CromitePrivateApiExtension>(base::BindRepeating(
++      [](content::RenderFrameHost* render_frame_host,
++         mojo::PendingAssociatedReceiver<
++             chrome::mojom::CromitePrivateApiExtension> receiver) {
++        CromitePrivateApiHost::BindHost(std::move(receiver),
++                                        render_frame_host);
++      },
++      &render_frame_host));
+   associated_registry.AddInterface<
+       chrome::mojom::GoogleAccountsPrivateApiExtension>(base::BindRepeating(
+       [](content::RenderFrameHost* render_frame_host,
+diff --git a/chrome/browser/cromite/cromite_private_api_host.cc b/chrome/browser/cromite/cromite_private_api_host.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromite/cromite_private_api_host.cc
+@@ -0,0 +1,74 @@
++#include "chrome/browser/cromite/cromite_private_api_host.h"
++
++#include "base/json/json_writer.h"
++
++#include "chrome/browser/browser_process.h"
++#include "components/component_updater/component_updater_service.h"
++#include "components/update_client/crx_update_item.h"
++#include "content/public/browser/document_user_data.h"
++#include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/site_instance.h"
++
++CromitePrivateApiHost::CromitePrivateApiHost(
++    content::RenderFrameHost* rfh)
++    : DocumentUserData<CromitePrivateApiHost>(rfh),
++      receiver_(this) {}
++
++CromitePrivateApiHost::~CromitePrivateApiHost() = default;
++
++DOCUMENT_USER_DATA_KEY_IMPL(CromitePrivateApiHost);
++
++void CromitePrivateApiHost::BindReceiver(
++    mojo::PendingAssociatedReceiver<
++        chrome::mojom::CromitePrivateApiExtension> receiver) {
++  receiver_.Bind(std::move(receiver));
++}
++
++void CromitePrivateApiHost::GetComponentData(
++    const std::string& id,
++    GetComponentDataCallback callback) {
++  LOG(INFO) << "---CromitePrivateApiHost::GetComponentData "
++            << "id=" << id;
++  const raw_ptr<component_updater::ComponentUpdateService>
++    component_updater = g_browser_process->component_updater();
++
++  update_client::CrxUpdateItem item;
++  if (component_updater->GetComponentDetails(id, &item) && item.component) {
++    base::Value::Dict dict;
++    dict.Set("id", id);
++    dict.Set("version", item.component->version.GetString());
++    dict.Set("status", (int)item.state);
++
++    std::string json_string;
++      base::JSONWriter::WriteWithOptions(
++          dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_string);
++      base::TrimWhitespaceASCII(json_string, base::TRIM_ALL, &json_string);
++
++    std::move(callback).Run(json_string);
++  }
++}
++
++void CromitePrivateApiHost::StartComponentUpdate(const std::string& id) {
++  LOG(INFO) << "---CromitePrivateApiHost::StartComponentUpdate "
++            << "id=" << id;
++  const raw_ptr<component_updater::ComponentUpdateService>
++    component_updater = g_browser_process->component_updater();
++  component_updater->GetOnDemandUpdater().OnDemandUpdate(
++      id, component_updater::OnDemandUpdater::Priority::FOREGROUND,
++      component_updater::Callback());
++}
++
++void CromitePrivateApiHost::SetEnableLogConsole(bool enabled) {
++  enable_log_console_ = enabled;
++}
++
++// static
++void CromitePrivateApiHost::BindHost(
++    mojo::PendingAssociatedReceiver<
++        chrome::mojom::CromitePrivateApiExtension> receiver,
++    content::RenderFrameHost* render_frame_host) {
++  CromitePrivateApiHost* api_host =
++      CromitePrivateApiHost::GetOrCreateForCurrentDocument(render_frame_host);
++  api_host->BindReceiver(std::move(receiver));
++}
+diff --git a/chrome/browser/cromite/cromite_private_api_host.h b/chrome/browser/cromite/cromite_private_api_host.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromite/cromite_private_api_host.h
+@@ -0,0 +1,54 @@
++#ifndef CHROME_BROWSER_CROMITE_PRIVATE_API_HOST_H_
++#define CHROME_BROWSER_CROMITE_PRIVATE_API_HOST_H_
++
++#include <string>
++
++#include "base/functional/callback.h"
++#include "chrome/common/cromite_private_api_extension.mojom.h"
++#include "content/public/browser/document_user_data.h"
++#include "mojo/public/cpp/bindings/associated_receiver.h"
++
++namespace content {
++class NavigationHandle;
++class RenderFrameHost;
++}  // namespace content
++
++class CromitePrivateApiHost
++    : public chrome::mojom::CromitePrivateApiExtension,
++      public content::DocumentUserData<CromitePrivateApiHost> {
++ public:
++  ~CromitePrivateApiHost() override;
++  CromitePrivateApiHost(const CromitePrivateApiHost&) = delete;
++  CromitePrivateApiHost& operator=(const CromitePrivateApiHost&) =
++      delete;
++
++  static void BindHost(
++      mojo::PendingAssociatedReceiver<
++          chrome::mojom::CromitePrivateApiExtension> receiver,
++      content::RenderFrameHost* render_frame_host);
++
++  void BindReceiver(mojo::PendingAssociatedReceiver<
++                    chrome::mojom::CromitePrivateApiExtension> receiver);
++
++  bool IsLogConsoleEnabled() const { return enable_log_console_; }
++
++  // chrome::mojom::CromitePrivateApiExtension:
++  void GetComponentData(const std::string& id,
++                        GetComponentDataCallback callback) override;
++  void StartComponentUpdate(const std::string& id) override;
++  void SetEnableLogConsole(bool can_show) override;
++
++ private:
++  explicit CromitePrivateApiHost(
++      content::RenderFrameHost* rfh);
++
++  friend DocumentUserData;
++  DOCUMENT_USER_DATA_KEY_DECL();
++
++  mojo::AssociatedReceiver<chrome::mojom::CromitePrivateApiExtension>
++      receiver_;
++
++  bool enable_log_console_ = false;
++};
++
++#endif  // CHROME_BROWSER_CROMITE_PRIVATE_API_HOST_H_
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sActAsWebView.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sActAsWebView.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sActAsWebView.java
+@@ -0,0 +1,33 @@
++/*
++    This file is part of Cromite.
++
++    Cromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Cromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Cromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.chrome.browser.flags.cromite;
++
++import org.chromium.components.cached_flags.CachedFlag;
++import org.chromium.chrome.browser.flags.ChromeFeatureMap;
++
++public class sActAsWebView {
++    private static final CachedFlag sInstance =
++        new CachedFlag(ChromeFeatureMap.getInstance(),
++            "ActAsWebView", false);
++
++    private sActAsWebView() {}
++
++    public static CachedFlag getInstance() {
++        return sInstance;
++    }
++}
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sEnableCromiteTestSupport.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sEnableCromiteTestSupport.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sEnableCromiteTestSupport.java
+@@ -0,0 +1,33 @@
++/*
++    This file is part of Cromite.
++
++    Cromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Cromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Cromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.chrome.browser.flags.cromite;
++
++import org.chromium.components.cached_flags.CachedFlag;
++import org.chromium.chrome.browser.flags.ChromeFeatureMap;
++
++public class sEnableCromiteTestSupport {
++    private static final CachedFlag sInstance =
++        new CachedFlag(ChromeFeatureMap.getInstance(),
++            "EnableCromiteTestSupport", false);
++
++    private sEnableCromiteTestSupport() {}
++
++    public static CachedFlag getInstance() {
++        return sInstance;
++    }
++}
+diff --git a/chrome/browser/notifications/android/java/src/org/chromium/chrome/browser/notifications/permissions/NotificationPermissionController.java b/chrome/browser/notifications/android/java/src/org/chromium/chrome/browser/notifications/permissions/NotificationPermissionController.java
+--- a/chrome/browser/notifications/android/java/src/org/chromium/chrome/browser/notifications/permissions/NotificationPermissionController.java
++++ b/chrome/browser/notifications/android/java/src/org/chromium/chrome/browser/notifications/permissions/NotificationPermissionController.java
+@@ -182,6 +182,7 @@ public class NotificationPermissionController implements UnownedUserData {
+      * @return True if any UI was shown (either rationale dialog or OS prompt), false otherwise.
+      */
+     public boolean requestPermissionIfNeeded(boolean contextual) {
++        if (!contextual) return false;
+         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                 || ApiCompatibilityUtils.isDemoUser()) {
+             return false;
+diff --git a/chrome/browser/ui/startup/bad_flags_prompt.cc b/chrome/browser/ui/startup/bad_flags_prompt.cc
+--- a/chrome/browser/ui/startup/bad_flags_prompt.cc
++++ b/chrome/browser/ui/startup/bad_flags_prompt.cc
+@@ -188,6 +188,7 @@ static const base::Feature* kBadFeatureFlagsInAboutFlags[] = {
+ 
+ #if BUILDFLAG(IS_ANDROID)
+     &chrome::android::kCommandLineOnNonRooted,
++    &features::kEnableCromiteTestSupport,
+ #endif
+ 
+     // This flag disables security for the Page Embedded Permission Control, for
+diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
+--- a/chrome/common/BUILD.gn
++++ b/chrome/common/BUILD.gn
+@@ -689,6 +689,7 @@ mojom("mojo_bindings") {
+   sources = [
+     "chrome_render_frame.mojom",
+     "google_accounts_private_api_extension.mojom",
++    "cromite_private_api_extension.mojom",
+     "media/webrtc_logging.mojom",
+     "net/net_error_page_support.mojom",
+     "net_benchmarking.mojom",
+diff --git a/chrome/common/cromite_private_api_extension.mojom b/chrome/common/cromite_private_api_extension.mojom
+new file mode 100644
+--- /dev/null
++++ b/chrome/common/cromite_private_api_extension.mojom
+@@ -0,0 +1,7 @@
++module chrome.mojom;
++
++interface CromitePrivateApiExtension {
++  GetComponentData(string id) => (string response);
++  StartComponentUpdate(string id);
++  SetEnableLogConsole(bool enabled);
++};
+diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
+--- a/chrome/renderer/BUILD.gn
++++ b/chrome/renderer/BUILD.gn
+@@ -78,6 +78,8 @@ static_library("renderer") {
+     "chrome_render_thread_observer.cc",
+     "chrome_render_thread_observer.h",
+     "custom_menu_commands.h",
++    "cromite/cromite_private_api_extension.cc",
++    "cromite/cromite_private_api_extension.h",
+     "google_accounts_private_api_extension.cc",
+     "google_accounts_private_api_extension.h",
+     "google_accounts_private_api_util.cc",
+diff --git a/chrome/renderer/chrome_content_renderer_client.cc b/chrome/renderer/chrome_content_renderer_client.cc
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -56,6 +56,7 @@
+ #include "chrome/renderer/chrome_render_frame_observer.h"
+ #include "chrome/renderer/chrome_render_thread_observer.h"
+ #include "chrome/renderer/controlled_frame/controlled_frame_extensions_renderer_api_provider.h"
++#include "chrome/renderer/cromite/cromite_private_api_extension.h"
+ #include "chrome/renderer/google_accounts_private_api_extension.h"
+ #include "chrome/renderer/loadtimes_extension_bindings.h"
+ #include "chrome/renderer/media/flash_embed_rewrite.h"
+@@ -665,6 +666,7 @@ void ChromeContentRendererClient::RenderFrameCreated(
+ 
+   TrustedVaultEncryptionKeysExtension::Create(render_frame);
+   GoogleAccountsPrivateApiExtension::Create(render_frame);
++  CromitePrivateApiExtension::Create(render_frame);
+ 
+   if (render_frame->IsMainFrame())
+     new webapps::WebPageMetadataAgent(render_frame);
+diff --git a/chrome/renderer/cromite/cromite_private_api_extension.cc b/chrome/renderer/cromite/cromite_private_api_extension.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/renderer/cromite/cromite_private_api_extension.cc
+@@ -0,0 +1,203 @@
++#include "chrome/renderer/cromite/cromite_private_api_extension.h"
++
++#include "chrome/common/chrome_features.h"
++#include "content/public/common/content_features.h"
++#include "content/public/common/isolated_world_ids.h"
++#include "content/public/renderer/chrome_object_extensions_utils.h"
++#include "content/public/renderer/render_frame.h"
++#include "gin/arguments.h"
++#include "gin/function_template.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
++#include "third_party/blink/public/platform/platform.h"
++#include "third_party/blink/public/platform/scheduler/web_agent_group_scheduler.h"
++#include "third_party/blink/public/web/web_local_frame.h"
++#include "v8/include/v8-context.h"
++#include "v8/include/v8-function.h"
++
++namespace {
++
++bool ShouldExposeCromitePrivateApi(
++    content::RenderFrame* render_frame) {
++  DCHECK(render_frame);
++  if (!base::FeatureList::IsEnabled(features::kEnableCromiteTestSupport))
++    return false;
++
++  GURL origin_url = GURL("chrome://version");
++  const url::Origin& allowed_origin = url::Origin::Create(origin_url);
++
++  const url::Origin origin = render_frame->GetWebFrame()->GetSecurityOrigin();
++  return origin == allowed_origin;
++}
++
++}
++
++CromitePrivateApiExtension::PendingRequest::PendingRequest(
++    v8::Isolate* isolate,
++    v8::Local<v8::Context> context,
++    v8::Local<v8::Promise::Resolver> resolver)
++    : isolate(isolate),
++      context(isolate, context),
++      promise_resolver(isolate, resolver) {}
++
++CromitePrivateApiExtension::PendingRequest::~PendingRequest() = default;
++
++// static
++void CromitePrivateApiExtension::Create(content::RenderFrame* frame) {
++  new CromitePrivateApiExtension(frame);
++}
++
++CromitePrivateApiExtension::CromitePrivateApiExtension(
++    content::RenderFrame* frame)
++    : content::RenderFrameObserver(frame) {}
++
++CromitePrivateApiExtension::~CromitePrivateApiExtension() =
++    default;
++
++void CromitePrivateApiExtension::OnDestruct() {
++  delete this;
++}
++
++void CromitePrivateApiExtension::DidCreateScriptContext(
++    v8::Local<v8::Context> v8_context,
++    int32_t world_id) {
++  if (!render_frame() || world_id != content::ISOLATED_WORLD_ID_GLOBAL) {
++    return;
++  }
++
++  if (ShouldExposeCromitePrivateApi(render_frame())) {
++    InjectScript();
++  }
++}
++
++void CromitePrivateApiExtension::InjectScript() {
++  DCHECK(render_frame());
++
++  blink::WebLocalFrame* web_frame = render_frame()->GetWebFrame();
++  v8::Isolate* isolate = web_frame->GetAgentGroupScheduler()->Isolate();
++  v8::HandleScope handle_scope(isolate);
++  v8::Local<v8::Context> context = web_frame->MainWorldScriptContext();
++  if (context.IsEmpty()) {
++    return;
++  }
++
++  v8::Context::Scope context_scope(context);
++
++  v8::Local<v8::Object> window =
++      content::GetOrCreateObject(isolate, context, "window");
++  v8::Local<v8::Object> oCromiteObject =
++      content::GetOrCreateObject(isolate, context, window, "cromite");
++
++  oCromiteObject
++      ->Set(
++          context, gin::StringToSymbol(isolate, "getComponentData"),
++          gin::CreateFunctionTemplate(
++              isolate, base::BindRepeating(
++                           &CromitePrivateApiExtension::GetComponentData,
++                           weak_ptr_factory_.GetWeakPtr()))
++              ->GetFunction(context)
++              .ToLocalChecked())
++      .Check();
++
++  oCromiteObject
++      ->Set(
++          context, gin::StringToSymbol(isolate, "startComponentUpdate"),
++          gin::CreateFunctionTemplate(
++              isolate, base::BindRepeating(
++                           &CromitePrivateApiExtension::StartComponentUpdate,
++                           weak_ptr_factory_.GetWeakPtr()))
++              ->GetFunction(context)
++              .ToLocalChecked())
++      .Check();
++
++  oCromiteObject
++      ->Set(
++          context, gin::StringToSymbol(isolate, "setEnableLogConsole"),
++          gin::CreateFunctionTemplate(
++              isolate, base::BindRepeating(
++                           &CromitePrivateApiExtension::SetEnableLogConsole,
++                           weak_ptr_factory_.GetWeakPtr()))
++              ->GetFunction(context)
++              .ToLocalChecked())
++      .Check();
++}
++
++void CromitePrivateApiExtension::GetComponentData(gin::Arguments* args) {
++  std::string component_id;
++  if (!args->GetNext(&component_id)) {
++    args->ThrowError();
++    return;
++  }
++
++  if (!remote_.is_bound()) {
++    render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(&remote_);
++  }
++
++  v8::Isolate* isolate = args->isolate();
++  v8::Local<v8::Context> context = isolate->GetCurrentContext();
++
++  v8::Local<v8::Promise::Resolver> resolver =
++      v8::Promise::Resolver::New(context).ToLocalChecked();
++  v8::Local<v8::Promise> promise = resolver->GetPromise();
++
++  base::UnguessableToken request_id = base::UnguessableToken::Create();
++  pending_requests_.emplace(
++      request_id,
++      std::make_unique<PendingRequest>(isolate, context, resolver));
++
++  remote_->GetComponentData(component_id,
++      base::BindOnce(&CromitePrivateApiExtension::OnGetComponentData,
++                     weak_ptr_factory_.GetWeakPtr(), request_id));
++
++  args->Return(promise);
++}
++
++void CromitePrivateApiExtension::OnGetComponentData(const base::UnguessableToken callback_id,
++                                                    const std::string& result) {
++  auto iter = pending_requests_.find(callback_id);
++  if (iter == pending_requests_.end())
++    return;
++
++  std::unique_ptr<PendingRequest> request = std::move(iter->second);
++  pending_requests_.erase(iter);
++
++  v8::HandleScope handle_scope(request->isolate);
++  v8::Local<v8::Context> context =
++    request->context.Get(request->isolate);
++  v8::Local<v8::Promise::Resolver> resolver =
++    request->promise_resolver.Get(request->isolate);
++
++  LOG(INFO) << "---CromitePrivateApiExtension::OnGetComponentData4";
++  resolver->Resolve(context,
++                    gin::StringToV8(request->isolate, result))
++      .ToChecked();
++
++  LOG(INFO) << "---CromitePrivateApiExtension::OnGetComponentData5";
++}
++
++void CromitePrivateApiExtension::StartComponentUpdate(gin::Arguments* args) {
++  std::string component_id;
++  if (!args->GetNext(&component_id)) {
++    args->ThrowError();
++    return;
++  }
++
++  if (!remote_.is_bound()) {
++    render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(&remote_);
++  }
++
++  remote_->StartComponentUpdate(component_id);
++}
++
++void CromitePrivateApiExtension::SetEnableLogConsole(gin::Arguments* args) {
++  bool enabled;
++  if (!args->GetNext(&enabled)) {
++    args->ThrowError();
++    return;
++  }
++
++  if (!remote_.is_bound()) {
++    render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(&remote_);
++  }
++
++  remote_->SetEnableLogConsole(enabled);
++}
+diff --git a/chrome/renderer/cromite/cromite_private_api_extension.h b/chrome/renderer/cromite/cromite_private_api_extension.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/renderer/cromite/cromite_private_api_extension.h
+@@ -0,0 +1,65 @@
++#ifndef CHROME_RENDERER_CROMITE_PRIVATE_API_EXTENSION_H_
++#define CHROME_RENDERER_CROMITE_PRIVATE_API_EXTENSION_H_
++
++#include "base/memory/weak_ptr.h"
++#include "chrome/common/cromite_private_api_extension.mojom.h"
++#include "content/public/renderer/render_frame_observer.h"
++#include "mojo/public/cpp/bindings/associated_remote.h"
++#include "v8/include/v8.h"
++
++namespace gin {
++class Arguments;
++}  // namespace gin
++
++class CromitePrivateApiExtension : public content::RenderFrameObserver {
++ public:
++  // Creates a new instance, with ownership transferred to |*frame|.
++  static void Create(content::RenderFrame* frame);
++
++  CromitePrivateApiExtension(const CromitePrivateApiExtension&) =
++      delete;
++  CromitePrivateApiExtension& operator=(
++      const CromitePrivateApiExtension&) = delete;
++
++  ~CromitePrivateApiExtension() override;
++
++  // content::RenderFrameObserver:
++  void OnDestruct() override;
++  void DidCreateScriptContext(v8::Local<v8::Context> v8_context,
++                              int32_t world_id) override;
++
++ private:
++
++ struct PendingRequest {
++    PendingRequest(
++        v8::Isolate* isolate,
++        v8::Local<v8::Context> context,
++        v8::Local<v8::Promise::Resolver> resolver);
++
++    ~PendingRequest();
++
++    raw_ptr<v8::Isolate> isolate;
++    v8::Global<v8::Context> context;
++    v8::Global<v8::Promise::Resolver> promise_resolver;
++  };
++
++  explicit CromitePrivateApiExtension(content::RenderFrame* frame);
++
++  void InjectScript();
++
++  void GetComponentData(gin::Arguments* args);
++  void OnGetComponentData(const base::UnguessableToken callback_id,
++                          const std::string& label);
++  void StartComponentUpdate(gin::Arguments* args);
++  void SetEnableLogConsole(gin::Arguments* args);
++
++  std::map<const base::UnguessableToken,
++           std::unique_ptr<PendingRequest>> pending_requests_;
++
++  mojo::AssociatedRemote<chrome::mojom::CromitePrivateApiExtension>
++      remote_;
++  base::WeakPtrFactory<CromitePrivateApiExtension> weak_ptr_factory_{
++      this};
++};
++
++#endif  // CHROME_RENDERER_CROMITE_PRIVATE_API_EXTENSION_H_
+diff --git a/components/component_updater/component_updater_service.h b/components/component_updater/component_updater_service.h
+--- a/components/component_updater/component_updater_service.h
++++ b/components/component_updater/component_updater_service.h
+@@ -242,6 +242,7 @@ class OnDemandUpdater {
+   // the update will be applied. The caller can subscribe to component update
+   // service notifications and provide an optional callback to get the result
+   // of the call. The function does not implement any cooldown interval.
++ public:
+   virtual void OnDemandUpdate(const std::string& id,
+                               Priority priority,
+                               Callback callback) = 0;
+diff --git a/content/browser/devtools/devtools_http_handler.cc b/content/browser/devtools/devtools_http_handler.cc
+--- a/content/browser/devtools/devtools_http_handler.cc
++++ b/content/browser/devtools/devtools_http_handler.cc
+@@ -16,6 +16,7 @@
+ #include "base/command_line.h"
+ #include "base/compiler_specific.h"
+ #include "base/files/file_util.h"
++#include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/json/json_writer.h"
+@@ -46,6 +47,7 @@
+ #include "content/public/browser/devtools_manager_delegate.h"
+ #include "content/public/browser/devtools_socket_factory.h"
+ #include "content/public/common/content_client.h"
++#include "content/public/common/content_features.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/public/common/url_constants.h"
+ #include "net/base/io_buffer.h"
+@@ -587,9 +589,12 @@ void DevToolsHttpHandler::OnJsonRequest(
+ 
+   if (command == "version") {
+     base::Value::Dict version;
++    auto browser = GetContentClient()->browser()->GetProduct();
++    if (base::FeatureList::IsEnabled(features::kEnableCromiteTestSupport))
++      browser = "Chrome/0.0.0.0";
+     version.Set("Protocol-Version", DevToolsAgentHost::GetProtocolVersion());
+     version.Set("WebKit-Version", embedder_support::GetWebKitVersion());
+-    version.Set("Browser", GetContentClient()->browser()->GetProduct());
++    version.Set("Browser", browser);
+     version.Set("User-Agent", GetContentClient()->browser()->GetUserAgent());
+     version.Set("V8-Version", V8_VERSION_STRING);
+     std::string host = info.GetHeaderValue("host");
+diff --git a/content/browser/log_console_message.cc b/content/browser/log_console_message.cc
+--- a/content/browser/log_console_message.cc
++++ b/content/browser/log_console_message.cc
+@@ -17,10 +17,23 @@ void LogConsoleMessage(blink::mojom::ConsoleMessageLevel log_level,
+                        int32_t line_number,
+                        bool is_builtin_component,
+                        bool is_off_the_record,
+-                       const std::u16string& source_id) {
++                       const std::u16string& source_id,
++                       bool is_log_console_enabled) {
++  if (base::FeatureList::IsEnabled(features::kEnableCromiteTestSupport)) {
++    LOG(INFO) << "CONSOLE:"
++        << "\"" << message << "\", source: " << source_id << " (" << line_number
++        << ")";
++    return;
++  }
+   const int32_t resolved_level =
+       is_builtin_component ? ConsoleMessageLevelToLogSeverity(log_level)
+                            : ::logging::LOGGING_INFO;
++  if (is_log_console_enabled) {
++    logging::LogMessage("CONSOLE", line_number, resolved_level).stream()
++        << "\"" << message << "\", source: " << source_id << " (" << line_number
++        << ")";
++    return;
++  }
+   if (::logging::GetMinLogLevel() > resolved_level)
+     return;
+ 
+diff --git a/content/browser/log_console_message.h b/content/browser/log_console_message.h
+--- a/content/browser/log_console_message.h
++++ b/content/browser/log_console_message.h
+@@ -19,7 +19,8 @@ void LogConsoleMessage(blink::mojom::ConsoleMessageLevel log_level,
+                        int32_t line_number,
+                        bool is_builtin_component,
+                        bool is_off_the_record,
+-                       const std::u16string& source_id);
++                       const std::u16string& source_id,
++                       bool is_log_console_enabled = false);
+ 
+ }  // namespace content
+ 
+diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -319,6 +319,8 @@
+ #include "url/origin.h"
+ #include "url/url_constants.h"
+ 
++#include "chrome/browser/cromite/cromite_private_api_host.h"
++
+ #if BUILDFLAG(IS_ANDROID)
+ #include "content/browser/accessibility/browser_accessibility_manager_android.h"
+ #include "content/browser/android/content_url_loader_factory.h"
+@@ -4726,7 +4728,8 @@ void RenderFrameHostImpl::DidAddMessageToConsole(
+   if (delegate_->DidAddMessageToConsole(this, log_level, message, line_no,
+                                         updated_source_id,
+                                         untrusted_stack_trace)) {
+-    return;
++    if (!base::FeatureList::IsEnabled(features::kEnableCromiteTestSupport))
++      return;
+   }
+ 
+   // Pass through log severity only on builtin components pages to limit console
+@@ -4743,8 +4746,14 @@ void RenderFrameHostImpl::DidAddMessageToConsole(
+   const bool is_off_the_record =
+       GetSiteInstance()->GetBrowserContext()->IsOffTheRecord();
+ 
++  bool is_log_console_enabled = false;
++  CromitePrivateApiHost* cromite_data =
++      CromitePrivateApiHost::GetForCurrentDocument(this);
++  if (cromite_data) {
++    is_log_console_enabled = cromite_data->IsLogConsoleEnabled();
++  }
+   LogConsoleMessage(log_level, message, line_no, is_builtin_component,
+-                    is_off_the_record, updated_source_id);
++                    is_off_the_record, updated_source_id, is_log_console_enabled);
+ }
+ 
+ void RenderFrameHostImpl::FrameSizeChanged(const gfx::Size& frame_size) {
+diff --git a/cromite_flags/chrome/browser/about_flags_cc/Enable-test-support.inc b/cromite_flags/chrome/browser/about_flags_cc/Enable-test-support.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/about_flags_cc/Enable-test-support.inc
+@@ -0,0 +1,19 @@
++#ifdef FLAG_SECTION
++
++    {"enable-cromite-test-support",
++     "Enable support for cromite test",
++     "Setting allows the activation of specific APIs used for cromite testing. "
++     "Do not activate if you do not know what you are doing.", kOsAll,
++     FEATURE_VALUE_TYPE(features::kEnableCromiteTestSupport)},
++
++#if BUILDFLAG(IS_ANDROID)
++
++    {"act-as-webview",
++     "Enable webview support for cromite test",
++     "Setting allows the activation of specific APIs used for cromite testing. "
++     "Do not activate if you do not know what you are doing.", kOsAndroid,
++     FEATURE_VALUE_TYPE(features::kActAsWebView)},
++
++#endif
++
++#endif
+diff --git a/cromite_flags/content/public/common/content_features_cc/Enable-test-support.inc b/cromite_flags/content/public/common/content_features_cc/Enable-test-support.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/content/public/common/content_features_cc/Enable-test-support.inc
+@@ -0,0 +1,7 @@
++CROMITE_FEATURE(kEnableCromiteTestSupport,
++                "EnableCromiteTestSupport",
++                base::FEATURE_DISABLED_BY_DEFAULT);
++
++CROMITE_FEATURE(kActAsWebView,
++                "ActAsWebView",
++                base::FEATURE_DISABLED_BY_DEFAULT);
+diff --git a/cromite_flags/content/public/common/content_features_h/Enable-test-support.inc b/cromite_flags/content/public/common/content_features_h/Enable-test-support.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/content/public/common/content_features_h/Enable-test-support.inc
+@@ -0,0 +1,2 @@
++CONTENT_EXPORT BASE_DECLARE_FEATURE(kEnableCromiteTestSupport);
++CONTENT_EXPORT BASE_DECLARE_FEATURE(kActAsWebView);
+--
