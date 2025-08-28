@@ -34,7 +34,6 @@
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/devtools_manager_delegate.h"
 #include "content/public/browser/digital_identity_provider.h"
-#include "content/public/browser/identity_request_dialog_controller.h"
 #include "content/public/browser/legacy_tech_cookie_issue_details.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/navigation_throttle.h"
@@ -44,17 +43,16 @@
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/prefetch_service_delegate.h"
 #include "content/public/browser/prerender_web_contents_delegate.h"
-#include "content/public/browser/private_network_device_delegate.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/responsiveness_calculator_delegate.h"
 #include "content/public/browser/sms_fetcher.h"
 #include "content/public/browser/speculation_host_delegate.h"
 #include "content/public/browser/tracing_delegate.h"
 #include "content/public/browser/url_loader_request_interceptor.h"
-#include "content/public/browser/vpn_service_proxy.h"
 #include "content/public/browser/web_authentication_delegate.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
+#include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "content/public/common/alternative_error_page_override_info.mojom.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/url_utils.h"
@@ -384,6 +382,11 @@ bool ContentBrowserClient::ShouldEnableStrictSiteIsolation() {
 #endif
 }
 
+std::optional<bool>
+ContentBrowserClient::GetOverrideValueForOriginKeyedProcesses() {
+  return std::nullopt;
+}
+
 bool ContentBrowserClient::ShouldDisableSiteIsolation(
     SiteIsolationMode site_isolation_mode) {
   return false;
@@ -514,6 +517,11 @@ bool ContentBrowserClient::AllowCompressionDictionaryTransport(
 }
 
 bool ContentBrowserClient::AllowServiceWorkerToControlSrcdocIframe(
+    BrowserContext* context) {
+  return true;
+}
+
+bool ContentBrowserClient::IsServiceWorkerAutoPreloadAllowed(
     BrowserContext* context) {
   return true;
 }
@@ -919,33 +927,6 @@ std::optional<base::FilePath> ContentBrowserClient::GetLocalTracesDirectory() {
   return std::nullopt;
 }
 
-BrowserPpapiHost* ContentBrowserClient::GetExternalBrowserPpapiHost(
-    int plugin_process_id) {
-  return nullptr;
-}
-
-bool ContentBrowserClient::AllowPepperSocketAPI(
-    BrowserContext* browser_context,
-    const GURL& url,
-    bool private_api,
-    const SocketPermissionRequest* params) {
-  DCHECK(browser_context);
-  return false;
-}
-
-bool ContentBrowserClient::IsPepperVpnProviderAPIAllowed(
-    BrowserContext* browser_context,
-    const GURL& url) {
-  DCHECK(browser_context);
-  return false;
-}
-
-std::unique_ptr<VpnServiceProxy> ContentBrowserClient::GetVpnServiceProxy(
-    BrowserContext* browser_context) {
-  DCHECK(browser_context);
-  return nullptr;
-}
-
 std::unique_ptr<ui::SelectFilePolicy>
 ContentBrowserClient::CreateSelectFilePolicy(WebContents* web_contents) {
   return nullptr;
@@ -972,22 +953,6 @@ std::unique_ptr<TracingDelegate> ContentBrowserClient::CreateTracingDelegate() {
 }
 
 bool ContentBrowserClient::IsSystemWideTracingEnabled() {
-  return false;
-}
-
-bool ContentBrowserClient::IsPluginAllowedToCallRequestOSFileHandle(
-    BrowserContext* browser_context,
-    const GURL& url) {
-  DCHECK(browser_context);
-  return false;
-}
-
-bool ContentBrowserClient::IsPluginAllowedToUseDevChannelAPIs(
-    BrowserContext* browser_context,
-    const GURL& url) {
-  // |browser_context| may be null (e.g. when called from
-  // PpapiPluginProcessHost::PpapiPluginProcessHost).
-
   return false;
 }
 
@@ -1087,6 +1052,10 @@ bool ContentBrowserClient::IsRendererCodeIntegrityEnabled() {
 bool ContentBrowserClient::ShouldEnableAudioProcessHighPriority() {
   // TODO(crbug.com/40242320): Delete this method when the
   // kAudioProcessHighPriorityEnabled enterprise policy is deprecated.
+  return false;
+}
+
+bool ContentBrowserClient::ShouldRestrictCoreSharingOnRenderer() {
   return false;
 }
 
@@ -1255,9 +1224,10 @@ bool ContentBrowserClient::SupportsAvoidUnnecessaryBeforeUnloadCheckSync() {
   return true;
 }
 
-bool ContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
+ContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChangeResult
+ContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
     const RenderFrameHost& rfh) {
-  return true;
+  return ShouldAllowSameSiteRenderFrameHostChangeResult::kAllowed;
 }
 
 bool ContentBrowserClient::AllowRenderingMhtmlOverHttp(
@@ -1299,11 +1269,6 @@ BluetoothDelegate* ContentBrowserClient::GetBluetoothDelegate() {
 }
 
 UsbDelegate* ContentBrowserClient::GetUsbDelegate() {
-  return nullptr;
-}
-
-PrivateNetworkDeviceDelegate*
-ContentBrowserClient::GetPrivateNetworkDeviceDelegate() {
   return nullptr;
 }
 
@@ -1891,6 +1856,7 @@ void ContentBrowserClient::BindAIManager(
 }
 
 void ContentBrowserClient::BindTranslationManager(
+    RenderProcessHost* process_host,
     BrowserContext* browser_context,
     base::SupportsUserData* context_user_data,
     const url::Origin& origin,
