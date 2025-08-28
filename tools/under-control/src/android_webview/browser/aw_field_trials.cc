@@ -22,6 +22,7 @@
 #include "components/viz/common/features.h"
 #include "content/public/common/content_features.h"
 #include "gpu/config/gpu_finch_features.h"
+#include "media/audio/audio_features.h"
 #include "media/base/media_switches.h"
 #include "mojo/public/cpp/bindings/features.h"
 #include "net/base/features.h"
@@ -63,10 +64,6 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(
       blink::features::kEnforceNoopenerOnBlobURLNavigation);
 
-  // TODO(crbug.com/421547429): Temporarily disabled to address crashes.
-  aw_feature_overrides.DisableFeature(
-      network::features::kMaskedDomainListFlatbufferImpl);
-
 #if BUILDFLAG(ENABLE_VALIDATING_COMMAND_DECODER)
   // Disable the passthrough on WebView.
   aw_feature_overrides.DisableFeature(
@@ -75,6 +72,9 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // HDR does not support webview yet. See crbug.com/1493153 for an explanation.
   aw_feature_overrides.DisableFeature(ui::kAndroidHDR);
+
+  // Disable launch_handler on WebView.
+  aw_feature_overrides.DisableFeature(::features::kAndroidWebAppLaunchHandler);
 
   // Disable Reducing User Agent minor version on WebView.
   aw_feature_overrides.DisableFeature(
@@ -124,6 +124,9 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // expose the PaymentRequest.securePaymentConfirmationAvailability API.
   aw_feature_overrides.DisableFeature(
       blink::features::kSecurePaymentConfirmationAvailabilityAPI);
+
+  // WebView does not support handling payment links.
+  aw_feature_overrides.DisableFeature(blink::features::kPaymentLinkDetection);
 
   // WebView does not support overlay fullscreen yet for video overlays.
   aw_feature_overrides.DisableFeature(media::kOverlayFullscreenVideo);
@@ -221,9 +224,8 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // Disabling the permission element as it needs embedder support in order to
   // function and the webview permission manager cannot support it.
   aw_feature_overrides.DisableFeature(blink::features::kPermissionElement);
+  aw_feature_overrides.DisableFeature(blink::features::kGeolocationElement);
 
-  // Feature parameters can only be set via a field trial.
-  // Note: Performing a field trial here means we cannot include
   // |kBtmTtl| in the testing config json.
   {
     const char kDipsWebViewExperiment[] = "DipsWebViewExperiment";
@@ -290,4 +292,12 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // Explicitly disable PrefetchProxy instead of relying only on passing an
   // empty URL.
   aw_feature_overrides.DisableFeature(features::kPrefetchProxy);
+
+  // Document Picture-in-Picture API is not supported on WebView.
+  aw_feature_overrides.DisableFeature(
+      blink::features::kDocumentPictureInPictureAPI);
+
+  // AAudio per-stream device selection is not supported on WebView.
+  aw_feature_overrides.DisableFeature(
+      features::kAAudioPerStreamDeviceSelection);
 }

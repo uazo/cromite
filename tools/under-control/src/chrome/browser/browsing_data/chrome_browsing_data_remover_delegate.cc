@@ -114,8 +114,6 @@
 #include "components/language/core/browser/url_language_histogram.h"
 #include "components/lens/lens_features.h"
 #include "components/media_device_salt/media_device_salt_service.h"
-#include "components/nacl/browser/nacl_browser.h"
-#include "components/nacl/browser/pnacl_host.h"
 #include "components/no_state_prefetch/browser/no_state_prefetch_manager.h"
 #include "components/omnibox/browser/omnibox_prefs.h"
 #include "components/open_from_clipboard/clipboard_recent_content.h"
@@ -126,7 +124,7 @@
 #include "components/password_manager/core/browser/password_store/smart_bubble_stats_store.h"
 #include "components/payments/content/browser_binding/browser_bound_keys_deleter.h"
 #include "components/payments/content/browser_binding/browser_bound_keys_deleter_factory.h"
-#include "components/payments/content/payment_manifest_web_data_service.h"
+#include "components/payments/content/web_payments_web_data_service.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
@@ -242,16 +240,6 @@ namespace {
 
 // Timeout after which the histogram for slow tasks is recorded.
 const base::TimeDelta kSlowTaskTimeout = base::Seconds(180);
-
-// Generic functions but currently only used when ENABLE_NACL.
-#if BUILDFLAG(ENABLE_NACL)
-// Convenience method to create a callback that can be run on any thread and
-// will post the given |callback| back to the UI thread.
-base::OnceClosure UIThreadTrampoline(base::OnceClosure callback) {
-  return base::BindPostTask(content::GetUIThreadTaskRunner({}),
-                            std::move(callback));
-}
-#endif  // BUILDFLAG(ENABLE_NACL)
 
 // Returned by ChromeBrowsingDataRemoverDelegate::GetOriginTypeMatcher().
 bool DoesOriginMatchEmbedderMask(uint64_t origin_type_mask,
@@ -942,13 +930,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
         ContentSettingsType::INTENT_PICKER_DISPLAY, delete_begin_, delete_end_,
         website_settings_filter);
-
-    host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
-        ContentSettingsType::PRIVATE_NETWORK_GUARD, delete_begin_, delete_end_,
-        website_settings_filter);
-    host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
-        ContentSettingsType::PRIVATE_NETWORK_CHOOSER_DATA, delete_begin_,
-        delete_end_, website_settings_filter);
 #endif
 
     host_content_settings_map_->ClearSettingsForOneTypeWithPredicate(
@@ -1134,10 +1115,10 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
        base::FeatureList::IsEnabled(browsing_data::features::kDbdRevampDesktop))
 #endif  // !BUILDFLAG(IS_ANDROID)
   ) {
-    scoped_refptr<payments::PaymentManifestWebDataService>
+    scoped_refptr<payments::WebPaymentsWebDataService>
         payment_web_data_service =
             webdata_services::WebDataServiceWrapperFactory::
-                GetPaymentManifestWebDataServiceForBrowserContext(
+                GetWebPaymentsWebDataServiceForBrowserContext(
                     profile_, ServiceAccessType::EXPLICIT_ACCESS);
     if (payment_web_data_service) {
       payment_web_data_service->ClearSecurePaymentConfirmationCredentials(
@@ -1170,18 +1151,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         }
       }
     }
-
-#if BUILDFLAG(ENABLE_NACL)
-    if (filter_builder->MatchesMostOriginsAndDomains()) {
-      nacl::NaClBrowser::GetInstance()->ClearValidationCache(UIThreadTrampoline(
-          CreateTaskCompletionClosure(TracingDataType::kNaclCache)));
-
-      pnacl::PnaclHost::GetInstance()->ClearTranslationCacheEntriesBetween(
-          delete_begin_, delete_end_,
-          UIThreadTrampoline(
-              CreateTaskCompletionClosure(TracingDataType::kPnaclCache)));
-    }
-#endif
 
     if (filter_builder->MatchesMostOriginsAndDomains()) {
       browsing_data::RemovePrerenderCacheData(
@@ -1661,10 +1630,6 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "Synchronous";
     case TracingDataType::kHistory:
       return "History";
-    case TracingDataType::kNaclCache:
-      return "NaclCache";
-    case TracingDataType::kPnaclCache:
-      return "PnaclCache";
     case TracingDataType::kAutofillData:
       return "AutofillData";
     case TracingDataType::kAutofillOrigins:
@@ -1827,8 +1792,8 @@ void ChromeBrowsingDataRemoverDelegate::DisablePasswordsAutoSignin(
         CreateTaskCompletionClosure(
             TracingDataType::kDisableAutoSigninForProfilePasswords));
   }
-  if (account_store && password_manager::features_util::IsAccountStorageEnabled(
-                           profile_->GetPrefs(), sync_service)) {
+  if (account_store &&
+      password_manager::features_util::IsAccountStorageEnabled(sync_service)) {
     account_store->DisableAutoSignInForOrigins(
         url_filter,
         CreateTaskCompletionClosure(

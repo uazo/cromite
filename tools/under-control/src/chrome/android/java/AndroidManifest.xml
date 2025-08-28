@@ -22,7 +22,7 @@ by a child template that "extends" this file.
     tools:ignore="MissingVersion">
     <!-- android:versionCode and android:versionName is set through gyp. See build/common.gypi -->
 
-    <uses-feature android:glEsVersion="0x00020000" />
+    <uses-feature android:glEsVersion="0x00030000" />
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
@@ -67,6 +67,7 @@ by a child template that "extends" this file.
     <uses-permission-sdk-23 android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.CAPTURE_KEYBOARD" />
     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     {% set is_desktop_android = is_desktop_android|default(0) %}
@@ -96,6 +97,12 @@ by a child template that "extends" this file.
     <uses-permission-sdk-23 android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!--
+      The REPOSITION_SELF_WINDOWS permission is needed for Window Popup Web API to allow Chrome to
+      move windows when the |window.moveTo| JavaScript call is executed (also |window.{resizeBy,
+      resizeTo, moveBy}|).
+    -->
+    <uses-permission android:name="android.permission.REPOSITION_SELF_WINDOWS"/>
     <uses-permission android:name="android.permission.USE_CREDENTIALS"/>
     <uses-permission-sdk-23 android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission-sdk-23 android:name="android.permission.USE_FINGERPRINT"/>
@@ -597,7 +604,7 @@ by a child template that "extends" this file.
             android:autoRemoveFromRecents="true">
         </activity>
         <activity android:name="org.chromium.chrome.browser.firstrun.LightweightFirstRunActivity"
-            android:theme="@style/Theme.BrowserUI.AlertDialog.NoActionBar.DayNight"
+            android:theme="@style/Theme.BrowserUI.DayNight.AlertDialog.NoActionBar"
             android:launchMode="singleInstance"
             {{ self.first_run_activity_common() }}>
         </activity>
@@ -951,7 +958,7 @@ by a child template that "extends" this file.
         <activity android:name="org.chromium.chrome.browser.searchwidget.SearchActivity"
             android:theme="@style/Theme.Chromium.SearchActivity"
             android:label="Search"
-            android:exported="false"
+            android:exported="true"
             android:launchMode="singleTask"
             android:taskAffinity=""
             android:clearTaskOnLaunch="true"
@@ -1180,6 +1187,16 @@ by a child template that "extends" this file.
         <service android:name="org.chromium.chrome.browser.app.usb.UsbNotificationService"
             android:exported="false"/>
 
+        <service android:name="org.chromium.chrome.browser.data_import.DataImporterService"
+            android:exported="true" tools:ignore="ExportedService">
+          <intent-filter>
+            <action android:name="io.grpc.action.BIND" />
+            <data android:host=""
+                android:path="/com.google.osmigration.systemappapi.TargetService"
+                android:scheme="grpc" />
+          </intent-filter>
+        </service>
+
         <meta-data android:name="org.chromium.content.browser.SMART_CLIP_PROVIDER"
             android:value="org.chromium.content_public.browser.SmartClipProvider"/>
 
@@ -1251,6 +1268,27 @@ by a child template that "extends" this file.
           android:visibleToInstantApps="true"
           {% endif %} />
       {% endfor %}
+      {% if javaless_renderers is defined %}
+      <!-- Restricting to just 2 native-only services, one for zygote and one for non-zygote. -->
+      {% for i in range(2) %}
+      <!-- For now, the name of a native-only service must be prefixed with "NativeService". This is
+           only for the prototype, and once it actually lands in the Android tree, there will be a
+           better mechanism than this. -->
+      <service android:name="org.chromium.content.app.NativeServiceSandboxedProcessService{{ i }}"
+          android:process=":sandboxed_process{{ i }}"
+          android:permission="{{ manifest_package }}.permission.CHILD_SERVICE"
+          android:isolatedProcess="true"
+          android:exported="{{sandboxed_service_exported|default(false)}}"
+          {% if (sandboxed_service_exported|default(false)) == 'true' %}
+          android:externalService="true"
+          tools:ignore="ExportedService"
+          android:visibleToInstantApps="true"
+          {% endif %} >
+          <meta-data android:name="android.app.lib_name" android:value="{{ library_name }}"/>
+          <meta-data android:name="android.app.func_name" android:value="NativeChildProcessService_onCreate"/>
+      </service>
+      {% endfor %}
+      {% endif %}
 
       {% set num_privileged_services = 10 %}
       <meta-data android:name="org.chromium.content.browser.NUM_PRIVILEGED_SERVICES"
