@@ -500,7 +500,9 @@ WebView* WebView::Create(
     std::optional<SkColor> page_base_background_color,
     const base::UnguessableToken& browsing_context_group_token,
     const ColorProviderColorMaps* color_provider_colors,
-    blink::mojom::PartitionedPopinParamsPtr partitioned_popin_params) {
+    blink::mojom::PartitionedPopinParamsPtr partitioned_popin_params,
+    int32_t history_index,
+    int32_t history_length) {
   return WebViewImpl::Create(
       client,
       is_hidden ? mojom::blink::PageVisibilityState::kHidden
@@ -509,7 +511,8 @@ WebView* WebView::Create(
       widgets_never_composited, To<WebViewImpl>(opener), std::move(page_handle),
       agent_group_scheduler, session_storage_namespace_id,
       std::move(page_base_background_color), browsing_context_group_token,
-      color_provider_colors, std::move(partitioned_popin_params));
+      color_provider_colors, std::move(partitioned_popin_params), history_index,
+      history_length);
 }
 
 WebViewImpl* WebViewImpl::Create(
@@ -527,14 +530,16 @@ WebViewImpl* WebViewImpl::Create(
     std::optional<SkColor> page_base_background_color,
     const base::UnguessableToken& browsing_context_group_token,
     const ColorProviderColorMaps* color_provider_colors,
-    blink::mojom::PartitionedPopinParamsPtr partitioned_popin_params) {
+    blink::mojom::PartitionedPopinParamsPtr partitioned_popin_params,
+    int32_t history_index,
+    int32_t history_length) {
   return new WebViewImpl(
       client, visibility, std::move(prerender_param), fenced_frame_mode,
       compositing_enabled, widgets_never_composited, opener,
       std::move(page_handle), agent_group_scheduler,
       session_storage_namespace_id, std::move(page_base_background_color),
       browsing_context_group_token, color_provider_colors,
-      std::move(partitioned_popin_params));
+      std::move(partitioned_popin_params), history_index, history_length);
 }
 
 size_t WebView::GetWebViewCount() {
@@ -599,7 +604,9 @@ WebViewImpl::WebViewImpl(
     std::optional<SkColor> page_base_background_color,
     const base::UnguessableToken& browsing_context_group_token,
     const ColorProviderColorMaps* color_provider_colors,
-    blink::mojom::PartitionedPopinParamsPtr partitioned_popin_params)
+    blink::mojom::PartitionedPopinParamsPtr partitioned_popin_params,
+    int32_t history_index,
+    int32_t history_length)
     : widgets_never_composited_(widgets_never_composited),
       web_view_client_(client),
       chrome_client_(MakeGarbageCollected<ChromeClientImpl>(this)),
@@ -607,6 +614,8 @@ WebViewImpl::WebViewImpl(
           blink::ZoomFactorToZoomLevel(kMinimumBrowserZoomFactor)),
       maximum_zoom_level_(
           blink::ZoomFactorToZoomLevel(kMaximumBrowserZoomFactor)),
+      history_list_index_(history_index),
+      history_list_length_(history_length),
       does_composite_(does_composite),
       fullscreen_controller_(std::make_unique<FullscreenController>(this)),
       page_base_background_color_(
@@ -644,6 +653,8 @@ WebViewImpl::WebViewImpl(
         prerender_param->should_warm_up_compositor);
     page_->SetShouldPreparePaintTreeOnPrerender(
         prerender_param->should_prepare_paint_tree);
+    page_->SetShouldPauseJavaScriptExecutionOnPrerender(
+        prerender_param->should_pause_javascript_execution);
   }
 
   if (fenced_frame_mode && features::IsFencedFramesEnabled()) {
@@ -1608,8 +1619,6 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
   settings->SetSyncXHRInDocumentsEnabled(prefs.sync_xhr_in_documents_enabled);
   settings->SetTargetBlankImpliesNoOpenerEnabledWillBeRemoved(
       prefs.target_blank_implies_no_opener_enabled_will_be_removed);
-  settings->SetAllowNonEmptyNavigatorPlugins(
-      prefs.allow_non_empty_navigator_plugins);
   settings->SetIgnorePermissionForDeviceChangedEvent(
       prefs.ignore_permission_for_device_changed_event);
   settings->SetShouldProtectAgainstIpcFlooding(
@@ -1706,11 +1715,6 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
   settings->SetSmartInsertDeleteEnabled(prefs.smart_insert_delete_enabled);
 
   settings->SetSpatialNavigationEnabled(prefs.spatial_navigation_enabled);
-  // Spatnav depends on KeyboardFocusableScrollers. The WebUI team has
-  // disabled KFS because they need more time to update their custom elements,
-  // crbug.com/907284. Meanwhile, we pre-ship KFS to spatnav users.
-  if (prefs.spatial_navigation_enabled)
-    RuntimeEnabledFeatures::SetKeyboardFocusableScrollersEnabled(true);
 
   settings->SetSelectionIncludesAltImageText(true);
 
@@ -1892,25 +1896,14 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
       prefs.translate_service_available);
 
 #if BUILDFLAG(IS_WIN)
-  if (web_view_impl->GetPage() &&
-      base::FeatureList::IsEnabled(features::kPrewarmDefaultFontFamilies)) {
+  if (web_view_impl->GetPage()) {
     if (auto* prewarmer = WebFontRendering::GetFontPrewarmer()) {
       GenericFontFamilySettings& font_settings =
           web_view_impl->GetPage()
               ->GetSettings()
               .GetGenericFontFamilySettings();
-      if (features::kPrewarmStandard.Get())
-        prewarmer->PrewarmFamily(font_settings.Standard());
-      if (features::kPrewarmFixed.Get())
-        prewarmer->PrewarmFamily(font_settings.Fixed());
-      if (features::kPrewarmSerif.Get())
-        prewarmer->PrewarmFamily(font_settings.Serif());
-      if (features::kPrewarmSansSerif.Get())
-        prewarmer->PrewarmFamily(font_settings.SansSerif());
-      if (features::kPrewarmCursive.Get())
-        prewarmer->PrewarmFamily(font_settings.Cursive());
-      if (features::kPrewarmFantasy.Get())
-        prewarmer->PrewarmFamily(font_settings.Fantasy());
+      prewarmer->PrewarmFamily(font_settings.Serif());
+      prewarmer->PrewarmFamily(font_settings.SansSerif());
     }
   }
 #endif
@@ -1925,6 +1918,7 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
       prefs.payment_request_enabled);
 
   if (prefs.api_based_fingerprinting_interventions_enabled) {
+    RuntimeEnabledFeatures::SetReduceHardwareConcurrencyEnabled(true);
     RuntimeEnabledFeatures::SetReduceScreenSizeEnabled(true);
   }
 }
@@ -2540,7 +2534,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
     SetVisibilityState(new_state->visibility, /*is_initial_state=*/false);
   }
   if (storing_in_bfcache) {
-    // TODO(https://crbug.com/1378279): Consider moving this to happen earlier
+    // TODO(https://crbug.com/427130212): Consider moving this to happen earlier
     // and together with other page state updates so that the ordering is clear.
     Scheduler()->SetPageBackForwardCached(new_state->is_in_back_forward_cache);
   }
@@ -2553,7 +2547,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
       }
     }
 
-    // TODO(https://crbug.com/1378279): Consider moving this to happen earlier
+    // TODO(https://crbug.com/427130212): Consider moving this to happen earlier
     // and together with other page state updates so that the ordering is clear.
     SetPageFrozen(true);
   }
@@ -2569,7 +2563,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
   if (eviction_changed)
     HookBackForwardCacheEviction(new_state->eviction_enabled);
   if (resuming_page) {
-    // TODO(https://crbug.com/1378279): Consider moving this to happen earlier
+    // TODO(https://crbug.com/427130212): Consider moving this to happen earlier
     // and together with other page state updates so that the ordering is clear.
     SetPageFrozen(false);
   }
@@ -2582,7 +2576,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
 
     DispatchPersistedPageshow(page_restore_params->navigation_start);
 
-    // TODO(https://crbug.com/1378279): Consider moving this to happen earlier
+    // TODO(https://crbug.com/427130212): Consider moving this to happen earlier
     // and together with other page state updates so that the ordering is clear.
     Scheduler()->SetPageBackForwardCached(new_state->is_in_back_forward_cache);
     if (MainFrame()->IsWebLocalFrame()) {
@@ -2605,7 +2599,7 @@ void WebViewImpl::SetPageLifecycleStateInternal(
   // move SchedulerTrackedFeatures to core/ and remove the back and forth.
   ReportActiveSchedulerTrackedFeatures();
 
-  // TODO(https://crbug.com/1378279): Consider moving this to happen earlier
+  // TODO(https://crbug.com/427130212): Consider moving this to happen earlier
   // and together with other page state updates so that the ordering is clear.
   GetPage()->SetPageLifecycleState(std::move(new_state));
 
@@ -2754,7 +2748,10 @@ void WebViewImpl::DispatchPersistedPageshow(base::TimeTicks navigation_start) {
       // new navigation ID to identify the navigation.
       if (RuntimeEnabledFeatures::
               BackForwardCacheRestorationPerformanceEntryEnabled(window)) {
-        window->GenerateNewNavigationId();
+        WindowPerformance* performance =
+            DOMWindowPerformance::performance(*window);
+        DCHECK(performance);
+        performance->IncrementNavigationId();
       }
 
       window->DispatchPersistedPageshowEvent(navigation_start);
@@ -3543,6 +3540,10 @@ void WebViewImpl::UpdateRendererPreferences(
 
   for (auto& watcher : renderer_preference_watchers_)
     watcher->NotifyUpdate(renderer_preferences_);
+
+  for (auto& observer : observers_) {
+    observer.OnRendererPreferencesUpdated(preferences);
+  }
 
   WebThemeEngineHelper::DidUpdateRendererPreferences(preferences);
   UpdateFontRenderingFromRendererPrefs();
