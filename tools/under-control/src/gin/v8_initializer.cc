@@ -221,6 +221,7 @@ void SetV8FlagsIfOverridden(const base::Feature& feature,
 }
 
 constexpr std::string_view kV8FlagFeaturePrefix = "V8Flag_";
+constexpr std::string_view kV8FlagParam = "V8FlagParam";
 
 }  // namespace
 
@@ -250,8 +251,15 @@ class V8FeatureVisitor : public base::FeatureVisitor {
         break;
 
       case base::FeatureList::OverrideState::OVERRIDE_ENABLE_FEATURE:
-        SetV8FlagsFormatted("--%s", flag_name.c_str());
-        for (const auto& [param_name, param_value] : params) {
+        auto it = params.begin();
+        if (it != params.end() && it->first == kV8FlagParam) {
+          SetV8FlagsFormatted("--%s=%s", flag_name.c_str(), it->second.c_str());
+          ++it;
+        } else {
+          SetV8FlagsFormatted("--%s", flag_name.c_str());
+        }
+        for (; it != params.end(); ++it) {
+          const auto& [param_name, param_value] = *it;
           SetV8FlagsFormatted("--%s=%s", param_name.c_str(),
                               param_value.c_str());
         }
@@ -317,6 +325,16 @@ void SetFeatureFlags() {
   // will be converted, on V8 initialization, to V8 flags:
   //
   //   --foo --bar --bar_param=20 --no-baz
+  //
+  // If an argument is needed for the main flag, a "V8FlagParam" param can be be
+  // used as the first parameter. Additional parameters can still be passed. For
+  // example, running Chromium with:
+  //
+  //   --enable-features=V8Flag_foo:V8FlagParam/bar/baz_param/20
+  //
+  // will be converted to these V8 flags:
+  //
+  //   --foo=bar --baz_param=20
   V8FeatureVisitor feature_visitor;
   base::FeatureList::VisitFeaturesAndParams(feature_visitor,
                                             kV8FlagFeaturePrefix);
@@ -391,6 +409,10 @@ void SetFeatureFlags() {
     SetV8FlagsFormatted("--preconfigured-old-space-size=%i",
                         features::kV8PreconfigureOldGenSize.Get());
   }
+  if (base::FeatureList::IsEnabled(features::kV8HighEndAndroid)) {
+    SetV8FlagsFormatted("--high-end-android-physical-memory-threshold=%i",
+                        features::kV8HighEndAndroidMemoryThreshold.Get());
+  }
   SetV8FlagsIfOverridden(features::kV8IncrementalMarkingStartUserVisible,
                          "--incremental-marking-start-user-visible",
                          "--no-incremental-marking-start-user-visible");
@@ -463,23 +485,6 @@ void SetFeatureFlags() {
     }
   }
 
-  if (base::FeatureList::IsEnabled(features::kV8EfficiencyModeTiering)) {
-    int delay = features::kV8EfficiencyModeTieringDelayTurbofan.Get();
-    if (delay == 0) {
-      SetV8FlagsFormatted(
-          "--efficiency-mode-for-tiering-heuristics "
-          "--efficiency-mode-disable-turbofan");
-    } else {
-      SetV8FlagsFormatted(
-          "--efficiency-mode-for-tiering-heuristics "
-          "--noefficiency-mode-disable-turbofan "
-          "--efficiency-mode-delay-turbofan=%i",
-          delay);
-    }
-  } else {
-    SetV8FlagsFormatted("--no-efficiency-mode-for-tiering-heuristics");
-  }
-
   // Make sure aliases of kV8SlowHistograms only enable the feature to
   // avoid contradicting settings between multiple finch experiments.
   bool any_slow_histograms_alias =
@@ -526,13 +531,7 @@ void SetFeatureFlags() {
   SetV8FlagsIfOverridden(features::kJavaScriptPromiseTry, "--js-promise-try",
                          "--no-js-promise-try");
 
-  // WebAssembly features.
-
-  SetV8FlagsIfOverridden(features::kWebAssemblyDeopt, "--wasm-deopt",
-                         "--no-wasm-deopt");
-  SetV8FlagsIfOverridden(features::kWebAssemblyInliningCallIndirect,
-                         "--wasm-inlining-call-indirect",
-                         "--no-wasm-inlining-call-indirect");
+  // WebAssembly features (currently none).
 }
 
 }  // namespace

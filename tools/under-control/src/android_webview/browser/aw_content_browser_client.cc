@@ -50,6 +50,7 @@
 #include "android_webview/common/url_constants.h"
 #include "base/android/build_info.h"
 #include "base/android/locale_utils.h"
+#include "base/android/yield_to_looper_checker.h"
 #include "base/base_paths_android.h"
 #include "base/base_switches.h"
 #include "base/command_line.h"
@@ -142,6 +143,7 @@
 #include "ui/gfx/image/image_skia.h"
 #include "ui/resources/grit/ui_resources.h"
 
+using base::android::YieldToLooperChecker;
 using content::BrowserThread;
 using content::FrameType;
 using content::WebContents;
@@ -334,8 +336,8 @@ void AwContentBrowserClient::ConfigureNetworkContextParams(
       std::move(cookie_manager_remote));
 }
 
-AwBrowserContext* AwContentBrowserClient::InitBrowserContext() {
-  return AwBrowserContextStore::GetOrCreateInstance()->GetDefault();
+void AwContentBrowserClient::InitBrowserContextStore() {
+  AwBrowserContextStore::GetOrCreateInstance();
 }
 
 std::unique_ptr<content::BrowserMainParts>
@@ -343,10 +345,10 @@ AwContentBrowserClient::CreateBrowserMainParts(bool /* is_integration_test */) {
   return std::make_unique<AwBrowserMainParts>(this);
 }
 
-bool IsStartupTaskExperimentEnabled() {
-  auto* command_line = base::CommandLine::ForCurrentProcess();
+bool IsAnyStartupTaskExperimentEnabled() {
   return AwBrowserMainParts::isWebViewStartupTasksExperimentEnabled() ||
-         command_line->HasSwitch(switches::kWebViewUseStartupTasksLogic);
+         AwBrowserMainParts::isWebViewStartupTasksExperimentEnabledP2() ||
+         AwBrowserMainParts::isStartupTaskYieldToNativeExperimentEnabled();
 }
 
 void AwContentBrowserClient::PostAfterStartupTask(
@@ -354,7 +356,7 @@ void AwContentBrowserClient::PostAfterStartupTask(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     base::OnceClosure task) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!IsStartupTaskExperimentEnabled()) {
+  if (!IsAnyStartupTaskExperimentEnabled()) {
     task_runner->PostTask(from_here, std::move(task));
     return;
   }
@@ -376,6 +378,10 @@ void AwContentBrowserClient::OnStartupComplete() {
   DCHECK(!startup_info_.startup_complete);
 
   startup_info_.startup_complete = true;
+  if (AwBrowserMainParts::isStartupTaskYieldToNativeExperimentEnabled()) {
+    YieldToLooperChecker::GetInstance().SetStartupRunning(false);
+  }
+
   // if the native ui task execution isn't enabled already, enable it.
   if (!startup_info_.enable_native_task_execution_callback.is_null()) {
     std::move(startup_info_.enable_native_task_execution_callback).Run();
@@ -391,13 +397,17 @@ void AwContentBrowserClient::OnStartupComplete() {
 
 void AwContentBrowserClient::OnUiTaskRunnerReady(
     base::OnceClosure enable_native_task_execution_callback) {
-  if (!IsStartupTaskExperimentEnabled()) {
+  if (!IsAnyStartupTaskExperimentEnabled()) {
     std::move(enable_native_task_execution_callback).Run();
     return;
   }
 
   startup_info_.enable_native_task_execution_callback =
       std::move(enable_native_task_execution_callback);
+
+  if (AwBrowserMainParts::isStartupTaskYieldToNativeExperimentEnabled()) {
+    YieldToLooperChecker::GetInstance().SetStartupRunning(true);
+  }
 }
 
 std::unique_ptr<content::WebContentsViewDelegate>
@@ -608,25 +618,6 @@ AwContentBrowserClient::GetLocalTracesDirectory() {
   return user_data_dir;
 }
 
-void AwContentBrowserClient::DidCreatePpapiPlugin(
-    content::BrowserPpapiHost* browser_host) {
-  NOTREACHED() << "Android WebView does not support plugins";
-}
-
-bool AwContentBrowserClient::AllowPepperSocketAPI(
-    content::BrowserContext* browser_context,
-    const GURL& url,
-    bool private_api,
-    const content::SocketPermissionRequest* params) {
-  NOTREACHED() << "Android WebView does not support plugins";
-}
-
-bool AwContentBrowserClient::IsPepperVpnProviderAPIAllowed(
-    content::BrowserContext* browser_context,
-    const GURL& url) {
-  NOTREACHED() << "Android WebView does not support plugins";
-}
-
 std::unique_ptr<content::TracingDelegate>
 AwContentBrowserClient::CreateTracingDelegate() {
   return std::make_unique<AwTracingDelegate>();
@@ -712,7 +703,7 @@ void AwContentBrowserClient::CreateThrottlesForNavigation(
   if ((navigation_handle.GetNavigatingFrameType() ==
            FrameType::kPrimaryMainFrame ||
        navigation_handle.GetNavigatingFrameType() == FrameType::kSubframe) &&
-      navigation_handle.GetURL().SchemeIsHTTPOrHTTPS()) {
+      registry.IsHTTPOrHTTPS()) {
     AwSupervisedUserUrlClassifier* urlClassifier =
         AwSupervisedUserUrlClassifier::GetInstance();
     if (urlClassifier->ShouldCreateThrottle()) {
@@ -891,11 +882,14 @@ bool AwContentBrowserClient::SupportsAvoidUnnecessaryBeforeUnloadCheckSync() {
   return false;
 }
 
-bool AwContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
+content::ContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChangeResult
+AwContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
     const content::RenderFrameHost& rfh) {
   if (!base::FeatureList::IsEnabled(features::kWebViewRenderDocument)) {
-    return false;
+    return content::ContentBrowserClient::
+        ShouldAllowSameSiteRenderFrameHostChangeResult::kNotAllowed;
   }
+
   content::RenderFrameHost* rfh_ptr =
       const_cast<content::RenderFrameHost*>(&rfh);
   content::WebContents* web_contents =
@@ -904,8 +898,18 @@ bool AwContentBrowserClient::ShouldAllowSameSiteRenderFrameHostChange(
   // Don't allow same-site RFH swap on non-crashed frames if the initial page
   // scale is non-default. See the comment in `AwSettings` about this for more
   // details.
-  return !aw_settings || !rfh_ptr->IsRenderFrameLive() ||
-         !aw_settings->initial_page_scale_is_non_default();
+  if (aw_settings && rfh_ptr->IsRenderFrameLive() &&
+      aw_settings->initial_page_scale_is_non_default()) {
+    return content::ContentBrowserClient::
+        ShouldAllowSameSiteRenderFrameHostChangeResult::kNotAllowed;
+  }
+
+  // The WebViewRenderDocument flag is enabled and we're not in an unsupported
+  // case. Force the same-site RenderFrameHost change regardless of the state
+  // of the RenderDocument flag, so that we only need to enable the
+  // WebViewRenderDocument flag to enable RenderDocument on all frames.
+  return content::ContentBrowserClient::
+      ShouldAllowSameSiteRenderFrameHostChangeResult::kAllowedOverrideLevel;
 }
 
 std::unique_ptr<content::LoginDelegate>
