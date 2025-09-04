@@ -12,18 +12,20 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../insecure_private_network.grdp             | 18 ++++
  .../insecure_private_network.inc              | 25 +++++
  .../INSECURE_PRIVATE_NETWORK.inc              |  3 +
- services/network/cors/cors_url_loader.cc      |  8 +-
- .../network/private_network_access_checker.cc | 16 +++-
- 7 files changed, 188 insertions(+), 11 deletions(-)
+ ...rivate-network-access-content-settings.inc |  1 +
+ services/network/cors/cors_url_loader.cc      |  2 +-
+ services/network/public/cpp/features.cc       |  2 +-
+ 8 files changed, 175 insertions(+), 5 deletions(-)
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/BromiteInsecurePrivateNetworkContentSetting.java
  create mode 100644 components/browser_ui/strings/bromite_content_settings/insecure_private_network.grdp
  create mode 100644 components/content_settings/core/browser/bromite_content_settings/insecure_private_network.inc
  create mode 100644 components/content_settings/core/common/bromite_content_settings/INSECURE_PRIVATE_NETWORK.inc
+ create mode 100644 cromite_flags/services/network/public/cpp/features_cc/Private-network-access-content-settings.inc
 
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -1351,6 +1351,31 @@ bool IsDefaultSearchEngine(Profile* profile, const GURL& url) {
+@@ -1348,6 +1348,31 @@ bool IsDefaultSearchEngine(Profile* profile, const GURL& url) {
               url);
  }
  
@@ -55,7 +57,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  }  // namespace
  
  // static
-@@ -7640,12 +7665,17 @@ content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride
+@@ -7582,12 +7607,17 @@ content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride
  ChromeContentBrowserClient::ShouldOverridePrivateNetworkRequestPolicy(
      content::BrowserContext* browser_context,
      const url::Origin& origin) {
@@ -209,7 +211,7 @@ new file mode 100644
 +           WebsiteSettingsInfo::REQUESTING_ORIGIN_ONLY_SCOPE,
 +           WebsiteSettingsRegistry::ALL_PLATFORMS,
 +           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
-+           ContentSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
++           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
 +
 +  content_settings::WebsiteSettingsRegistry::GetInstance()
 +    ->GetMutable(ContentSettingsType::INSECURE_PRIVATE_NETWORK)
@@ -235,10 +237,16 @@ new file mode 100644
 +  // Stores whether to allow insecure websites to make private network requests.
 +  // See also: https://wicg.github.io/cors-rfc1918
 +  INSECURE_PRIVATE_NETWORK,
+diff --git a/cromite_flags/services/network/public/cpp/features_cc/Private-network-access-content-settings.inc b/cromite_flags/services/network/public/cpp/features_cc/Private-network-access-content-settings.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/services/network/public/cpp/features_cc/Private-network-access-content-settings.inc
+@@ -0,0 +1 @@
++SET_CROMITE_FEATURE_ENABLED(kLocalNetworkAccessChecks);
 diff --git a/services/network/cors/cors_url_loader.cc b/services/network/cors/cors_url_loader.cc
 --- a/services/network/cors/cors_url_loader.cc
 +++ b/services/network/cors/cors_url_loader.cc
-@@ -1090,7 +1090,7 @@ std::optional<URLLoaderCompletionStatus> CorsURLLoader::ConvertPreflightResult(
+@@ -1067,7 +1067,7 @@ std::optional<URLLoaderCompletionStatus> CorsURLLoader::ConvertPreflightResult(
    }
  
    // Private Network Access warning: ignore net and CORS errors.
@@ -247,61 +255,16 @@ diff --git a/services/network/cors/cors_url_loader.cc b/services/network/cors/co
      CHECK(ShouldIgnorePrivateNetworkAccessErrors(
          request_.required_ip_address_space));
      CHECK_EQ(*reason, PreflightRequiredReason::kPrivateNetworkAccess);
-@@ -1403,12 +1403,6 @@ bool CorsURLLoader::ShouldIgnorePrivateNetworkAccessErrors(
-   if (!state) {
-     return false;
-   }
--  // When the PNA permission prompt shown, we should always respect the
--  // preflight results, otherwise it would be a bypass of mixed content checker.
--  if (PrivateNetworkAccessChecker::NeedPermission(
--          request_.url, state->is_web_secure_context, target_address_space)) {
--    return false;
--  }
-   return state->private_network_request_policy ==
-          mojom::PrivateNetworkRequestPolicy::kPreflightWarn;
- }
-diff --git a/services/network/private_network_access_checker.cc b/services/network/private_network_access_checker.cc
---- a/services/network/private_network_access_checker.cc
-+++ b/services/network/private_network_access_checker.cc
-@@ -7,6 +7,7 @@
- #include "base/feature_list.h"
- #include "base/metrics/histogram_functions.h"
- #include "net/base/transport_info.h"
-+#include "net/base/url_util.h"
- #include "services/network/public/cpp/features.h"
- #include "services/network/public/cpp/ip_address_space_util.h"
- #include "services/network/public/cpp/is_potentially_trustworthy.h"
-@@ -20,6 +21,13 @@
- namespace network {
- namespace {
+diff --git a/services/network/public/cpp/features.cc b/services/network/public/cpp/features.cc
+--- a/services/network/public/cpp/features.cc
++++ b/services/network/public/cpp/features.cc
+@@ -236,7 +236,7 @@ BASE_FEATURE_PARAM(bool,
+                    kLocalNetworkAccessChecksWarn,
+                    &kLocalNetworkAccessChecks,
+                    /*name=*/"LocalNetworkAccessChecksWarn",
+-                   /*default_value=*/true);
++                   /*default_value=*/false);
  
-+bool IsReservedIPAddress(const std::string host) {
-+  net::IPAddress address;
-+  if (!net::ParseURLHostnameToAddress(host, &address))
-+    return false;
-+  return !address.IsPubliclyRoutable();
-+}
-+
- using Result = PrivateNetworkAccessCheckResult;
- using Policy = mojom::PrivateNetworkRequestPolicy;
- 
-@@ -260,11 +268,17 @@ bool PrivateNetworkAccessChecker::NeedPermission(
-     const GURL& url,
-     bool is_web_secure_context,
-     mojom::IPAddressSpace target_address_space) {
--  return base::FeatureList::IsEnabled(
-+  bool need_permission = base::FeatureList::IsEnabled(
-              network::features::kPrivateNetworkAccessPermissionPrompt) &&
-          is_web_secure_context && !network::IsUrlPotentiallyTrustworthy(url) &&
-          (target_address_space == mojom::IPAddressSpace::kLocal ||
-           target_address_space == mojom::IPAddressSpace::kPrivate);
-+  std::string host = url.host();
-+  if (IsReservedIPAddress(host) || host == "0.0.0.0" ||
-+      host == "[::1]" || net::HostStringIsLocalhost(host)) {
-+    need_permission = true;
-+  }
-+  return need_permission;
- }
- 
- }  // namespace network
+ // Enables Local Network Access checks for WebRTC.
+ // Blocks local network requests without user permission to prevent exploitation
 --

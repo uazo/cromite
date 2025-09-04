@@ -7,49 +7,23 @@ This approach is not comprehensive, see also:
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- .../execution_context/execution_context.cc    | 15 +++++++++
  .../execution_context/execution_context.h     |  1 +
  .../renderer/core/loader/base_fetch_context.h |  1 +
  .../core/loader/frame_fetch_context.cc        | 20 ++++++++++++
  .../core/loader/frame_fetch_context.h         |  1 +
  .../core/loader/worker_fetch_context.cc       | 21 +++++++++++++
  .../core/loader/worker_fetch_context.h        |  1 +
- .../core/workers/installed_scripts_manager.cc |  4 +--
+ .../core/workers/installed_scripts_manager.cc |  2 +-
  .../background_fetch_manager.cc               | 31 +++++++++++++++++++
  .../websockets/websocket_channel_impl.cc      |  5 +++
  .../modules/websockets/websocket_common.cc    | 30 ++++++++++++++++++
  .../modules/websockets/websocket_common.h     |  4 +++
- 12 files changed, 132 insertions(+), 2 deletions(-)
+ 11 files changed, 116 insertions(+), 1 deletion(-)
 
-diff --git a/third_party/blink/renderer/core/execution_context/execution_context.cc b/third_party/blink/renderer/core/execution_context/execution_context.cc
---- a/third_party/blink/renderer/core/execution_context/execution_context.cc
-+++ b/third_party/blink/renderer/core/execution_context/execution_context.cc
-@@ -713,6 +713,21 @@ void ExecutionContext::WriteIntoTrace(
-   proto->set_world_type(GetWorldType(*this));
- }
- 
-+String ExecutionContext::addressSpaceForBindings() const {
-+  switch (AddressSpace()) {
-+    case network::mojom::IPAddressSpace::kPublic:
-+    case network::mojom::IPAddressSpace::kUnknown:
-+      return "public";
-+
-+    case network::mojom::IPAddressSpace::kPrivate:
-+      return "private";
-+
-+    case network::mojom::IPAddressSpace::kLocal:
-+      return "local";
-+  }
-+  NOTREACHED();
-+}
-+
- bool ExecutionContext::CrossOriginIsolatedCapabilityOrDisabledWebSecurity()
-     const {
-   return Agent::IsWebSecurityDisabled() || CrossOriginIsolatedCapability();
 diff --git a/third_party/blink/renderer/core/execution_context/execution_context.h b/third_party/blink/renderer/core/execution_context/execution_context.h
 --- a/third_party/blink/renderer/core/execution_context/execution_context.h
 +++ b/third_party/blink/renderer/core/execution_context/execution_context.h
-@@ -396,6 +396,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
+@@ -395,6 +395,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
    void SetAddressSpace(network::mojom::blink::IPAddressSpace ip_address_space);
  
    HeapObserverList<ContextLifecycleObserver>& ContextLifecycleObserverSet();
@@ -84,7 +58,7 @@ diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/thi
 +  network::mojom::IPAddressSpace target_space =
 +      network::mojom::IPAddressSpace::kPublic;
 +  if (network_utils::IsReservedIPAddress(request_url.Host()))
-+    target_space = network::mojom::IPAddressSpace::kPrivate;
++    target_space = network::mojom::IPAddressSpace::kLocal;
 +  if (SecurityOrigin::Create(request_url)->IsLocalhost())
 +    target_space = network::mojom::IPAddressSpace::kLocal;
 +
@@ -133,7 +107,7 @@ diff --git a/third_party/blink/renderer/core/loader/worker_fetch_context.cc b/th
 +  network::mojom::IPAddressSpace target_space =
 +      network::mojom::IPAddressSpace::kPublic;
 +  if (network_utils::IsReservedIPAddress(request_url.Host()))
-+    target_space = network::mojom::IPAddressSpace::kPrivate;
++    target_space = network::mojom::IPAddressSpace::kLocal;
 +  if (SecurityOrigin::Create(request_url)->IsLocalhost())
 +    target_space = network::mojom::IPAddressSpace::kLocal;
 +
@@ -161,12 +135,9 @@ diff --git a/third_party/blink/renderer/core/loader/worker_fetch_context.h b/thi
 diff --git a/third_party/blink/renderer/core/workers/installed_scripts_manager.cc b/third_party/blink/renderer/core/workers/installed_scripts_manager.cc
 --- a/third_party/blink/renderer/core/workers/installed_scripts_manager.cc
 +++ b/third_party/blink/renderer/core/workers/installed_scripts_manager.cc
-@@ -33,9 +33,9 @@ InstalledScriptsManager::ScriptData::ScriptData(
-   // place so that this is shareable out of worker code.
-   response_address_space_ = network::mojom::IPAddressSpace::kPublic;
+@@ -35,7 +35,7 @@ InstalledScriptsManager::ScriptData::ScriptData(
    if (network_utils::IsReservedIPAddress(script_url_.Host()))
--    response_address_space_ = network::mojom::IPAddressSpace::kLocal;
-+    response_address_space_ = network::mojom::IPAddressSpace::kPrivate;
+     response_address_space_ = network::mojom::IPAddressSpace::kLocal;
    if (SecurityOrigin::Create(script_url_)->IsLocalhost())
 -    response_address_space_ = network::mojom::IPAddressSpace::kLoopback;
 +    response_address_space_ = network::mojom::IPAddressSpace::kLocal;
@@ -193,7 +164,7 @@ diff --git a/third_party/blink/renderer/modules/background_fetch/background_fetc
 +    network::mojom::IPAddressSpace target_space =
 +        network::mojom::IPAddressSpace::kPublic;
 +    if (network_utils::IsReservedIPAddress(request_url.Host()))
-+      target_space = network::mojom::IPAddressSpace::kPrivate;
++      target_space = network::mojom::IPAddressSpace::kLocal;
 +    if (SecurityOrigin::Create(request_url)->IsLocalhost())
 +      target_space = network::mojom::IPAddressSpace::kLocal;
 +
@@ -224,7 +195,7 @@ diff --git a/third_party/blink/renderer/modules/background_fetch/background_fetc
 diff --git a/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc b/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc
 --- a/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc
 +++ b/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc
-@@ -284,6 +284,11 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
+@@ -285,6 +285,11 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
      return false;
    }
  
@@ -265,7 +236,7 @@ diff --git a/third_party/blink/renderer/modules/websockets/websocket_common.cc b
 +  network::mojom::IPAddressSpace target_space =
 +      network::mojom::IPAddressSpace::kPublic;
 +  if (network_utils::IsReservedIPAddress(request_url.Host()))
-+    target_space = network::mojom::IPAddressSpace::kPrivate;
++    target_space = network::mojom::IPAddressSpace::kLocal;
 +  if (SecurityOrigin::Create(request_url)->IsLocalhost())
 +    target_space = network::mojom::IPAddressSpace::kLocal;
 +
