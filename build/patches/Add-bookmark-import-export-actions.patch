@@ -17,7 +17,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../app/bookmarks/BookmarkActivity.java       |  31 ++
  .../native_page/NativePageFactory.java        |   9 +-
  chrome/browser/BUILD.gn                       |  11 +-
- .../bookmarks/android/bookmark_bridge.cc      | 266 ++++++++++++++++
+ .../bookmarks/android/bookmark_bridge.cc      | 197 ++++++++++++
  .../bookmarks/android/bookmark_bridge.h       |  30 +-
  .../browser/bookmarks/BookmarkBridge.java     |  39 +++
  .../browser/bookmarks/BookmarkDelegate.java   |  10 +
@@ -36,9 +36,10 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/importer/profile_writer.h      |   6 +
  .../preferences/ChromePreferenceKeys.java     |   3 +
  .../strings/android_chrome_strings.grd        |  18 ++
- chrome/common/BUILD.gn                        |   3 +
- chrome/utility/BUILD.gn                       |   5 +
+ chrome/utility/BUILD.gn                       |   7 +
+ .../importer/bookmarks_file_importer.cc       |   4 +
  .../headless_select_file_dialog.cc            |   4 +
+ .../content/content_bookmark_parser_utils.cc  |   3 +
  .../add-bookmark-import-export-actions.inc    |  12 +
  .../add-bookmark-import-export-actions.inc    |   4 +
  .../add-bookmark-import-export-actions.inc    |   1 +
@@ -50,7 +51,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  ui/shell_dialogs/select_file_dialog_linux.cc  |   4 +
  ui/shell_dialogs/select_file_dialog_linux.h   |   2 +
  ui/shell_dialogs/select_file_dialog_win.cc    |   5 +
- 39 files changed, 872 insertions(+), 24 deletions(-)
+ 40 files changed, 809 insertions(+), 24 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_h/add-bookmark-import-export-actions.inc
@@ -268,7 +269,7 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
    configs += [
      "//build/config/compiler:wexit_time_destructors",
      "//build/config:precompiled_headers",
-@@ -3697,8 +3706,6 @@ static_library("browser") {
+@@ -3704,8 +3713,6 @@ static_library("browser") {
        "bookmarks/bookmark_expanded_state_tracker.h",
        "bookmarks/bookmark_expanded_state_tracker_factory.cc",
        "bookmarks/bookmark_expanded_state_tracker_factory.h",
@@ -280,19 +281,20 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browser/bookmarks/android/bookmark_bridge.cc
 --- a/chrome/browser/bookmarks/android/bookmark_bridge.cc
 +++ b/chrome/browser/bookmarks/android/bookmark_bridge.cc
-@@ -68,6 +68,27 @@
+@@ -68,6 +68,28 @@
  #include "content/public/browser/web_contents.h"
  #include "url/gurl.h"
  
 +#include "base/android/content_uri_utils.h"
 +#include "base/android/path_utils.h"
 +#include "base/strings/utf_string_conversions.h"
-+#include "chrome/utility/importer/bookmark_html_reader.h"
 +#include "chrome/browser/bookmarks/bookmark_html_writer.h"
 +#include "chrome/browser/importer/profile_writer.h"
 +#include "chrome/browser/platform_util.h"
 +#include "chrome/browser/ui/chrome_select_file_policy.h"
 +#include "components/user_data_importer/common/imported_bookmark_entry.h"
++#include "components/user_data_importer/content/content_bookmark_parser.h"
++#include "components/user_data_importer/content/content_bookmark_parser_utils.h"
 +#include "chrome/common/url_constants.h"
 +#include "components/favicon_base/favicon_usage_data.h"
 +#include "components/search_engines/template_url.h"
@@ -308,65 +310,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
  // Must come after all headers that specialize FromJniType() / ToJniType().
  #include "chrome/browser/bookmarks/android/jni_headers/BookmarkBridge_jni.h"
  
-@@ -86,6 +107,57 @@ using bookmarks::android::JavaBookmarkIdGetType;
- using content::BrowserThread;
- using power_bookmarks::PowerBookmarkMeta;
- 
-+namespace internal {
-+
-+// Returns true if |url| has a valid scheme that we allow to import. We
-+// filter out the URL with a unsupported scheme.
-+bool CanImportURL(const GURL& url) {
-+  // The URL is not valid.
-+  if (!url.is_valid())
-+    return false;
-+
-+  // Filter out the URLs with unsupported schemes.
-+  const char* const kInvalidSchemes[] = {"wyciwyg", "place"};
-+  for (size_t i = 0; i < std::size(kInvalidSchemes); ++i) {
-+    if (url.SchemeIs(kInvalidSchemes[i]))
-+      return false;
-+  }
-+
-+  // Check if |url| is about:blank.
-+  if (url == url::kAboutBlankURL)
-+    return true;
-+
-+  // If |url| starts with chrome:// or about:, check if it's one of the URLs
-+  // that we support.
-+  if (url.SchemeIs(content::kChromeUIScheme) ||
-+      url.SchemeIs(url::kAboutScheme)) {
-+    if (url.host_piece() == chrome::kChromeUIAboutHost)
-+      return true;
-+
-+    GURL fixed_url(url_formatter::FixupURL(url.spec(), std::string()));
-+    const base::span<const base::cstring_view> hosts = chrome::ChromeURLHosts();
-+    for (const base::cstring_view host : hosts) {
-+      if (fixed_url.DomainIs(host)) {
-+        return true;
-+      }
-+    }
-+
-+    if (base::Contains(chrome::ChromeDebugURLs(), fixed_url.spec())) {
-+      return true;
-+    }
-+
-+    // If url has either chrome:// or about: schemes but wasn't found in the
-+    // above lists, it means we don't support it, so we don't allow the user
-+    // to import it.
-+    return false;
-+  }
-+
-+  // Otherwise, we assume the url has a valid (importable) scheme.
-+  return true;
-+}
-+
-+} // internal
-+
- namespace {
- // The key used to connect the instance of the bookmark bridge to the bookmark
- // model.
-@@ -296,6 +368,10 @@ BookmarkBridge::~BookmarkBridge() {
+@@ -296,6 +318,10 @@ BookmarkBridge::~BookmarkBridge() {
    partner_bookmarks_shim_observation_.Reset();
    bookmark_model_observation_.Reset();
    profile_observation_.Reset();
@@ -377,7 +321,7 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
  }
  
  void BookmarkBridge::Destroy(JNIEnv* env) {
-@@ -847,6 +923,196 @@ jint BookmarkBridge::GetTotalBookmarkCount(
+@@ -847,6 +873,177 @@ jint BookmarkBridge::GetTotalBookmarkCount(
    return count;
  }
  
@@ -525,43 +469,24 @@ diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browse
 +}
 +
 +void BookmarkBridge::FileSelectedImplOnUIThread(const base::FilePath& path,
-+                                        const std::string& contents) {
++                                                const std::string& contents) {
 +  if (contents.empty())
 +    return;
 +
 +  // the following import logic comes from BookmarksFileImporter class
-+  std::vector<user_data_importer::ImportedBookmarkEntry> bookmarks;
-+  std::vector<user_data_importer::SearchEngineInfo> search_engines;
-+  favicon_base::FaviconUsageDataList favicons;
-+
-+  bookmark_html_reader::ImportBookmarksFile(
-+      base::RepeatingCallback<bool(void)>(),
-+      base::BindRepeating(internal::CanImportURL),
-+      contents,
-+      &bookmarks,
-+      &search_engines,
-+      &favicons);
++  user_data_importer::BookmarkParser::ParsedBookmarks parsed_bookmarks =
++      user_data_importer::ParseBookmarksUnsafe(contents);
 +
 +  auto *writer = new ProfileWriter(profile_);
 +
-+  if (!bookmarks.empty()) {
++  if (!parsed_bookmarks.bookmarks.empty()) {
 +    // adding bookmarks will begin extensive changes to the model
-+    writer->AddBookmarksWithModel(bookmark_model_, bookmarks, u"Imported");
-+  }
-+  if (!search_engines.empty()) {
-+    TemplateURLService::OwnedTemplateURLVector owned_template_urls;
-+    for (const auto& search_engine : search_engines) {
-+      std::unique_ptr<TemplateURL> owned_template_url = CreateTemplateURL(
-+          search_engine.url, search_engine.keyword, search_engine.display_name);
-+      if (owned_template_url)
-+        owned_template_urls.push_back(std::move(owned_template_url));
-+    }
-+    writer->AddKeywords(std::move(owned_template_urls), false);
++    writer->AddBookmarksWithModel(bookmark_model_, parsed_bookmarks.bookmarks, u"Imported");
 +  }
 +
 +  std::stringstream message;
-+  message << "Imported " << bookmarks.size() << " bookmarks and " <<
-+		search_engines.size() << " search engines from " << path.MaybeAsASCII();
++  message << "Imported " << parsed_bookmarks.bookmarks.size() << " bookmarks " <<
++		" from " << path.MaybeAsASCII();
 +  auto result = message.str();
 +
 +  select_file_dialog_->ShowToast(result);
@@ -987,7 +912,7 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
 +        // use the download ui and standard file saving
 +        DownloadLocationDialogController controller = new DownloadLocationDialogController() {
 +            @Override
-+            public void onDownloadLocationDialogComplete(String returnedPath) {}
++            public void onDownloadLocationDialogComplete(String returnedPath, boolean didUserConfirm) {}
 +
 +            @Override
 +            public void onDownloadLocationDialogCanceled() {}
@@ -1435,34 +1360,39 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
        <message name="IDS_NOTIFICATION_CATEGORY_VR" desc="Label for notifications in VR, within a list of notification categories. [CHAR_LIMIT=32]">
          Virtual Reality
        </message>
-diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
---- a/chrome/common/BUILD.gn
-+++ b/chrome/common/BUILD.gn
-@@ -339,6 +339,9 @@ static_library("common_lib") {
-       "chrome_descriptors_android.h",
-       "media/chrome_media_drm_bridge_client.cc",
-       "media/chrome_media_drm_bridge_client.h",
-+      ## Bromite dependencies for bookmark import functionality
-+      "//components/user_data_importer/common/imported_bookmark_entry.cc",
-+      "//components/user_data_importer/common/imported_bookmark_entry.h",
-     ]
-   } else {
-     # Non-Android.
 diff --git a/chrome/utility/BUILD.gn b/chrome/utility/BUILD.gn
 --- a/chrome/utility/BUILD.gn
 +++ b/chrome/utility/BUILD.gn
-@@ -222,6 +222,11 @@ static_library("utility") {
+@@ -222,6 +222,13 @@ static_library("utility") {
      deps += [ "//chrome/services/pdf:lib" ]
    }
  
-+  sources += [
-+    "importer/bookmark_html_reader.cc",
-+    "importer/bookmark_html_reader.h",
-+  ]
++  if (is_android) {
++    sources += [
++      "importer/bookmarks_file_importer.cc",
++      "importer/bookmarks_file_importer.h",
++    ]
++  }
 +
    # NSS decryptor is not needed on ChromeOS.
    if (!is_chromeos && use_nss_certs) {
      sources += [
+diff --git a/chrome/utility/importer/bookmarks_file_importer.cc b/chrome/utility/importer/bookmarks_file_importer.cc
+--- a/chrome/utility/importer/bookmarks_file_importer.cc
++++ b/chrome/utility/importer/bookmarks_file_importer.cc
+@@ -103,8 +103,12 @@ void BookmarksFileImporter::StartImport(
+       user_data_importer::ParseBookmarksUnsafe(raw_html);
+ 
+   if (!parsed_bookmarks.bookmarks.empty()) {
++#if BUILDFLAG(IS_ANDROID)
++    std::u16string first_folder_name;
++#else
+     std::u16string first_folder_name =
+         bridge_->GetLocalizedString(IDS_BOOKMARK_GROUP);
++#endif
+     std::erase_if(parsed_bookmarks.bookmarks,
+                   [](user_data_importer::ImportedBookmarkEntry bookmark) {
+                     return !internal::CanImportURL(bookmark.url);
 diff --git a/components/headless/select_file_dialog/headless_select_file_dialog.cc b/components/headless/select_file_dialog/headless_select_file_dialog.cc
 --- a/components/headless/select_file_dialog/headless_select_file_dialog.cc
 +++ b/components/headless/select_file_dialog/headless_select_file_dialog.cc
@@ -1477,6 +1407,29 @@ diff --git a/components/headless/select_file_dialog/headless_select_file_dialog.
    SelectFileDialogCallback callback_;
  };
  
+diff --git a/components/user_data_importer/content/content_bookmark_parser_utils.cc b/components/user_data_importer/content/content_bookmark_parser_utils.cc
+--- a/components/user_data_importer/content/content_bookmark_parser_utils.cc
++++ b/components/user_data_importer/content/content_bookmark_parser_utils.cc
+@@ -89,6 +89,7 @@ std::optional<base::Time> GetTimeAttribute(const std::string& attribute_list,
+ 
+ // Given the URL of a page and a favicon data URL, adds an appropriate record
+ // to the given favicon usage vector.
++[[maybe_unused]]
+ void DataURLToFaviconUsage(const GURL& link_url,
+                            const GURL& favicon_data,
+                            favicon_base::FaviconUsageDataList* favicons) {
+@@ -438,9 +439,11 @@ BookmarkParser::ParsedBookmarks ParseBookmarksUnsafe(
+       }
+       parsing_result.bookmarks.push_back(std::move(entry));
+ 
++#if !BUILDFLAG(IS_ANDROID)
+       // Save the favicon. DataURLToFaviconUsage will handle the case where
+       // there is no favicon.
+       DataURLToFaviconUsage(url, favicon, &parsing_result.favicons);
++#endif
+ 
+       continue;
+     }
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/add-bookmark-import-export-actions.inc b/cromite_flags/chrome/browser/about_flags_cc/add-bookmark-import-export-actions.inc
 new file mode 100644
 --- /dev/null

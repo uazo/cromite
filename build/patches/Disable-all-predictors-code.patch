@@ -6,6 +6,7 @@ Original License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  chrome/browser/BUILD.gn                          |  4 +---
+ .../background_download_service_factory.cc       |  2 +-
  .../preloading_model_keyed_service.cc            |  3 +++
  .../preloading_model_keyed_service_factory.cc    |  4 +---
  .../optimization_guide/chrome_hints_manager.cc   |  1 +
@@ -13,7 +14,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../optimization_guide_keyed_service.cc          |  1 -
  chrome/browser/permissions/BUILD.gn              |  2 --
  .../permissions/chrome_permissions_client.cc     |  2 --
- .../prediction_model_handler_provider.cc         |  4 ++--
+ .../passage_embedder_delegate.cc                 |  2 ++
+ .../prediction_model_handler_provider.cc         |  9 ++++++---
  .../predictors/autocomplete_action_predictor.cc  |  2 ++
  .../predictors/loading_predictor_config.cc       |  4 ++--
  chrome/browser/predictors/predictors_features.cc |  3 +--
@@ -24,6 +26,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  ...fication_content_detection_service_factory.cc |  6 ++++++
  .../ui/autofill/chrome_autofill_client.cc        | 15 ---------------
  chrome/browser/ui/tab_helpers.cc                 |  1 -
+ .../autofill_ml_internals_page_handler.cc        |  2 ++
+ .../autofill_ml_internals_page_handler.h         |  3 +++
+ .../autofill_ml_internals_ui.cc                  |  3 +++
  .../read_anything/read_aloud_app_model.cc        | 16 ++++++++++++++--
  .../read_anything/read_aloud_app_model.h         |  9 ++++++++-
  .../read_anything_app_controller.cc              | 10 ++++++++++
@@ -37,8 +42,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../prediction_model_download_manager.cc         |  6 ++++--
  .../delivery/prediction_model_fetcher_impl.cc    |  1 +
  .../core/hints/hints_fetcher.cc                  |  1 +
- .../core/hints/hints_manager.cc                  |  1 +
- .../core/optimization_guide_features.cc          | 14 ++++++++------
+ .../core/hints/hints_manager.cc                  |  2 ++
+ .../core/optimization_guide_features.cc          | 12 ++++++------
  components/optimization_guide/features.gni       |  3 +--
  .../core/page_content_annotations_features.cc    |  4 ++++
  .../page_content_annotations_model_manager.cc    |  1 +
@@ -57,7 +62,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../core/html/parser/html_document_parser.cc     |  1 +
  .../document_speculation_rules.cc                |  1 +
  .../platform/runtime_enabled_features.json5      |  2 +-
- 52 files changed, 122 insertions(+), 78 deletions(-)
+ 57 files changed, 136 insertions(+), 80 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/browser_features_cc/Disable-all-predictors-code.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Disable-all-predictors-code.inc
  create mode 100644 cromite_flags/chrome/common/chrome_features_cc/Disable-all-predictors-code.inc
@@ -87,6 +92,18 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
      "//components/safe_browsing/content/browser/password_protection",
      "//components/safe_browsing/content/browser/web_ui",
      "//components/safe_browsing/content/common/proto:download_file_types_proto",
+diff --git a/chrome/browser/download/background_download_service_factory.cc b/chrome/browser/download/background_download_service_factory.cc
+--- a/chrome/browser/download/background_download_service_factory.cc
++++ b/chrome/browser/download/background_download_service_factory.cc
+@@ -179,7 +179,7 @@ BackgroundDownloadServiceFactory::BuildServiceInstanceFor(
+   }
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
+-  if (!key->IsOffTheRecord()) {
++  if (((false)) && !key->IsOffTheRecord()) {
+     clients->insert(std::make_pair(
+         download::DownloadClient::OPTIMIZATION_GUIDE_PREDICTION_MODELS,
+         std::make_unique<download::DeferredClientWrapper>(
 diff --git a/chrome/browser/navigation_predictor/preloading_model_keyed_service.cc b/chrome/browser/navigation_predictor/preloading_model_keyed_service.cc
 --- a/chrome/browser/navigation_predictor/preloading_model_keyed_service.cc
 +++ b/chrome/browser/navigation_predictor/preloading_model_keyed_service.cc
@@ -222,6 +239,23 @@ diff --git a/chrome/browser/permissions/chrome_permissions_client.cc b/chrome/br
    return selectors;
  }
  
+diff --git a/chrome/browser/permissions/prediction_service/passage_embedder_delegate.cc b/chrome/browser/permissions/prediction_service/passage_embedder_delegate.cc
+--- a/chrome/browser/permissions/prediction_service/passage_embedder_delegate.cc
++++ b/chrome/browser/permissions/prediction_service/passage_embedder_delegate.cc
+@@ -17,11 +17,13 @@ PassageEmbedderDelegate::PassageEmbedderDelegate(Profile* profile)
+     : profile_(profile) {}
+ 
+ Embedder* PassageEmbedderDelegate::get_passage_embedder() {
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+   if (auto* prediction_model_handler_provider =
+           PredictionModelHandlerProviderFactory::GetForBrowserContext(
+               profile_)) {
+     return prediction_model_handler_provider->GetPassageEmbedder();
+   }
++#endif
+   return nullptr;
+ }
+ 
 diff --git a/chrome/browser/permissions/prediction_service/prediction_model_handler_provider.cc b/chrome/browser/permissions/prediction_service/prediction_model_handler_provider.cc
 --- a/chrome/browser/permissions/prediction_service/prediction_model_handler_provider.cc
 +++ b/chrome/browser/permissions/prediction_service/prediction_model_handler_provider.cc
@@ -239,6 +273,18 @@ diff --git a/chrome/browser/permissions/prediction_service/prediction_model_hand
  #include "components/permissions/prediction_service/prediction_model_handler.h"
  #endif  // BUILDFLAG(BUILD_WITH_TFLITE_LIB)
  
+@@ -26,7 +26,10 @@ namespace permissions {
+ PredictionModelHandlerProvider::PredictionModelHandlerProvider(
+     OptimizationGuideKeyedService* optimization_guide,
+     passage_embeddings::Embedder* passage_embedder)
+-    : passage_embedder_(passage_embedder) {
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
++    : passage_embedder_(passage_embedder)
++#endif
++    {
+   VLOG(1) << "[PermissionsAI] PredictionModelHandlerProvider ctor";
+   // We set up model handlers if necessary in order of preference:
+   // Aiv4, Aiv3, Aiv1
 diff --git a/chrome/browser/predictors/autocomplete_action_predictor.cc b/chrome/browser/predictors/autocomplete_action_predictor.cc
 --- a/chrome/browser/predictors/autocomplete_action_predictor.cc
 +++ b/chrome/browser/predictors/autocomplete_action_predictor.cc
@@ -303,7 +349,7 @@ diff --git a/chrome/browser/preloading/prefetch/search_prefetch/search_prefetch_
 diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 --- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -1195,7 +1195,6 @@ void ChromeBrowserMainExtraPartsProfiles::
+@@ -1196,7 +1196,6 @@ void ChromeBrowserMainExtraPartsProfiles::
        base::FeatureList::IsEnabled(
            permissions::features::kPermissionOnDeviceGeolocationPredictions) ||
        base::FeatureList::IsEnabled(permissions::features::kPermissionsAIv1)) {
@@ -404,6 +450,66 @@ diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
    OpenerHeuristicService::Get(web_contents->GetBrowserContext());
    if (optimization_guide::features::IsOptimizationHintsEnabled()) {
      OptimizationGuideWebContentsObserver::CreateForWebContents(web_contents);
+diff --git a/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.cc b/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.cc
+--- a/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.cc
++++ b/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.cc
+@@ -12,9 +12,11 @@ AutofillMlInternalsPageHandlerImpl::AutofillMlInternalsPageHandlerImpl(
+     mojo::PendingReceiver<autofill_ml_internals::mojom::PageHandler> receiver,
+     autofill::MLLogRouter* log_router)
+     : receiver_(this, std::move(receiver)) {
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+   if (log_router) {
+     log_router_observation_.Observe(log_router);
+   }
++#endif
+ }
+ 
+ void AutofillMlInternalsPageHandlerImpl::SetPage(
+diff --git a/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.h b/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.h
+--- a/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.h
++++ b/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_page_handler.h
+@@ -8,6 +8,7 @@
+ #include "base/scoped_observation.h"
+ #include "components/autofill/core/browser/ml_model/logging/autofill_ml_internals.mojom.h"
+ #include "components/autofill/core/browser/ml_model/logging/ml_log_router.h"
++#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+@@ -35,8 +36,10 @@ class AutofillMlInternalsPageHandlerImpl
+  private:
+   mojo::Receiver<autofill_ml_internals::mojom::PageHandler> receiver_;
+   mojo::Remote<autofill_ml_internals::mojom::Page> page_;
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+   base::ScopedObservation<autofill::MLLogRouter, autofill::MLLogReceiver>
+       log_router_observation_{this};
++#endif
+ };
+ 
+ #endif  // CHROME_BROWSER_UI_WEBUI_AUTOFILL_ML_INTERNALS_AUTOFILL_ML_INTERNALS_PAGE_HANDLER_H_
+diff --git a/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_ui.cc b/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_ui.cc
+--- a/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_ui.cc
++++ b/chrome/browser/ui/webui/autofill_ml_internals/autofill_ml_internals_ui.cc
+@@ -11,6 +11,7 @@
+ #include "chrome/grit/autofill_ml_internals_resources.h"
+ #include "chrome/grit/autofill_ml_internals_resources_map.h"
+ #include "components/autofill/core/browser/ml_model/logging/autofill_ml_internals.mojom.h"
++#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
+ #include "content/public/browser/web_ui.h"
+ #include "content/public/browser/web_ui_data_source.h"
+ #include "ui/webui/webui_util.h"
+@@ -29,9 +30,11 @@ AutofillMlInternalsUI::AutofillMlInternalsUI(content::WebUI* web_ui)
+ 
+ void AutofillMlInternalsUI::BindInterface(
+     mojo::PendingReceiver<autofill_ml_internals::mojom::PageHandler> receiver) {
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+   page_handler_ = std::make_unique<AutofillMlInternalsPageHandlerImpl>(
+       std::move(receiver), autofill::MLLogRouterFactory::GetForProfile(
+                                Profile::FromWebUI(web_ui())));
++#endif
+ }
+ 
+ WEB_UI_CONTROLLER_TYPE_IMPL(AutofillMlInternalsUI)
 diff --git a/chrome/renderer/accessibility/read_anything/read_aloud_app_model.cc b/chrome/renderer/accessibility/read_anything/read_aloud_app_model.cc
 --- a/chrome/renderer/accessibility/read_anything/read_aloud_app_model.cc
 +++ b/chrome/renderer/accessibility/read_anything/read_aloud_app_model.cc
@@ -806,6 +912,12 @@ diff --git a/components/optimization_guide/core/hints/hints_manager.cc b/compone
    switch (optimization_type_decision) {
      case OptimizationTypeDecision::kAllowedByOptimizationFilter:
      case OptimizationTypeDecision::kAllowedByHint:
+@@ -2040,4 +2041,5 @@ void HintsManager::RemoveFetchedEntriesByHintKeys(
+   hint_cache_->RemoveHintsForHosts(std::move(on_success), hint_keys);
+ }
+ 
++SET_CROMITE_FEATURE_DISABLED(kHintsBatchUpdateForActiveTabsAndTopHosts);
+ }  // namespace optimization_guide
 diff --git a/components/optimization_guide/core/optimization_guide_features.cc b/components/optimization_guide/core/optimization_guide_features.cc
 --- a/components/optimization_guide/core/optimization_guide_features.cc
 +++ b/components/optimization_guide/core/optimization_guide_features.cc
@@ -831,14 +943,12 @@ diff --git a/components/optimization_guide/core/optimization_guide_features.cc b
  }
  
  RequestContextSet GetAllowedContextsForPersonalizedMetadata() {
-@@ -692,5 +687,12 @@ bool IsPrivacyGuideAiSettingsEnabled() {
+@@ -692,5 +687,10 @@ bool IsPrivacyGuideAiSettingsEnabled() {
    return base::FeatureList::IsEnabled(kPrivacyGuideAiSettings);
  }
  
 +SET_CROMITE_FEATURE_DISABLED(kOptimizationHints);
-+SET_CROMITE_FEATURE_DISABLED(kRemoteOptimizationGuideFetching);
 +SET_CROMITE_FEATURE_DISABLED(kOptimizationTargetPrediction);
-+SET_CROMITE_FEATURE_DISABLED(kOptimizationGuideModelDownloading);
 +SET_CROMITE_FEATURE_DISABLED(kPushNotifications);
 +SET_CROMITE_FEATURE_DISABLED(kPreventLongRunningPredictionModels);
 +SET_CROMITE_FEATURE_DISABLED(kOptimizationGuideFetchingForSRP);

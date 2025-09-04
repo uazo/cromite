@@ -79,8 +79,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../permission_prompt_android.cc              |  8 +-
  .../permission_prompt_android.h               |  3 +-
  .../android/permissions_android_strings.grd   | 17 ++++
- .../geolocation_permission_context_android.cc | 27 ++++--
- .../geolocation_permission_context_android.h  | 10 ++-
+ .../geolocation_permission_context_android.cc | 30 +++++--
+ .../geolocation_permission_context_android.h  |  8 ++
  .../embedded_permission_prompt_flow_model.cc  |  2 +-
  .../permissions/permission_context_base.cc    | 64 ++++++++++++--
  .../permissions/permission_context_base.h     | 26 +++++-
@@ -89,7 +89,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/permissions/permission_request.h   | 18 +++-
  .../permissions/permission_request_manager.cc | 45 ++++++----
  .../permissions/permission_request_manager.h  | 11 ++-
- 37 files changed, 506 insertions(+), 73 deletions(-)
+ 37 files changed, 507 insertions(+), 73 deletions(-)
 
 diff --git a/chrome/browser/permissions/last_tab_standing_tracker.cc b/chrome/browser/permissions/last_tab_standing_tracker.cc
 --- a/chrome/browser/permissions/last_tab_standing_tracker.cc
@@ -285,8 +285,8 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
                                  .getDefaultColor());
              }
          }
-+        if (isSessionPermission(contentType)) {
-+            switchPreference.setSummary(switchPreference.getSummary() + " " +
++        if (preference instanceof ChromeSwitchPreference && isSessionPermission(contentType)) {
++            ((ChromeSwitchPreference)preference).setSummary(preference.getSummary() + " " +
 +                getString(R.string.page_info_android_permission_session_permission));
 +        }
      }
@@ -852,37 +852,38 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
    bool is_default_search =
        IsRequestingOriginDSE(request_data.requesting_origin);
    if (decision == PermissionDecision::kAllow &&
-@@ -210,7 +221,7 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -209,7 +220,7 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+       FinishNotifyPermissionSet(request_data.id, request_data.requesting_origin,
                                  request_data.embedding_origin,
                                  std::move(callback), false /* persist */,
-                                 PermissionDecision::kDeny,
--                                request_data.prompt_options);
-+                                request_data.prompt_options, lifetime_option);
+-                                PermissionDecision::kDeny,
++                                PermissionDecision::kDeny, lifetime_option,
+                                 request_data.prompt_options);
        return;
      }
- 
-@@ -231,7 +242,7 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -230,7 +241,7 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+       FinishNotifyPermissionSet(request_data.id, request_data.requesting_origin,
                                  request_data.embedding_origin,
                                  std::move(callback), false /* persist */,
-                                 PermissionDecision::kDeny,
--                                request_data.prompt_options);
-+                                request_data.prompt_options, lifetime_option);
+-                                PermissionDecision::kDeny,
++                                PermissionDecision::kDeny, lifetime_option,
+                                 request_data.prompt_options);
        return;
      }
- 
-@@ -244,13 +255,13 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+@@ -243,14 +254,14 @@ void GeolocationPermissionContextAndroid::NotifyPermissionSet(
+         base::BindOnce(
              &GeolocationPermissionContextAndroid::OnLocationSettingsDialogShown,
              weak_factory_.GetWeakPtr(), request_data.requesting_origin,
-             request_data.embedding_origin, persist, decision,
--            request_data.prompt_options));
-+            request_data.prompt_options, lifetime_option));
+-            request_data.embedding_origin, persist, decision,
++            request_data.embedding_origin, persist, decision, lifetime_option,
+             request_data.prompt_options));
      return;
    }
  
    FinishNotifyPermissionSet(request_data.id, request_data.requesting_origin,
                              request_data.embedding_origin, std::move(callback),
 -                            persist, decision, request_data.prompt_options);
-+                            persist, decision, request_data.prompt_options, lifetime_option);
++                            persist, decision, lifetime_option, request_data.prompt_options);
  }
  
  content::PermissionResult
@@ -900,25 +901,29 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
                              requesting_origin, embedding_origin,
                              std::move(location_settings_dialog_callback_),
 -                            persist, decision, prompt_options);
-+                            persist, decision, prompt_options, lifetime_option);
++                            persist, decision, lifetime_option, prompt_options);
  
    location_settings_dialog_request_id_ =
        PermissionRequestID(content::GlobalRenderFrameHostId(0, 0),
-@@ -461,7 +472,7 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
+@@ -460,7 +471,7 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
+     const GURL& embedding_origin,
      BrowserPermissionCallback callback,
      bool persist,
-     PermissionDecision decision,
--    std::optional<PromptOptions> prompt_options) {
-+    std::optional<PromptOptions> prompt_options, content_settings::mojom::LifetimeMode lifetime_option) {
+-    PermissionDecision decision,
++    PermissionDecision decision, content_settings::mojom::LifetimeMode lifetime_option,
+     std::optional<PromptOptions> prompt_options) {
    PermissionRequestData request_data(
        this, id,
-       content::PermissionRequestDescription(
-@@ -471,7 +482,7 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
+@@ -469,9 +480,10 @@ void GeolocationPermissionContextAndroid::FinishNotifyPermissionSet(
+               blink::PermissionType::GEOLOCATION)),
+       requesting_origin, embedding_origin);
    request_data.prompt_options = prompt_options.value_or(std::monostate());
-   GeolocationPermissionContext::NotifyPermissionSet(
+-  GeolocationPermissionContext::NotifyPermissionSet(
++  GeolocationPermissionContext::NotifyPermissionSetImpl(
       request_data,
 -      std::move(callback), persist, decision, /*is_final_decision=*/true);
-+      std::move(callback), persist, decision, /*is_final_decision=*/true, lifetime_option);
++      std::move(callback), persist, decision, /*is_final_decision=*/true,
++      /*use_lifetime_option*/ true, lifetime_option);
  }
  
  void GeolocationPermissionContextAndroid::SetLocationSettingsForTesting(
@@ -938,24 +943,22 @@ diff --git a/components/permissions/contexts/geolocation_permission_context_andr
    content::PermissionResult UpdatePermissionStatusWithDeviceStatus(
        content::WebContents* web_contents,
        content::PermissionResult result,
-@@ -137,6 +143,7 @@ class GeolocationPermissionContextAndroid
+@@ -136,6 +142,7 @@ class GeolocationPermissionContextAndroid
+       const GURL& embedding_origin,
        bool persist,
        PermissionDecision decision,
-       std::optional<PromptOptions> prompt_options,
 +      content_settings::mojom::LifetimeMode lifetime_option,
+       std::optional<PromptOptions> prompt_options,
        LocationSettingsDialogOutcome prompt_outcome);
  
-   void FinishNotifyPermissionSet(const PermissionRequestID& id,
-@@ -145,7 +152,8 @@ class GeolocationPermissionContextAndroid
+@@ -145,6 +152,7 @@ class GeolocationPermissionContextAndroid
                                   BrowserPermissionCallback callback,
                                   bool persist,
                                   PermissionDecision decision,
--                                 std::optional<PromptOptions> prompt_options);
-+                                 std::optional<PromptOptions> prompt_options,
-+                                 content_settings::mojom::LifetimeMode lifetime_option);
++                                 content_settings::mojom::LifetimeMode lifetime_option,
+                                  std::optional<PromptOptions> prompt_options);
  
    std::unique_ptr<LocationSettings> location_settings_;
- 
 diff --git a/components/permissions/embedded_permission_prompt_flow_model.cc b/components/permissions/embedded_permission_prompt_flow_model.cc
 --- a/components/permissions/embedded_permission_prompt_flow_model.cc
 +++ b/components/permissions/embedded_permission_prompt_flow_model.cc
@@ -1069,7 +1072,7 @@ diff --git a/components/permissions/permission_context_base.cc b/components/perm
 +}
 +
 +void PermissionContextBase::UpdateSettingImpl(const PermissionRequestData& request_data,
-+                                              base::Value setting,
++                                              PermissionSetting setting,
 +                                              bool is_one_time,
 +                                              bool use_lifetime_option,
 +                                              content_settings::mojom::LifetimeMode lifetime_option) {
@@ -1112,7 +1115,7 @@ diff --git a/components/permissions/permission_context_base.h b/components/permi
    // Store the decided permission state. Virtual since the permission might be
    // stored with different restrictions (for example for desktop notifications).
 +  void UpdateSettingImpl(const PermissionRequestData& request_data,
-+                         base::Value setting,
++                         PermissionSetting setting,
 +                         bool is_one_time,
 +                         bool use_lifetime_option,
 +                         content_settings::mojom::LifetimeMode lifetime_option);
