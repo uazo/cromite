@@ -37,6 +37,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/utility/services.cc                       |  8 --------
  components/BUILD.gn                              |  2 +-
  .../autofill_optimization_guide.cc               |  5 +++--
+ .../field_classification_model_handler.cc        | 12 ++++++++----
+ .../field_classification_model_handler.h         | 10 ++++++----
  .../omnibox/browser/autocomplete_controller.cc   |  4 ++++
  .../omnibox/browser/base_search_provider.cc      |  4 ++--
  .../prediction_model_download_manager.cc         |  6 ++++--
@@ -62,7 +64,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../core/html/parser/html_document_parser.cc     |  1 +
  .../document_speculation_rules.cc                |  1 +
  .../platform/runtime_enabled_features.json5      |  2 +-
- 57 files changed, 136 insertions(+), 80 deletions(-)
+ 59 files changed, 150 insertions(+), 88 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/browser_features_cc/Disable-all-predictors-code.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Disable-all-predictors-code.inc
  create mode 100644 cromite_flags/chrome/common/chrome_features_cc/Disable-all-predictors-code.inc
@@ -793,6 +795,109 @@ diff --git a/components/autofill/core/browser/integrators/optimization_guide/aut
      optimization_guide::OptimizationGuideDecision decision =
          decider_->CanApplyOptimization(url, optimization_type,
                                         /*optimization_metadata=*/nullptr);
+diff --git a/components/autofill/core/browser/ml_model/field_classification_model_handler.cc b/components/autofill/core/browser/ml_model/field_classification_model_handler.cc
+--- a/components/autofill/core/browser/ml_model/field_classification_model_handler.cc
++++ b/components/autofill/core/browser/ml_model/field_classification_model_handler.cc
+@@ -97,8 +97,7 @@ bool ParsingSupportsMultipleFieldsOfType(FieldType type) {
+ 
+ FieldClassificationModelHandler::FieldClassificationModelHandler(
+     optimization_guide::OptimizationGuideModelProvider* model_provider,
+-    optimization_guide::proto::OptimizationTarget optimization_target,
+-    autofill::MLLogRouter* log_router)
++    optimization_guide::proto::OptimizationTarget optimization_target)
+     : optimization_guide::ModelHandler<
+           FieldClassificationModelEncoder::ModelOutput,
+           const FieldClassificationModelEncoder::ModelInput&>(
+@@ -110,8 +109,7 @@ FieldClassificationModelHandler::FieldClassificationModelHandler(
+           optimization_target,
+           CreateModelMetadata()),
+       optimization_target_(optimization_target),
+-      predictions_cache_(kMaxPredictionsToCache),
+-      log_router_(log_router) {
++      predictions_cache_(kMaxPredictionsToCache) {
+   // Store the model in memory as soon as it is available and keep it loaded for
+   // the whole browser session since we query predictions very regularly.
+   // TODO(crbug.com/40276177): Maybe change both back to default behavior if we
+@@ -160,6 +158,7 @@ void FieldClassificationModelHandler::ApplySmallFormRules(
+   }
+ }
+ 
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+ autofill_ml_internals::mojom::MLPredictionLogPtr
+ FieldClassificationModelHandler::CreateMLPredictionLog(
+     const FormStructure& form_structure) const {
+@@ -231,6 +230,7 @@ FieldClassificationModelHandler::CreateMLPredictionLog(
+   prediction_log->start_time = base::Time::Now();
+   return prediction_log;
+ }
++#endif
+ 
+ void PopulateMLPredictionLogAfterInference(
+     autofill_ml_internals::mojom::MLPredictionLog& prediction_log,
+@@ -259,9 +259,11 @@ void FieldClassificationModelHandler::GetModelPredictionsForForm(
+ 
+   std::optional<autofill_ml_internals::mojom::MLPredictionLogPtr>
+       prediction_log = std::nullopt;
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+   if (log_router_ && log_router_->HasReceivers()) {
+     prediction_log = CreateMLPredictionLog(*form_structure);
+   }
++#endif
+ 
+   // TODO(crbug.com/428686605) Set tokenized representation in `prediction_log`.
+   FieldClassificationModelEncoder::ModelInput encoded_input =
+@@ -312,11 +314,13 @@ void FieldClassificationModelHandler::GetModelPredictionsForForm(
+                                              predicted_types);
+               }
+             }
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+             if (self && output && prediction_log && self->log_router_) {
+               PopulateMLPredictionLogAfterInference(*(prediction_log.value()),
+                                                     output.value());
+               self->log_router_->ProcessLog(std::move(*prediction_log));
+             }
++#endif
+             std::move(callback).Run(std::move(form_structure));
+           },
+           weak_ptr_factory_.GetWeakPtr(), std::move(prediction_log),
+diff --git a/components/autofill/core/browser/ml_model/field_classification_model_handler.h b/components/autofill/core/browser/ml_model/field_classification_model_handler.h
+--- a/components/autofill/core/browser/ml_model/field_classification_model_handler.h
++++ b/components/autofill/core/browser/ml_model/field_classification_model_handler.h
+@@ -15,8 +15,11 @@
+ #include "components/autofill/core/browser/field_types.h"
+ #include "components/autofill/core/browser/form_structure.h"
+ #include "components/autofill/core/browser/ml_model/field_classification_model_encoder.h"
++#include "components/optimization_guide/machine_learning_tflite_buildflags.h"
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+ #include "components/autofill/core/browser/ml_model/logging/autofill_ml_internals.mojom.h"
+ #include "components/autofill/core/browser/ml_model/logging/ml_log_router.h"
++#endif
+ #include "components/keyed_service/core/keyed_service.h"
+ #include "components/optimization_guide/core/delivery/optimization_guide_model_provider.h"
+ #include "components/optimization_guide/core/inference/model_handler.h"
+@@ -42,8 +45,7 @@ class FieldClassificationModelHandler
+ 
+   FieldClassificationModelHandler(
+       optimization_guide::OptimizationGuideModelProvider* model_provider,
+-      optimization_guide::proto::OptimizationTarget optimization_target,
+-      autofill::MLLogRouter* log_router = nullptr);
++      optimization_guide::proto::OptimizationTarget optimization_target);
+   ~FieldClassificationModelHandler() override;
+ 
+   // This function asynchronously queries predictions for the `form_structure`
+@@ -136,10 +138,10 @@ class FieldClassificationModelHandler
+   // Cached model classifications.
+   base::LRUCache<ModelInputHash, std::vector<FieldType>> predictions_cache_;
+ 
+-  raw_ptr<autofill::MLLogRouter> log_router_ = nullptr;
+-
++#if BUILDFLAG(BUILD_WITH_TFLITE_LIB)
+   autofill_ml_internals::mojom::MLPredictionLogPtr CreateMLPredictionLog(
+       const FormStructure& form_structure) const;
++#endif
+ 
+   base::WeakPtrFactory<FieldClassificationModelHandler> weak_ptr_factory_{this};
+ };
 diff --git a/components/omnibox/browser/autocomplete_controller.cc b/components/omnibox/browser/autocomplete_controller.cc
 --- a/components/omnibox/browser/autocomplete_controller.cc
 +++ b/components/omnibox/browser/autocomplete_controller.cc
