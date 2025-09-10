@@ -40,6 +40,8 @@ Also disable gamepadconnected and gamepaddisconnected, see https://jshelter.org/
 - Allows the use of the api DocumentPiP only with the content setting popup allowed (https://wicg.github.io/document-picture-in-picture/#privacy-considerations)
 - Multi-Screen Window Placement API fix (screen.isExtended)
 - Disable Posture API by default (https://github.com/w3c/device-posture/blob/gh-pages/security-privacy-self-assessment.md)
+- Disables the ability to retrieve the user-set caret blink setting.
+- Disables the ability to retrieve the actual screen frame rate
 - (ANDROID) Do not follow night mode for dark mode preference when theme is set to system default
 - (DESKTOP) Enable HighEfficiencyMode by default
 - (DESKTOP) Enable percent based scrolling for mousewheel
@@ -90,7 +92,8 @@ Disabling it by default allows the user to choose each time how the browser shou
 - Disable annotate downloads by url
 - Enable Do-Not-Track by default
 - Enable Global Privacy Control by default
-- Enable cleaning of the CORS Preflight Cache on restart 
+- Enable cleaning of the CORS Preflight Cache on restart
+- Disable Device Attributes API 
 - (ANDROID) Remove SMS integration
 - (ANDROID) Never use HTTP probes for connection detection
 - (ANDROID) Disable auto fetch of offline content when browser go online
