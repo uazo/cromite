@@ -1,0 +1,112 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Wed, 10 Sep 2025 07:44:05 +0000
+Subject: Set the screen frame rate to 60 Hz
+
+Set the screen refresh rate to 60Hz by default, increasing it if necessary
+in cases where the system only supports lower frequencies (such as in RDP
+or virtual systems).
+The feature can be disabled using the throttle-main-thread-to-60hz flag (enabled by default).
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ cc/base/features.cc                             | 2 ++
+ cc/scheduler/scheduler_state_machine.cc         | 7 +++----
+ chrome/browser/chrome_content_browser_client.cc | 8 ++++++++
+ third_party/blink/common/features.cc            | 1 +
+ 4 files changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/cc/base/features.cc b/cc/base/features.cc
+--- a/cc/base/features.cc
++++ b/cc/base/features.cc
+@@ -180,6 +180,7 @@ BASE_FEATURE(kInitImageDecodeLastUseTime,
+ BASE_FEATURE(kThrottleMainFrameTo60Hz,
+              "ThrottleMainFrameTo60Hz",
+              base::FEATURE_DISABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_ENABLED(kThrottleMainFrameTo60Hz);
+ 
+ void SetIsEligibleForThrottleMainFrameTo60Hz(bool is_eligible) {
+   s_is_eligible_for_throttle_main_frame_to_60hz.store(
+@@ -209,6 +210,7 @@ BASE_FEATURE(kRenderThrottleFrameRate,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ const base::FeatureParam<int> kRenderThrottledFrameIntervalHz{
+     &kRenderThrottleFrameRate, "render-throttled-frame-interval-hz", 30};
++SET_CROMITE_FEATURE_DISABLED(kRenderThrottleFrameRate);
+ 
+ BASE_FEATURE(kFastPathNoRaster,
+              "FastPathNoRaster",
+diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
+--- a/cc/scheduler/scheduler_state_machine.cc
++++ b/cc/scheduler/scheduler_state_machine.cc
+@@ -1535,9 +1535,8 @@ void SchedulerStateMachine::FrameIntervalUpdated(
+   //
+   // Apply some slack, so that if for some reason the interval is a bit larger
+   // than 8.33333333333333ms, then we catch it still.
+-  constexpr float kSlackFactor = .9;
+   bool fast_vsync_interval =
+-      frame_interval < base::Hertz(120) * (1 / kSlackFactor);
++      base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz);
+   if (fast_vsync_interval) {
+     features::SetIsEligibleForThrottleMainFrameTo60Hz(true);
+   }
+@@ -1549,7 +1548,7 @@ void SchedulerStateMachine::FrameIntervalUpdated(
+     // Use interval / 2 rather than an actual interval as refresh rates are
+     // not necessarily 120: it could be something really close, or it could be
+     // 144Hz for instance.
+-    main_frame_throttled_interval_ = kSlackFactor * frame_interval * 2;
++    main_frame_throttled_interval_ = base::Hertz(60);
+     TRACE_EVENT("cc", "ThrottleMainFrame", "interval",
+                 main_frame_throttled_interval_);
+   } else {
+@@ -1841,7 +1840,7 @@ void SchedulerStateMachine::SetShouldThrottleFrameRate(bool flag) {
+ }
+ 
+ base::TimeDelta SchedulerStateMachine::MainFrameThrottledInterval() const {
+-  if (!throttle_frame_rate_) {
++  if (!throttle_frame_rate_ || base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
+     return main_frame_throttled_interval_;
+   } else {
+     auto throttled_interval =
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -49,6 +49,7 @@
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+ #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
++#include "cc/base/features.h"
+ #include "chrome/browser/after_startup_task_utils.h"
+ #include "chrome/browser/ai/ai_manager.h"
+ #include "chrome/browser/app_mode/app_mode_utils.h"
+@@ -295,6 +296,7 @@
+ #include "components/variations/variations_associated_data.h"
+ #include "components/variations/variations_switches.h"
+ #include "components/version_info/version_info.h"
++#include "components/viz/common/switches.h"
+ #include "components/webapps/common/web_app_id.h"
+ #include "components/webui/chrome_urls/pref_names.h"
+ #include "content/public/browser/attribution_data_model.h"
+@@ -2775,6 +2777,12 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+   command_line->AppendSwitchASCII(ash::switches::kHomedir, homedir.value());
+ #endif
+ 
++  if (base::FeatureList::IsEnabled(::features::kThrottleMainFrameTo60Hz)
++       && !base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kDisableFrameRateLimit)) {
++    base::CommandLine::ForCurrentProcess()->
++      AppendSwitch(switches::kDisableFrameRateLimit);
++  }
++
+   if (process_type == switches::kRendererProcess) {
+     content::RenderProcessHost* process =
+         content::RenderProcessHost::FromID(child_process_id);
+diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
+--- a/third_party/blink/common/features.cc
++++ b/third_party/blink/common/features.cc
+@@ -2639,6 +2639,7 @@ BASE_FEATURE(kUnloadBlocklisted,
+ BASE_FEATURE(kUrgentMainFrameForInput,
+              "UrgentMainFrameForInput",
+              base::FEATURE_DISABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_DISABLED(kUrgentMainFrameForInput);
+ 
+ // Flag guard for changes in how navigation code handles the URL to commit.
+ // https://crbug.com/422803238
+--
