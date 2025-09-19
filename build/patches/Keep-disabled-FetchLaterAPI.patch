@@ -13,10 +13,10 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../browser/loader/keep_alive_url_loader.h    |  3 --
  .../Keep-disabled-FetchLaterAPI.inc           |  2 ++
  .../renderer/core/fetch/fetch_manager.cc      | 21 ++++++++++--
- .../loader/child_url_loader_factory_bundle.cc | 16 +++++----
+ .../loader/child_url_loader_factory_bundle.cc | 23 +++++++++----
  .../platform/loader/fetch/resource_fetcher.cc |  2 +-
  .../platform/runtime_enabled_features.json5   |  4 +--
- 7 files changed, 65 insertions(+), 16 deletions(-)
+ 7 files changed, 72 insertions(+), 16 deletions(-)
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Keep-disabled-FetchLaterAPI.inc
 
 diff --git a/content/browser/loader/keep_alive_url_loader.cc b/content/browser/loader/keep_alive_url_loader.cc
@@ -146,22 +146,36 @@ diff --git a/third_party/blink/renderer/core/fetch/fetch_manager.cc b/third_part
 diff --git a/third_party/blink/renderer/platform/loader/child_url_loader_factory_bundle.cc b/third_party/blink/renderer/platform/loader/child_url_loader_factory_bundle.cc
 --- a/third_party/blink/renderer/platform/loader/child_url_loader_factory_bundle.cc
 +++ b/third_party/blink/renderer/platform/loader/child_url_loader_factory_bundle.cc
-@@ -250,6 +250,14 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
+@@ -13,6 +13,7 @@
+ #include "base/check.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include "net/base/load_flags.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+ #include "services/network/public/cpp/record_ontransfersizeupdate_utils.h"
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/mojom/early_hints.mojom.h"
+@@ -250,6 +251,20 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
      return;
    }
  
 +  bool keepalive = request.keepalive;
 +  if (keepalive && !request.is_fetch_later_api) {
-+    if (request.request_initiator && request.request_initiator->IsSameOriginWith(request.url))
++    if (request.request_initiator
++          && !request.request_initiator->opaque()
++          && net::registry_controlled_domains::SameDomainOrHost(
++                request.url, *request.request_initiator,
++                net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES)) {
 +      keepalive = false;
-+    else if (url::IsSameOriginWith(request.url, request.referrer))
++    }
++    else if (url::IsSameOriginWith(request.url, request.referrer)) {
 +      keepalive = false;
++    }
 +  }
 +
    // Use |keep_alive_loader_factory_| to send the keepalive requests to the
    // KeepAliveURLLoaderService in the browser process and trigger the special
    // keepalive request handling.
-@@ -258,12 +266,8 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
+@@ -258,12 +273,8 @@ void ChildURLLoaderFactoryBundle::CreateLoaderAndStart(
    if (request.keepalive) {
      FetchUtils::LogFetchKeepAliveRequestSentToServiceMetric(request);
    }
