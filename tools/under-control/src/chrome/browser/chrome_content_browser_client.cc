@@ -16,15 +16,18 @@
 #include <vector>
 
 #include "base/base_switches.h"
+#include "base/byte_count.h"
 #include "base/check_deref.h"
 #include "base/command_line.h"
 #include "base/containers/contains.h"
+#include "base/containers/fixed_flat_map.h"
 #include "base/containers/fixed_flat_set.h"
 #include "base/dcheck_is_on.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
 #include "base/i18n/base_i18n_switches.h"
 #include "base/i18n/character_encoding.h"
 #include "base/memory/raw_ptr.h"
@@ -49,6 +52,10 @@
 #include "build/branding_buildflags.h"
 #include "build/build_config.h"
 #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
+#include "chrome/browser/preloading/search_preload/search_preload_features.h"
+#if !BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/actor/actor_keyed_service.h"
+#endif  // !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/ai/ai_manager.h"
 #include "chrome/browser/app_mode/app_mode_utils.h"
@@ -112,6 +119,8 @@
 #include "chrome/browser/performance_manager/public/chrome_browser_main_extra_parts_performance_manager.h"
 #include "chrome/browser/performance_manager/public/chrome_content_browser_client_performance_manager_part.h"
 #include "chrome/browser/performance_monitor/chrome_browser_main_extra_parts_performance_monitor.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
+#include "chrome/browser/picture_in_picture/scoped_tuck_picture_in_picture.h"
 #include "chrome/browser/plugins/plugin_utils.h"
 #include "chrome/browser/policy/policy_util.h"
 #include "chrome/browser/policy/profile_policy_connector.h"
@@ -234,6 +243,7 @@
 #include "components/error_page/common/error_page_switches.h"
 #include "components/error_page/common/localized_error.h"
 #include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
+#include "components/fingerprinting_protection_filter/interventions/common/interventions_features.h"
 #include "components/google/core/common/google_switches.h"
 #include "components/heap_profiling/in_process/heap_profiler_controller.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -347,6 +357,7 @@
 #include "google_apis/gaia/gaia_urls.h"
 #include "google_apis/google_api_keys.h"
 #include "gpu/config/gpu_switches.h"
+#include "ipc/ipc_channel_proxy.h"
 #include "media/base/media_switches.h"
 #include "media/media_buildflags.h"
 #include "media/mojo/buildflags.h"
@@ -387,6 +398,7 @@
 #include "third_party/blink/public/public_buildflags.h"
 #include "third_party/widevine/cdm/buildflags.h"
 #include "ui/base/clipboard/clipboard_format_type.h"
+#include "ui/base/clipboard/clipboard_metadata.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -452,6 +464,8 @@
 #include "chrome/browser/ash/profiles/profile_helper.h"
 #include "chrome/browser/ash/smb_client/fileapi/smbfs_file_system_backend_delegate.h"
 #include "chrome/browser/ash/system/input_device_settings.h"
+#include "chrome/browser/media/webrtc/multi_capture/multi_capture_data_service.h"
+#include "chrome/browser/media/webrtc/multi_capture/multi_capture_data_service_factory.h"
 #include "chrome/browser/speech/tts_chromeos.h"
 #include "chrome/browser/speech/tts_controller_delegate_impl.h"
 #include "chrome/browser/ui/ash/main_extra_parts/chrome_browser_main_extra_parts_ash.h"
@@ -472,7 +486,6 @@
 #include "chrome/browser/ui/views/chrome_browser_main_extra_parts_views_linux.h"
 #elif BUILDFLAG(IS_ANDROID)
 #include "base/android/application_status_listener.h"
-#include "base/android/build_info.h"
 #include "base/feature_list.h"
 #include "chrome/browser/android/customtabs/client_data_header_web_contents_observer.h"
 #include "chrome/browser/android/devtools_manager_delegate_android.h"
@@ -485,6 +498,7 @@
 #include "chrome/browser/digital_credentials/digital_identity_provider_android.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/safe_browsing/android/safe_browsing_referring_app_bridge_android.h"
+#include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
 #include "chrome/common/chrome_descriptors_android.h"
 #include "components/browser_ui/accessibility/android/font_size_prefs_android.h"
@@ -519,7 +533,7 @@
 #include "base/debug/leak_annotations.h"
 #include "chrome/browser/chromeos/policy/dlp/dlp_scoped_file_access_delegate.h"
 #include "chrome/browser/chromeos/tablet_mode/chrome_content_browser_client_tablet_mode_part.h"
-#include "chrome/browser/file_system_access/cloud_identifier/cloud_identifier_util_cros.h"
+#include "chrome/browser/file_system_access/cloud_identifier/cloud_identifier_util_ash.h"
 #include "chrome/browser/media/webrtc/multi_capture/multi_capture_usage_indicator_service.h"
 #include "chrome/browser/media/webrtc/multi_capture/multi_capture_usage_indicator_service_factory.h"
 #include "chrome/browser/policy/system_features_disable_list_policy_handler.h"
@@ -546,7 +560,9 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/chrome_content_browser_client_webui_part.h"
 #include "chrome/browser/ui/webui/webui_util_desktop.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_error_page.h"
@@ -571,6 +587,7 @@
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
+#include "base/android/device_info.h"
 #include "components/crash/content/browser/crash_handler_host_linux.h"
 #endif
 
@@ -996,6 +1013,17 @@ GetNoStatePrefetchCanceler(
   return canceler;
 }
 
+#if !BUILDFLAG(IS_ANDROID)
+mojo::AssociatedRemote<chrome::mojom::RendererConfiguration>
+GetRendererConfiguration(content::RenderProcessHost* render_process_host) {
+  IPC::ChannelProxy* channel = render_process_host->GetChannel();
+  mojo::AssociatedRemote<chrome::mojom::RendererConfiguration>
+      renderer_configuration;
+  channel->GetRemoteAssociatedInterface(&renderer_configuration);
+  return renderer_configuration;
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
+
 bool ShouldHonorPolicies() {
 #if BUILDFLAG(IS_WIN)
   return policy::ManagementServiceFactory::GetForPlatform()
@@ -1343,9 +1371,24 @@ bool IsDefaultSearchEngine(Profile* profile, const GURL& url) {
   const TemplateURL* default_search_engine =
       template_url_service->GetDefaultSearchProvider();
 
-  return default_search_engine &&
-         template_url_service->IsSearchResultsPageFromDefaultSearchProvider(
-             url);
+  if (!default_search_engine) {
+    return false;
+  }
+
+  if (template_url_service->IsSearchResultsPageFromDefaultSearchProvider(url)) {
+    return true;
+  }
+
+  if (base::FeatureList::IsEnabled(features::kConsiderDSEWarmUpPageAsSRP)) {
+    const GURL prewarm_url = GURL(features::kPrewarmUrl.Get());
+    if (prewarm_url.is_valid() && url == prewarm_url &&
+        template_url_service->GetDefaultSearchProviderOrigin().IsSameOriginWith(
+            prewarm_url)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -1873,6 +1916,27 @@ GURL ChromeContentBrowserClient::GetEffectiveURL(
 #endif
 }
 
+void ChromeContentBrowserClient::OnRendererProcessLockedStateUpdated(
+    content::RenderProcessHost* host,
+    const GURL& site_url) {
+#if !BUILDFLAG(IS_ANDROID)
+  // If the feature `kInstantUsesSpareRenderer` is not enabled, we continue
+  // relying on the `kInstantProcess` command line switch to handle instant
+  // process related logic.
+  if (!base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
+    return;
+  }
+  chrome::mojom::StaticParamsPtr params = chrome::mojom::StaticParams::New();
+  Profile* profile = Profile::FromBrowserContext(host->GetBrowserContext());
+  if (search::ShouldAssignURLToInstantRenderer(site_url, profile)) {
+    params->is_instant_process = true;
+  }
+  auto renderer_configuration = GetRendererConfiguration(host);
+  renderer_configuration->SetConfigurationOnProcessLockUpdate(
+      std::move(params));
+#endif  // !BUILDFLAG(IS_ANDROID)
+}
+
 bool ChromeContentBrowserClient::
     ShouldCompareEffectiveURLsForSiteInstanceSelection(
         content::BrowserContext* browser_context,
@@ -1931,7 +1995,7 @@ bool ChromeContentBrowserClient::ShouldUseProcessPerSite(
 }
 
 bool ChromeContentBrowserClient::
-    ShouldReuseExistingProcessForNewMainFrameSiteInstance(
+    ShouldReuseAnyExistingProcessForNewMainFrameSiteInstance(
         content::BrowserContext* browser_context,
         const GURL& site_instance_original_url) {
   // When `kProcessPerSiteForDSE` is disabled,
@@ -1990,11 +2054,15 @@ bool ChromeContentBrowserClient::ShouldUseSpareRenderProcessHost(
   }
 
 #if !BUILDFLAG(IS_ANDROID)
-  // Instant renderers should not use a spare process, because they require
-  // passing switches::kInstantProcess to the renderer process when it
-  // launches.  A spare process is launched earlier, before it is known which
-  // navigation will use it, so it lacks this flag.
-  if (search::ShouldAssignURLToInstantRenderer(site_url, profile)) {
+  // Instant renderers passed by command line should not use a spare process,
+  // because they require passing switches::kInstantProcess to the renderer
+  // process when it launches. A spare process is launched earlier, before
+  // it is known which navigation will use it, so it lacks this flag. But
+  // with the feature kInstantUsesSpareRenderer enabled, the instant process
+  // is passed later in ProcessLock status changed, we can pass the flag
+  // to spare process.
+  if (search::ShouldAssignURLToInstantRenderer(site_url, profile) &&
+      !base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
     // The NTP page chrome://new-tab-page and chrome://new-tab-page-third-party
     // are using WebUI and will not use instant renderer.
     // The only usecase is chrome-search:// URLs.
@@ -2127,6 +2195,54 @@ void ChromeContentBrowserClient::OverrideURLLoaderFactoryParams(
       browser_context, origin, is_for_isolated_world, is_for_service_worker,
       factory_params);
 #endif
+}
+
+bool IsURLAccessibleByHistoryNavigationFromWebContents(
+    const GURL& url,
+    content::WebContents* web_contents) {
+  if (!web_contents) {
+    return false;
+  }
+  content::NavigationController& controller = web_contents->GetController();
+  for (int j = 0; j < controller.GetEntryCount(); ++j) {
+    content::NavigationEntry* entry = controller.GetEntryAtIndex(j);
+    if (entry && entry->GetURL().EqualsIgnoringRef(url)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ChromeContentBrowserClient::IsURLAccessibleByHistoryNavigation(
+    const GURL& url) {
+#if BUILDFLAG(IS_ANDROID)
+  for (const TabModel* model : TabModelList::models()) {
+    if (!model) {
+      continue;
+    }
+    for (int i = 0; i < model->GetTabCount(); ++i) {
+      if (IsURLAccessibleByHistoryNavigationFromWebContents(
+              url, model->GetWebContentsAt(i))) {
+        return true;
+      }
+    }
+  }
+  return false;
+#else
+  for (Browser* browser : *BrowserList::GetInstance()) {
+    TabStripModel* model = browser->tab_strip_model();
+    if (!model) {
+      continue;
+    }
+    for (int i = 0; i < model->count(); ++i) {
+      if (IsURLAccessibleByHistoryNavigationFromWebContents(
+              url, model->GetWebContentsAt(i))) {
+        return true;
+      }
+    }
+  }
+  return false;
+#endif  // BUILDFLAG(IS_ANDROID)
 }
 
 // These are treated as WebUI schemes but do not get WebUI bindings. Also,
@@ -2290,8 +2406,18 @@ bool ChromeContentBrowserClient::IsSuitableHost(
         instant_service->IsInstantProcess(process_host->GetDeprecatedID());
     bool should_be_in_instant_process =
         search::ShouldAssignURLToInstantRenderer(site_url, profile);
-    if (is_instant_process || should_be_in_instant_process) {
-      return is_instant_process && should_be_in_instant_process;
+    if (is_instant_process) {
+      return should_be_in_instant_process;
+    }
+    if (should_be_in_instant_process) {
+      // If the host is a spare process that was used for instant URLs,
+      // `IsInstantProcess` is false as `InstantService::AddInstantProcess`
+      // hasn't been called yet. In this case, it's safe to allow the site
+      // to be in the spare process.
+      bool is_spare_taken =
+          (base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer) &&
+           process_host->HostHasNotBeenUsed());
+      return is_instant_process || is_spare_taken;
     }
   }
 #endif
@@ -2629,11 +2755,17 @@ bool ChromeContentBrowserClient::IsIsolatedContextAllowedForUrl(
 #endif
 }
 
-void ChromeContentBrowserClient::CheckGetAllScreensMediaAllowed(
-    content::RenderFrameHost* render_frame_host,
-    base::OnceCallback<void(bool)> callback) {
-  std::move(callback).Run(capture_policy::IsMultiScreenCaptureAllowed(
-      render_frame_host->GetMainFrame()->GetLastCommittedOrigin().GetURL()));
+bool ChromeContentBrowserClient::IsMultiCaptureAllowed(
+    content::RenderFrameHost* render_frame_host) {
+#if BUILDFLAG(IS_CHROMEOS)
+  return multi_capture::MultiCaptureDataServiceFactory::GetForBrowserContext(
+             WebContents::FromRenderFrameHost(render_frame_host)
+                 ->GetBrowserContext())
+      ->IsMultiCaptureAllowed(
+          render_frame_host->GetMainFrame()->GetLastCommittedOrigin().GetURL());
+#else
+  return false;
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 bool ChromeContentBrowserClient::IsFileAccessAllowed(
@@ -2835,7 +2967,8 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
       InstantService* instant_service =
           InstantServiceFactory::GetForProfile(profile);
       if (instant_service &&
-          instant_service->IsInstantProcess(process->GetDeprecatedID())) {
+          instant_service->IsInstantProcess(process->GetDeprecatedID()) &&
+          !base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
         command_line->AppendSwitch(switches::kInstantProcess);
       }
 
@@ -4012,84 +4145,68 @@ bool ShouldDisableForcedColorsForWebContent(content::WebContents* contents,
   return false;
 }
 
-bool UpdateForcedColorsForWebContent(WebPreferences* web_prefs,
-                                     WebContents* web_contents,
-                                     const ui::NativeTheme* native_theme) {
-  auto old_in_forced_colors = web_prefs->in_forced_colors;
-  auto old_forced_colors_disabled = web_prefs->is_forced_colors_disabled;
-  bool in_forced_colors = native_theme->InForcedColorsMode();
-  bool should_disable_forced_colors =
+blink::mojom::PreferredContrast GetPreferredContrast(
+    const ui::NativeTheme* native_theme) {
+  using NC = ui::NativeTheme::PreferredContrast;
+  using BC = blink::mojom::PreferredContrast;
+  static constexpr auto kContrastMap =
+      base::MakeFixedFlatMap<NC, BC>({{NC::kNoPreference, BC::kNoPreference},
+                                      {NC::kMore, BC::kMore},
+                                      {NC::kLess, BC::kLess},
+                                      {NC::kCustom, BC::kCustom}});
+  return kContrastMap.at(native_theme->GetPreferredContrast());
+}
+
+std::tuple<bool, bool> GetForcedColorsForWebContent(
+    WebContents* web_contents,
+    const ui::NativeTheme* native_theme) {
+  const bool in_forced_colors = native_theme->InForcedColorsMode();
+  const bool is_forced_colors_disabled =
       ShouldDisableForcedColorsForWebContent(web_contents, in_forced_colors);
-
-  web_prefs->in_forced_colors =
-      in_forced_colors && !should_disable_forced_colors;
-  web_prefs->is_forced_colors_disabled = should_disable_forced_colors;
-
-  return old_in_forced_colors != web_prefs->in_forced_colors ||
-         old_forced_colors_disabled != web_prefs->is_forced_colors_disabled;
+  return {in_forced_colors && !is_forced_colors_disabled,
+          is_forced_colors_disabled};
 }
 
 #if !BUILDFLAG(IS_ANDROID)
 blink::mojom::PreferredColorScheme ToBlinkPreferredColorScheme(
     ui::NativeTheme::PreferredColorScheme native_theme_scheme) {
-  switch (native_theme_scheme) {
-    case ui::NativeTheme::PreferredColorScheme::kDark:
-      return blink::mojom::PreferredColorScheme::kDark;
-    case ui::NativeTheme::PreferredColorScheme::kLight:
-      return blink::mojom::PreferredColorScheme::kLight;
-  }
+  return (native_theme_scheme == ui::NativeTheme::PreferredColorScheme::kDark)
+             ? blink::mojom::PreferredColorScheme::kDark
+             : blink::mojom::PreferredColorScheme::kLight;
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-// Returns true if preferred color scheme is modified based on at least one of
-// the following -
-// |url| - Last committed url.
-// |web_contents| - For Android based on IsNightModeEnabled().
-// |native_theme| - For other platforms based on native theme scheme.
-bool UpdatePreferredColorScheme(WebPreferences* web_prefs,
-                                const GURL& url,
-                                WebContents* web_contents,
-                                const ui::NativeTheme* native_theme) {
-  auto old_preferred_color_scheme = web_prefs->preferred_color_scheme;
-
+std::tuple<blink::mojom::PreferredColorScheme,
+           blink::mojom::PreferredColorScheme>
+GetPreferredColorScheme(const WebPreferences& web_prefs,
+                        const GURL& url,
+                        WebContents* web_contents,
+                        const ui::NativeTheme* native_theme) {
 #if BUILDFLAG(IS_ANDROID)
-  auto* delegate = TabAndroid::FromWebContents(web_contents)
-                       ? static_cast<android::TabWebContentsDelegateAndroid*>(
-                             web_contents->GetDelegate())
-                       : nullptr;
-  if (delegate) {
-    web_prefs->preferred_color_scheme =
-        delegate->IsNightModeEnabled()
-            ? blink::mojom::PreferredColorScheme::kDark
-            : blink::mojom::PreferredColorScheme::kLight;
-    web_prefs->preferred_root_scrollbar_color_scheme =
-        web_prefs->preferred_color_scheme;
+  if (TabAndroid::FromWebContents(web_contents)) {
+    if (auto* delegate = static_cast<android::TabWebContentsDelegateAndroid*>(
+            web_contents->GetDelegate())) {
+      const auto preferred_color_scheme =
+          delegate->IsNightModeEnabled()
+              ? blink::mojom::PreferredColorScheme::kDark
+              : blink::mojom::PreferredColorScheme::kLight;
+      return {preferred_color_scheme, preferred_color_scheme};
+    }
   }
+  return {web_prefs.preferred_color_scheme,
+          web_prefs.preferred_root_scrollbar_color_scheme};
 #else
-
-  Profile* profile =
-      Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  CHECK(profile);
-
-  // Update the preferred root scrollbar color based on the lightness level of
-  // the toolbar's color.
-  web_prefs->preferred_root_scrollbar_color_scheme =
-      color_utils::IsDark(
-          web_contents->GetColorProvider().GetColor(kColorToolbar))
-          ? blink::mojom::PreferredColorScheme::kDark
-          : blink::mojom::PreferredColorScheme::kLight;
-
-#endif  // BUILDFLAG(IS_ANDROID)
-
-#if !BUILDFLAG(IS_ANDROID)
-  // Incognito contents follow the device color mode.
-  if (profile->IsIncognitoProfile() && !content::HasWebUIScheme(url)) {
-    web_prefs->preferred_color_scheme =
+  blink::mojom::PreferredColorScheme preferred_color_scheme;
+  if (Profile::FromBrowserContext(web_contents->GetBrowserContext())
+          ->IsIncognitoProfile() &&
+      !content::HasWebUIScheme(url)) {
+    // Incognito contents follow the device color mode.
+    preferred_color_scheme =
         ToBlinkPreferredColorScheme(native_theme->GetPreferredColorScheme());
   } else {
     // WebUI and regular pages follow the browser theme color mode, provided by
     // the color provider.
-    web_prefs->preferred_color_scheme =
+    preferred_color_scheme =
         web_contents->GetColorMode() == ui::ColorProviderKey::ColorMode::kLight
             ? blink::mojom::PreferredColorScheme::kLight
             : blink::mojom::PreferredColorScheme::kDark;
@@ -4101,45 +4218,49 @@ bool UpdatePreferredColorScheme(WebPreferences* web_prefs,
   // If the top-level WebContents is the same as the guest, then
   // `web_contents` is *not* a guest.
   if (owner_contents != web_contents) {
-    web_prefs->preferred_color_scheme =
+    preferred_color_scheme =
         owner_contents->GetOrCreateWebPreferences().preferred_color_scheme;
   }
-#endif  // !BUILDFLAG(IS_ANDROID)
 
-  return old_preferred_color_scheme != web_prefs->preferred_color_scheme;
+  // Update the preferred root scrollbar color based on the lightness level of
+  // the toolbar's color.
+  const auto preferred_root_scrollbar_color_scheme =
+      color_utils::IsDark(
+          web_contents->GetColorProvider().GetColor(kColorToolbar))
+          ? blink::mojom::PreferredColorScheme::kDark
+          : blink::mojom::PreferredColorScheme::kLight;
+
+  return {preferred_color_scheme, preferred_root_scrollbar_color_scheme};
+#endif
 }
 
+std::optional<SkColor> GetRootScrollbarThemeColor(WebContents* web_contents) {
+  bool root_scrollbar_follows_browser_theme = false;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-// Sets the `root_scrollbar_theme_color` web pref if the user has enabled a
-// custom colored frame for the UI.
-void UpdateRootScrollbarThemeColor(Profile* profile,
-                                   const WebContents* web_contents,
-                                   WebPreferences* web_prefs) {
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kRootScrollbarFollowsBrowserTheme)) {
-    return;
+  root_scrollbar_follows_browser_theme = base::FeatureList::IsEnabled(
+      blink::features::kRootScrollbarFollowsBrowserTheme);
+#endif
+  if (!root_scrollbar_follows_browser_theme) {
+    return std::nullopt;
   }
-  if (ThemeService* theme_service =
-          ThemeServiceFactory::GetForProfile(profile)) {
-    if (!theme_service->UsingDefaultTheme() ||
-        theme_service->GetUserColor().has_value() ||
-        theme_service->UsingDeviceTheme()) {
-      color_utils::HSL hsl;
-      color_utils::SkColorToHSL(
-          web_contents->GetColorProvider().GetColor(kColorToolbar), &hsl);
-      // Clamp the lightness of theme colors that are too light or dark and
-      // have no contrast against the background. We don't use color_utils
-      // contrast functions because they lose saturation.
-      static constexpr double kTopLightnessThreshold = 0.8;
-      static constexpr double kBottomLightnessThreshold = 0.3;
-      hsl.l =
-          std::clamp(hsl.l, kBottomLightnessThreshold, kTopLightnessThreshold);
-      web_prefs->root_scrollbar_theme_color =
-          color_utils::HSLToSkColor(hsl, SK_AlphaOPAQUE);
-    }
+
+  if (ThemeService* theme_service = ThemeServiceFactory::GetForProfile(
+          Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+      !theme_service || (theme_service->UsingDefaultTheme() &&
+                         !theme_service->GetUserColor().has_value() &&
+                         !theme_service->UsingDeviceTheme())) {
+    return std::nullopt;
   }
+
+  color_utils::HSL hsl;
+  color_utils::SkColorToHSL(
+      web_contents->GetColorProvider().GetColor(kColorToolbar), &hsl);
+  // Clamp the lightness of theme colors that are too light or dark and have no
+  // contrast against the background. We don't use color_utils contrast
+  // functions because they lose saturation.
+  hsl.l = std::clamp(hsl.l, 0.3, 0.8);
+  return color_utils::HSLToSkColor(hsl, SK_AlphaOPAQUE);
 }
-#endif  //  BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 
 // Returns whether the user can be prompted to select a client certificate after
 // no certificate got auto-selected.
@@ -4732,29 +4853,18 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
       SubAppsAPIsRequireUserGestureAndAuthorization(web_contents);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
-  switch (GetWebTheme()->GetPreferredContrast()) {
-    case ui::NativeTheme::PreferredContrast::kNoPreference:
-      web_prefs->preferred_contrast =
-          blink::mojom::PreferredContrast::kNoPreference;
-      break;
-    case ui::NativeTheme::PreferredContrast::kMore:
-      web_prefs->preferred_contrast = blink::mojom::PreferredContrast::kMore;
-      break;
-    case ui::NativeTheme::PreferredContrast::kLess:
-      web_prefs->preferred_contrast = blink::mojom::PreferredContrast::kLess;
-      break;
-    case ui::NativeTheme::PreferredContrast::kCustom:
-      web_prefs->preferred_contrast = blink::mojom::PreferredContrast::kCustom;
-      break;
-  }
+  web_prefs->preferred_contrast = GetPreferredContrast(GetWebTheme());
 
-  UpdateForcedColorsForWebContent(web_prefs, web_contents, GetWebTheme());
+  std::tie(web_prefs->in_forced_colors, web_prefs->is_forced_colors_disabled) =
+      GetForcedColorsForWebContent(web_contents, GetWebTheme());
 
-  UpdatePreferredColorScheme(web_prefs, main_frame_site.GetSiteURL(),
-                             web_contents, GetWebTheme());
-#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-  UpdateRootScrollbarThemeColor(profile, web_contents, web_prefs);
-#endif  //  BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
+  std::tie(web_prefs->preferred_color_scheme,
+           web_prefs->preferred_root_scrollbar_color_scheme) =
+      GetPreferredColorScheme(*web_prefs, main_frame_site.GetSiteURL(),
+                              web_contents, GetWebTheme());
+
+  web_prefs->root_scrollbar_theme_color =
+      GetRootScrollbarThemeColor(web_contents);
 
   web_prefs->translate_service_available = TranslateService::IsAvailable(prefs);
 
@@ -4852,12 +4962,26 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
         web_contents, main_frame_site, web_prefs);
   }
 
+  const auto old_in_forced_colors = web_prefs->in_forced_colors;
+  const auto old_is_forced_colors_disabled =
+      web_prefs->is_forced_colors_disabled;
+  std::tie(web_prefs->in_forced_colors, web_prefs->is_forced_colors_disabled) =
+      GetForcedColorsForWebContent(web_contents, GetWebTheme());
   prefs_changed |=
-      UpdateForcedColorsForWebContent(web_prefs, web_contents, GetWebTheme());
+      web_prefs->in_forced_colors != old_in_forced_colors ||
+      web_prefs->is_forced_colors_disabled != old_is_forced_colors_disabled;
 
+  const auto old_preferred_color_scheme = web_prefs->preferred_color_scheme;
+  const auto old_preferred_root_scrollbar_color_scheme =
+      web_prefs->preferred_root_scrollbar_color_scheme;
+  std::tie(web_prefs->preferred_color_scheme,
+           web_prefs->preferred_root_scrollbar_color_scheme) =
+      GetPreferredColorScheme(*web_prefs, main_frame_site.GetSiteURL(),
+                              web_contents, GetWebTheme());
   prefs_changed |=
-      UpdatePreferredColorScheme(web_prefs, web_contents->GetLastCommittedURL(),
-                                 web_contents, GetWebTheme());
+      web_prefs->preferred_color_scheme != old_preferred_color_scheme ||
+      web_prefs->preferred_root_scrollbar_color_scheme !=
+          old_preferred_root_scrollbar_color_scheme;
 
 #if BUILDFLAG(IS_ANDROID)
   auto* delegate = TabAndroid::FromWebContents(web_contents)
@@ -4881,6 +5005,23 @@ bool ChromeContentBrowserClient::OverrideWebPreferencesAfterNavigation(
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
   return prefs_changed;
+}
+
+bool ChromeContentBrowserClient::
+    WebPreferencesNeedUpdateForColorRelatedStateChanges(
+        WebContents& web_contents,
+        const SiteInstance& main_frame_site) const {
+  const WebPreferences& prefs = web_contents.GetOrCreateWebPreferences();
+  return GetPreferredContrast(GetWebTheme()) != prefs.preferred_contrast ||
+         GetForcedColorsForWebContent(&web_contents, GetWebTheme()) !=
+             std::tie(prefs.in_forced_colors,
+                      prefs.is_forced_colors_disabled) ||
+         GetPreferredColorScheme(prefs, main_frame_site.GetSiteURL(),
+                                 &web_contents, GetWebTheme()) !=
+             std::tie(prefs.preferred_color_scheme,
+                      prefs.preferred_root_scrollbar_color_scheme) ||
+         GetRootScrollbarThemeColor(&web_contents) !=
+             prefs.root_scrollbar_theme_color;
 }
 
 void ChromeContentBrowserClient::BrowserURLHandlerCreated(
@@ -5046,6 +5187,14 @@ void ChromeContentBrowserClient::GetAdditionalMappedFilesForChildProcess(
 
   fd = ui::GetCommonResourcesPackFd(&region);
   mappings->ShareWithRegion(kAndroidChrome100PercentPakDescriptor, fd, region);
+
+  if constexpr (BUILDFLAG(ENABLE_HIDPI)) {
+    fd = ui::Get200PercentResourcesPackFd(&region);
+    if (fd != -1) {
+      mappings->ShareWithRegion(kAndroidChrome200PercentPakDescriptor, fd,
+                                region);
+    }
+  }
 
   GetMappedLocalePacksForChildProcess(mappings);
 
@@ -6820,6 +6969,23 @@ bool ChromeContentBrowserClient::HandleExternalProtocol(
     mojo::PendingRemote<network::mojom::URLLoaderFactory>* out_factory) {
   CHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
 
+#if !BUILDFLAG(IS_ANDROID)
+  content::WebContents* web_contents = web_contents_getter.Run();
+  if (web_contents) {
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    const auto* tab_interface =
+        tabs::TabInterface::MaybeGetFromContents(web_contents);
+    auto* actor_service = actor::ActorKeyedService::Get(profile);
+    // If actor is active, bail out early to prevent it from launching external
+    // applications.
+    if (tab_interface && actor_service &&
+        actor_service->IsAnyTaskActingOnTab(*tab_interface)) {
+      return false;
+    }
+  }
+#endif  //! BUILDFLAG(IS_ANDROID)
+
 #if BUILDFLAG(ENABLE_EXTENSIONS)
   // External protocols are disabled for guests. An exception is made for the
   // "mailto" protocol, so that pages that utilize it work properly in a
@@ -6865,6 +7031,22 @@ ChromeContentBrowserClient::CreateWindowForVideoPictureInPicture(
   return content::VideoOverlayWindow::Create(controller);
 }
 
+base::ScopedClosureRunner
+ChromeContentBrowserClient::MaybeGetScopedPictureInPictureTucker(
+    content::WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (PictureInPictureWindowManager::GetInstance()
+          ->ShouldFileDialogTuckPictureInPicture(web_contents)) {
+    // Make the `ScopedTuckPictureInPicture` share the same lifecycle as the
+    // `ScopedClosureRunner`.
+    auto tucker = std::make_unique<ScopedTuckPictureInPicture>();
+    return base::ScopedClosureRunner(
+        base::DoNothingWithBoundArgs(std::move(tucker)));
+  }
+#endif
+  return base::ScopedClosureRunner();
+}
+
 media::PictureInPictureEventsInfo::AutoPipInfo
 ChromeContentBrowserClient::GetAutoPipInfo(
     const content::WebContents& web_contents) const {
@@ -6901,8 +7083,7 @@ bool ChromeContentBrowserClient::HandleWebUI(
   }
 
 #if BUILDFLAG(CHROME_ROOT_STORE_CERT_MANAGEMENT_UI)
-  if (base::FeatureList::IsEnabled(features::kEnableCertManagementUIV2) &&
-      url->SchemeIs(content::kChromeUIScheme) &&
+  if (url->SchemeIs(content::kChromeUIScheme) &&
       url->host() == chrome::kChromeUISettingsHost &&
       url->path() == chrome::kChromeUICertificateRedirectPath) {
     *url = GURL(chrome::kChromeUICertificateManagerDialogURL);
@@ -7152,7 +7333,8 @@ void ChromeContentBrowserClient::OnNetworkServiceDataUseUpdate(
     int64_t recv_bytes,
     int64_t sent_bytes) {
   task_manager::TaskManagerInterface::UpdateAccumulatedStatsNetworkForRoute(
-      render_frame_host_id, recv_bytes, sent_bytes);
+      render_frame_host_id, base::ByteCount(recv_bytes),
+      base::ByteCount(sent_bytes));
 }
 
 base::FilePath
@@ -7281,8 +7463,7 @@ bool ChromeContentBrowserClient::ShouldBlockRendererDebugURL(
 #if BUILDFLAG(IS_ANDROID)
 content::ContentBrowserClient::WideColorGamutHeuristic
 ChromeContentBrowserClient::GetWideColorGamutHeuristic() {
-  if (viz::AlwaysUseWideColorGamut() ||
-      features::IsDynamicColorGamutEnabled()) {
+  if (viz::AlwaysUseWideColorGamut()) {
     return WideColorGamutHeuristic::kUseDisplay;
   }
 
@@ -7514,7 +7695,7 @@ bool ChromeContentBrowserClient::IsClipboardPasteAllowed(
 void ChromeContentBrowserClient::IsClipboardPasteAllowedByPolicy(
     const content::ClipboardEndpoint& source,
     const content::ClipboardEndpoint& destination,
-    const content::ClipboardMetadata& metadata,
+    const ui::ClipboardMetadata& metadata,
     ClipboardPasteData clipboard_paste_data,
     IsClipboardPasteAllowedCallback callback) {
 // TODO(b/352728209): Add Android-specific hook for Data Controls.
@@ -7536,7 +7717,7 @@ void ChromeContentBrowserClient::IsClipboardPasteAllowedByPolicy(
 
 void ChromeContentBrowserClient::IsClipboardCopyAllowedByPolicy(
     const content::ClipboardEndpoint& source,
-    const content::ClipboardMetadata& metadata,
+    const ui::ClipboardMetadata& metadata,
     const ClipboardPasteData& data,
     IsClipboardCopyAllowedCallback callback) {
 #if BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
@@ -7613,7 +7794,7 @@ ChromeContentBrowserClient::ShouldOverridePrivateNetworkRequestPolicy(
     content::BrowserContext* browser_context,
     const url::Origin& origin) {
 #if BUILDFLAG(IS_ANDROID)
-  if (base::android::BuildInfo::GetInstance()->is_automotive()) {
+  if (base::android::device_info::is_automotive()) {
     return content::ContentBrowserClient::PrivateNetworkRequestPolicyOverride::
         kBlockInsteadOfWarn;
   }
@@ -7891,6 +8072,7 @@ void ChromeContentBrowserClient::OnWebContentsCreated(
 }
 
 #if !BUILDFLAG(IS_ANDROID)
+// static
 base::TimeDelta ChromeContentBrowserClient::GetKeepaliveTimerTimeout(
     content::BrowserContext* context) {
   Profile* profile = Profile::FromBrowserContext(context);
@@ -8221,8 +8403,7 @@ void ChromeContentBrowserClient::GetCloudIdentifiers(
     content::FileSystemAccessPermissionContext::HandleType handle_type,
     GetCloudIdentifiersCallback callback) {
 #if BUILDFLAG(IS_CHROMEOS)
-  cloud_identifier::GetCloudIdentifierFromAsh(url, handle_type,
-                                              std::move(callback));
+  cloud_identifier::GetCloudIdentifier(url, handle_type, std::move(callback));
 #else   // BUILDFLAG(IS_CHROMEOS)
   return ContentBrowserClient::GetCloudIdentifiers(url, handle_type,
                                                    std::move(callback));
@@ -8578,11 +8759,6 @@ void ChromeContentBrowserClient::QueryInstalledWebAppsByManifestId(
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-bool ChromeContentBrowserClient::IsSaveableNavigation(
-    content::NavigationHandle* navigation_handle) {
-  return tab_groups::TabGroupSyncUtils::IsSaveableNavigation(navigation_handle);
-}
-
 #if BUILDFLAG(IS_WIN)
 void ChromeContentBrowserClient::OnUiaProviderRequested(
     bool uia_provider_enabled) {
@@ -8723,14 +8899,19 @@ ChromeContentBrowserClient::MaybeOverrideLocalURLCrossOriginEmbedderPolicy(
     return std::nullopt;
   }
 
+  // `pdf_extension` could be nullptr, possibly due to a race condition where
+  // the extension frame is deleted as the PDF content navigation is requested.
+  content::RenderFrameHost* pdf_extension = navigation_handle->GetParentFrame();
+  if (!pdf_extension) {
+    return std::nullopt;
+  }
+
   // TODO(crbug.com/40053796): Local URLs inherit their policy container from
   // the navigation initiator instead of the document creating the navigation
   // request, so local PDF URL navigations in the PDF renderer inherit policies
   // from the PDF extension frame (the parent frame) and might have the
   // incorrect COEP. Until this is fixed, just copy the COEP directly from the
   // PDF embedder.
-  content::RenderFrameHost* pdf_extension = navigation_handle->GetParentFrame();
-  CHECK(pdf_extension);
   content::RenderFrameHost* pdf_embedder = pdf_extension->GetParent();
   CHECK(pdf_embedder);
   return pdf_embedder->GetCrossOriginEmbedderPolicy();
@@ -8769,4 +8950,32 @@ ChromeContentBrowserClient::GetClipboardTypesIfPolicyApplied(
   }
 
   return std::nullopt;
+}
+
+bool ChromeContentBrowserClient::ShouldEnableCanvasNoise(
+    content::BrowserContext* browser_context,
+    const GURL& url) {
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  bool feature_enable = fingerprinting_protection_interventions::features::
+      IsCanvasInterventionsEnabledForIncognitoState(
+          profile->IsIncognitoProfile());
+  // System profiles are considered incognito, but will not query from
+  // ProfileKeyedServices and will return nullptr. We should only check user
+  // bypass if the profile returns TrackingProtectionSettings.
+  privacy_sandbox::TrackingProtectionSettings* tracking_protections_settings =
+      TrackingProtectionSettingsFactory::GetForProfile(profile);
+  if (tracking_protections_settings) {
+    return feature_enable &&
+           !tracking_protections_settings->HasTrackingProtectionException(url);
+  }
+  return feature_enable;
+}
+
+bool ChromeContentBrowserClient::UsePrefetchPrerenderIntegration() {
+  return base::FeatureList::IsEnabled(features::kBookmarkTriggerForPrefetch) ||
+         base::FeatureList::IsEnabled(features::kNewTabPageTriggerForPrefetch);
+}
+
+bool ChromeContentBrowserClient::UsePreloadServingMetrics() {
+  return features::kDsePreload2UsePreloadServingMetrics.Get();
 }

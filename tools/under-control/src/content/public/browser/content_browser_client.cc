@@ -88,6 +88,7 @@
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom.h"
 #include "third_party/blink/public/mojom/origin_trials/origin_trials_settings.mojom.h"
 #include "third_party/blink/public/mojom/payments/secure_payment_confirmation_service.mojom.h"
+#include "ui/base/clipboard/clipboard_metadata.h"
 #include "ui/gfx/image/image_skia.h"
 #include "ui/shell_dialogs/select_file_policy.h"
 #include "url/gurl.h"
@@ -167,6 +168,10 @@ bool ContentBrowserClient::ShouldCompareEffectiveURLsForSiteInstanceSelection(
   return true;
 }
 
+void ContentBrowserClient::OnRendererProcessLockedStateUpdated(
+    RenderProcessHost* host,
+    const GURL& site_url) {}
+
 bool ContentBrowserClient::IsExplicitNavigation(ui::PageTransition transition) {
   return transition & ui::PAGE_TRANSITION_FROM_ADDRESS_BAR;
 }
@@ -179,7 +184,7 @@ bool ContentBrowserClient::ShouldUseProcessPerSite(
 }
 
 bool ContentBrowserClient::
-    ShouldReuseExistingProcessForNewMainFrameSiteInstance(
+    ShouldReuseAnyExistingProcessForNewMainFrameSiteInstance(
         BrowserContext* browser_context,
         const GURL& site_instance_original_url) {
   DCHECK(browser_context);
@@ -253,6 +258,13 @@ void ContentBrowserClient::OverrideURLLoaderFactoryParams(
     bool is_for_isolated_world,
     bool is_for_service_worker,
     network::mojom::URLLoaderFactoryParams* factory_params) {}
+
+// Returns true if the given URL is in any of the NavigationEntries for the
+// given |browser_context|. This is used to determine if a URL is already
+// in the navigation history of any of the tabs in a given browser context.
+bool ContentBrowserClient::IsURLAccessibleByHistoryNavigation(const GURL& url) {
+  return false;
+}
 
 void ContentBrowserClient::GetAdditionalViewSourceSchemes(
     std::vector<std::string>* additional_schemes) {
@@ -413,10 +425,9 @@ bool ContentBrowserClient::IsIsolatedContextAllowedForUrl(
   return false;
 }
 
-void ContentBrowserClient::CheckGetAllScreensMediaAllowed(
-    content::RenderFrameHost* render_frame_host,
-    base::OnceCallback<void(bool)> callback) {
-  std::move(callback).Run(false);
+bool ContentBrowserClient::IsMultiCaptureAllowed(
+    content::RenderFrameHost* render_frame_host) {
+  return false;
 }
 
 size_t ContentBrowserClient::GetMaxRendererProcessCountOverride() {
@@ -535,6 +546,12 @@ bool ContentBrowserClient::OverrideWebPreferencesAfterNavigation(
     WebContents* web_contents,
     SiteInstance& main_frame_site,
     blink::web_pref::WebPreferences* prefs) {
+  return false;
+}
+
+bool ContentBrowserClient::WebPreferencesNeedUpdateForColorRelatedStateChanges(
+    WebContents& web_contents,
+    const SiteInstance& main_frame_site) const {
   return false;
 }
 
@@ -1353,6 +1370,12 @@ ContentBrowserClient::CreateWindowForVideoPictureInPicture(
   return nullptr;
 }
 
+base::ScopedClosureRunner
+ContentBrowserClient::MaybeGetScopedPictureInPictureTucker(
+    WebContents* web_contents) {
+  return base::ScopedClosureRunner();
+}
+
 media::PictureInPictureEventsInfo::AutoPipInfo
 ContentBrowserClient::GetAutoPipInfo(const WebContents& web_contents) const {
   return media::PictureInPictureEventsInfo::AutoPipInfo();
@@ -1530,7 +1553,7 @@ bool ContentBrowserClient::IsClipboardPasteAllowed(
 void ContentBrowserClient::IsClipboardPasteAllowedByPolicy(
     const ClipboardEndpoint& source,
     const ClipboardEndpoint& destination,
-    const ClipboardMetadata& metadata,
+    const ui::ClipboardMetadata& metadata,
     ClipboardPasteData clipboard_paste_data,
     IsClipboardPasteAllowedCallback callback) {
   std::move(callback).Run(std::move(clipboard_paste_data));
@@ -1538,7 +1561,7 @@ void ContentBrowserClient::IsClipboardPasteAllowedByPolicy(
 
 void ContentBrowserClient::IsClipboardCopyAllowedByPolicy(
     const ClipboardEndpoint& source,
-    const ClipboardMetadata& metadata,
+    const ui::ClipboardMetadata& metadata,
     const ClipboardPasteData& data,
     IsClipboardCopyAllowedCallback callback) {
   std::move(callback).Run(metadata.format_type, data, std::nullopt);
@@ -1920,11 +1943,6 @@ void ContentBrowserClient::QueryInstalledWebAppsByManifestId(
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-bool ContentBrowserClient::IsSaveableNavigation(
-    NavigationHandle* navigation_handle) {
-  return false;
-}
-
 #if BUILDFLAG(IS_WIN)
 void ContentBrowserClient::OnUiaProviderRequested(bool uia_provider_enabled) {}
 void ContentBrowserClient::OnUiaProviderDisabled() {}
@@ -1973,6 +1991,20 @@ std::optional<std::vector<std::u16string>>
 ContentBrowserClient::GetClipboardTypesIfPolicyApplied(
     const ui::ClipboardSequenceNumberToken& seqno) {
   return std::nullopt;
+}
+
+bool ContentBrowserClient::ShouldEnableCanvasNoise(
+    BrowserContext* browser_context,
+    const GURL& origin) {
+  return false;
+}
+
+bool ContentBrowserClient::UsePrefetchPrerenderIntegration() {
+  return false;
+}
+
+bool ContentBrowserClient::UsePreloadServingMetrics() {
+  return false;
 }
 
 }  // namespace content
