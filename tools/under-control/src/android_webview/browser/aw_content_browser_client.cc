@@ -48,7 +48,6 @@
 #include "android_webview/common/aw_paths.h"
 #include "android_webview/common/aw_switches.h"
 #include "android_webview/common/url_constants.h"
-#include "base/android/build_info.h"
 #include "base/android/locale_utils.h"
 #include "base/android/yield_to_looper_checker.h"
 #include "base/base_paths_android.h"
@@ -173,8 +172,7 @@ bool g_created_network_context_params = false;
 // On apps targeting API level O or later, check cleartext is enforced.
 bool g_check_cleartext_permitted = false;
 
-BASE_FEATURE(kWebViewOptimizeXrwNavigationFlow,
-             "WebViewOptimizeXrwNavigationFlow",
+BASE_FEATURE(WebViewOptimizeXrwNavigationFlow,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 // A throttle which checks if the XRW origin trial is enabled for this
@@ -660,6 +658,11 @@ void AwContentBrowserClient::OverrideWebPreferences(
   if (aw_settings) {
     aw_settings->PopulateWebPreferences(web_prefs);
   }
+
+  // This preference is needed for back-forward transitions, but they are not
+  // enabled for webview (crbug.com/361600214).
+  web_prefs->increment_local_surface_id_for_mainframe_same_doc_navigation =
+      false;
 
   AwWebContentsDelegate* delegate =
       static_cast<AwWebContentsDelegate*>(web_contents->GetDelegate());

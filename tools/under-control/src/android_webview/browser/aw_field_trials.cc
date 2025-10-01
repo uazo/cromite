@@ -155,8 +155,6 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // on WebView.
   aw_feature_overrides.DisableFeature(::features::kDigitalGoodsApi);
 
-  aw_feature_overrides.DisableFeature(::features::kDynamicColorGamut);
-
   // COOP is not supported on WebView yet. See:
   // https://groups.google.com/a/chromium.org/forum/#!topic/blink-dev/XBKAGb2_7uAi.
   aw_feature_overrides.DisableFeature(
@@ -195,6 +193,10 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // FedCM is not yet supported on WebView.
   aw_feature_overrides.DisableFeature(::features::kFedCm);
 
+  // Disable Digital Credentials API on WebView.
+  aw_feature_overrides.DisableFeature(::features::kWebIdentityDigitalCredentials);
+  aw_feature_overrides.DisableFeature(::features::kWebIdentityDigitalCredentialsCreation);
+
   // TODO(crbug.com/40272633): Web MIDI permission prompt for all usage.
   aw_feature_overrides.DisableFeature(blink::features::kBlockMidiByDefault);
 
@@ -208,11 +210,9 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // enabling site isolation. See crbug.com/356170748.
   aw_feature_overrides.DisableFeature(blink::features::kPaintHoldingForIframes);
 
-  // Since Default Nav Transition does not support WebView yet, disable the
-  // LocalSurfaceId increment flag. TODO(crbug.com/361600214): Re-enable for
-  // WebView when we start introducing this feature.
-  aw_feature_overrides.DisableFeature(
-      blink::features::kIncrementLocalSurfaceIdForMainframeSameDocNavigation);
+  // Default Nav Transition does not support WebView.
+  // TODO(crbug.com/434928245): cleanup this feature gate in M141.
+  aw_feature_overrides.DisableFeature(blink::features::kBackForwardTransitions);
 
   // Disabling this feature for WebView, since it can switch focus when scrolled
   // in cases with multiple views which can trigger HTML focus changes that
@@ -300,4 +300,17 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // AAudio per-stream device selection is not supported on WebView.
   aw_feature_overrides.DisableFeature(
       features::kAAudioPerStreamDeviceSelection);
+
+  // Disable background media. This is not used in WebView, and also it
+  // side-steps an issue where JNI calls in renderer does not reliably work.
+  // Long-term fix is to plumb this info to the renderer and remove Java calls
+  // there. crbug.com/438910961
+  aw_feature_overrides.DisableFeature(
+      features::kAndroidEnableBackgroundMediaLargeFormFactors);
+
+  // Local Network Access restrictions should not be enforced in WebView.
+  // The LNA permission is auto-granted in WebView, but the permission
+  // policy currently blocks iframes from using it. crbug.com/442879527
+  aw_feature_overrides.DisableFeature(
+      network::features::kLocalNetworkAccessChecks);
 }
