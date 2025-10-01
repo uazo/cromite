@@ -9,26 +9,31 @@ The feature can be disabled using the throttle-main-thread-to-60hz flag (enabled
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- cc/base/features.cc                           |  4 +++
- cc/scheduler/scheduler_state_machine.cc       | 26 +++++++++++++++++++
- .../browser/chrome_content_browser_client.cc  | 11 ++++++++
- third_party/blink/common/features.cc          |  1 +
- 4 files changed, 42 insertions(+)
+ cc/base/features.cc                            |  2 ++
+ cc/scheduler/scheduler_state_machine.cc        | 17 +++++++++++++++++
+ .../browser/chrome_content_browser_client.cc   | 11 +++++++++++
+ components/viz/common/features.cc              |  1 +
+ .../common/frame_sinks/begin_frame_source.cc   | 14 +++++++++++++-
+ .../common/frame_sinks/begin_frame_source.h    |  1 +
+ components/viz/service/display/display.cc      | 18 ++++++++++++++++--
+ .../external_begin_frame_source_android.cc     | 13 +++++++++++++
+ .../external_begin_frame_source_android.h      |  2 ++
+ .../root_compositor_frame_sink_impl.cc         | 10 ++++++++--
+ .../renderer/core/animation/animation_clock.cc | 11 ++++++++---
+ 11 files changed, 92 insertions(+), 8 deletions(-)
 
 diff --git a/cc/base/features.cc b/cc/base/features.cc
 --- a/cc/base/features.cc
 +++ b/cc/base/features.cc
-@@ -168,6 +168,9 @@ BASE_FEATURE(kInitImageDecodeLastUseTime,
+@@ -168,6 +168,7 @@ BASE_FEATURE(kInitImageDecodeLastUseTime,
  BASE_FEATURE(kThrottleMainFrameTo60Hz,
               "ThrottleMainFrameTo60Hz",
               base::FEATURE_DISABLED_BY_DEFAULT);
-+#if !BUILDFLAG(IS_ANDROID)
 +SET_CROMITE_FEATURE_ENABLED(kThrottleMainFrameTo60Hz);
-+#endif
  
  void SetIsEligibleForThrottleMainFrameTo60Hz(bool is_eligible) {
    s_is_eligible_for_throttle_main_frame_to_60hz.store(
-@@ -197,6 +200,7 @@ BASE_FEATURE(kRenderThrottleFrameRate,
+@@ -197,6 +198,7 @@ BASE_FEATURE(kRenderThrottleFrameRate,
               base::FEATURE_ENABLED_BY_DEFAULT);
  const base::FeatureParam<int> kRenderThrottledFrameIntervalHz{
      &kRenderThrottleFrameRate, "render-throttled-frame-interval-hz", 30};
@@ -39,54 +44,37 @@ diff --git a/cc/base/features.cc b/cc/base/features.cc
 diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
 --- a/cc/scheduler/scheduler_state_machine.cc
 +++ b/cc/scheduler/scheduler_state_machine.cc
-@@ -1537,6 +1537,7 @@ void SchedulerStateMachine::FrameIntervalUpdated(
+@@ -1537,6 +1537,15 @@ void SchedulerStateMachine::FrameIntervalUpdated(
    //
    // Apply some slack, so that if for some reason the interval is a bit larger
    // than 8.33333333333333ms, then we catch it still.
-+#if BUILDFLAG(IS_ANDROID)
-   constexpr float kSlackFactor = .9;
-   bool fast_vsync_interval =
-       frame_interval < base::Hertz(120) * (1 / kSlackFactor);
-@@ -1557,6 +1558,27 @@ void SchedulerStateMachine::FrameIntervalUpdated(
-   } else {
-     main_frame_throttled_interval_ = base::TimeDelta();
-   }
-+#else
-+  bool fast_vsync_interval =
-+      base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz);
-+  if (fast_vsync_interval) {
++#if !BUILDFLAG(IS_ANDROID)
++  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
 +    features::SetIsEligibleForThrottleMainFrameTo60Hz(true);
-+  }
-+  if (fast_vsync_interval &&
-+      base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
-+    // Here as well, use a slack factor, to make sure that small timing
-+    // variations don't result in uneven pacing.
-+    //
-+    // Use interval / 2 rather than an actual interval as refresh rates are
-+    // not necessarily 120: it could be something really close, or it could be
-+    // 144Hz for instance.
 +    main_frame_throttled_interval_ = base::Hertz(60);
-+    TRACE_EVENT("cc", "ThrottleMainFrame", "interval",
-+                main_frame_throttled_interval_);
 +  } else {
 +    main_frame_throttled_interval_ = base::TimeDelta();
 +  }
++  if ((true)) return;
 +#endif
- }
- 
- bool SchedulerStateMachine::IsDrawThrottled() const {
-@@ -1852,7 +1874,11 @@ void SchedulerStateMachine::SetShouldThrottleFrameRate(bool flag) {
+   constexpr float kSlackFactor = .9;
+   bool fast_vsync_interval =
+       frame_interval < base::Hertz(120) * (1 / kSlackFactor);
+@@ -1852,6 +1861,14 @@ void SchedulerStateMachine::SetShouldThrottleFrameRate(bool flag) {
  }
  
  base::TimeDelta SchedulerStateMachine::MainFrameThrottledInterval() const {
++  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
 +#if BUILDFLAG(IS_ANDROID)
-   if (!throttle_frame_rate_) {
++    return base::TimeDelta();
 +#else
-+  if (!throttle_frame_rate_ || base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
++    return main_frame_throttled_interval_;
 +#endif
++  }
++  if ((true)) return base::TimeDelta();
+   if (!throttle_frame_rate_) {
      return main_frame_throttled_interval_;
    } else {
-     auto throttled_interval =
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
@@ -122,15 +110,210 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
    if (process_type == switches::kRendererProcess) {
      content::RenderProcessHost* process =
          content::RenderProcessHost::FromID(child_process_id);
-diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
---- a/third_party/blink/common/features.cc
-+++ b/third_party/blink/common/features.cc
-@@ -2335,6 +2335,7 @@ BASE_FEATURE(UnloadBlocklisted, base::FEATURE_DISABLED_BY_DEFAULT);
- // When BeginMainFrame() is throttled, whether input-related BeginMainFrame()s
- // are marked urgent, and thus unthtrottled.
- BASE_FEATURE(UrgentMainFrameForInput, base::FEATURE_DISABLED_BY_DEFAULT);
-+SET_CROMITE_FEATURE_DISABLED(kUrgentMainFrameForInput);
+diff --git a/components/viz/common/features.cc b/components/viz/common/features.cc
+--- a/components/viz/common/features.cc
++++ b/components/viz/common/features.cc
+@@ -108,6 +108,7 @@ BASE_FEATURE(kDelegatedCompositing,
+ BASE_FEATURE(kAvoidDuplicateDelayBeginFrame,
+              "AvoidDuplicateDelayBeginFrame",
+              base::FEATURE_DISABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_ENABLED(kAvoidDuplicateDelayBeginFrame);
  
- // If enabled, URLPattern will use standard defined dummy URL canonicalization
- // to canonicalize URL properties. See https://crbug.com/409350827
+ BASE_FEATURE(kTransferableResourcePassAlphaTypeDirectly,
+              "TransferableResourcePassAlphaTypeDirectly",
+diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/components/viz/common/frame_sinks/begin_frame_source.cc
+--- a/components/viz/common/frame_sinks/begin_frame_source.cc
++++ b/components/viz/common/frame_sinks/begin_frame_source.cc
+@@ -25,6 +25,7 @@
+ #include "base/tracing/protos/chrome_track_event.pbzero.h"
+ #include "components/viz/common/features.h"
+ #include "components/viz/common/frame_sinks/delay_based_time_source.h"
++#include "cc/base/features.h"
+ 
+ namespace viz {
+ 
+@@ -242,7 +243,10 @@ BackToBackBeginFrameSource::BackToBackBeginFrameSource(
+   time_source_->SetClient(this);
+   // The time_source_ ticks immediately, so we SetActive(true) for a single
+   // tick when we need it, and keep it as SetActive(false) otherwise.
+-  time_source_->SetTimebaseAndInterval(base::TimeTicks(), base::TimeDelta());
++  auto interval = base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)
++                    ? base::Hertz(60)
++                    : base::TimeDelta();
++  time_source_->SetTimebaseAndInterval(base::TimeTicks(), interval);
+ }
+ 
+ BackToBackBeginFrameSource::~BackToBackBeginFrameSource() = default;
+@@ -300,6 +304,14 @@ void BackToBackBeginFrameSource::OnTimerTick() {
+   }
+   base::TimeTicks frame_time = time_source_->LastTickTime();
+   base::TimeDelta interval = max_vrr_interval_.value_or(vsync_interval_);
++  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
++    interval = base::Hertz(60);
++    frame_time = frame_time.SnappedToNextTick(base::TimeTicks(), interval);
++    if (last_frame_time_ == frame_time) {
++      return;
++    }
++    last_frame_time_ = frame_time;
++  }
+   BeginFrameArgs args = BeginFrameArgs::Create(
+       BEGINFRAME_FROM_HERE, source_id(), next_sequence_number_, frame_time,
+       frame_time + interval, interval, BeginFrameArgs::NORMAL);
+diff --git a/components/viz/common/frame_sinks/begin_frame_source.h b/components/viz/common/frame_sinks/begin_frame_source.h
+--- a/components/viz/common/frame_sinks/begin_frame_source.h
++++ b/components/viz/common/frame_sinks/begin_frame_source.h
+@@ -328,6 +328,7 @@ class VIZ_COMMON_EXPORT BackToBackBeginFrameSource
+       pending_begin_frame_observers_;
+   uint64_t next_sequence_number_;
+   base::TimeDelta vsync_interval_ = BeginFrameArgs::DefaultInterval();
++  base::TimeTicks last_frame_time_;
+   std::optional<base::TimeDelta> max_vrr_interval_ = std::nullopt;
+   base::WeakPtrFactory<BackToBackBeginFrameSource> weak_factory_{this};
+ };
+diff --git a/components/viz/service/display/display.cc b/components/viz/service/display/display.cc
+--- a/components/viz/service/display/display.cc
++++ b/components/viz/service/display/display.cc
+@@ -33,6 +33,7 @@
+ #include "base/trace_event/traced_value.h"
+ #include "base/trace_event/typed_macros.h"
+ #include "build/build_config.h"
++#include "cc/base/features.h"
+ #include "cc/base/math_util.h"
+ #include "cc/base/region.h"
+ #include "cc/base/simple_enclosed_region.h"
+@@ -274,8 +275,21 @@ void Display::PresentationGroupTiming::OnSwap(gfx::SwapTimings timings,
+ 
+   auto frame_latency = timings.swap_start - frame_time_;
+   if (frame_latency < base::Seconds(0)) {
+-    LOG(ERROR) << "Frame latency is negative: "
+-               << frame_latency.InMillisecondsF() << " ms";
++    bool log_error = true;
++#if BUILDFLAG(IS_ANDROID)
++    if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
++      // Android < 11 do not support dynamic frame rate, so if
++      // Android PerformanceHint (ADPF) is active, the frame time is
++      // deliberately shifted forward at 60Hz intervals to avoid glich,
++      // so do not log.
++      log_error = false;
++      // ADPF would not be informed of frame misses, which, in fact, do not exist.
++    }
++#endif
++    if (log_error) {
++      LOG(ERROR) << "Frame latency is negative: "
++                << frame_latency.InMillisecondsF() << " ms";
++    }
+     return;
+   }
+   // Can be nullptr in unittests.
+diff --git a/components/viz/service/frame_sinks/external_begin_frame_source_android.cc b/components/viz/service/frame_sinks/external_begin_frame_source_android.cc
+--- a/components/viz/service/frame_sinks/external_begin_frame_source_android.cc
++++ b/components/viz/service/frame_sinks/external_begin_frame_source_android.cc
+@@ -17,6 +17,7 @@
+ #include "base/trace_event/typed_macros.h"
+ #include "ui/gfx/android/achoreographer_compat.h"
+ #include "ui/gl/gl_features.h"
++#include "cc/base/features.h"
+ 
+ // Must come after all headers that specialize FromJniType() / ToJniType().
+ #include "components/viz/service/service_jni_headers/ExternalBeginFrameSourceAndroid_jni.h"
+@@ -247,6 +248,10 @@ ExternalBeginFrameSourceAndroid::ExternalBeginFrameSourceAndroid(
+     float refresh_rate,
+     bool requires_align_with_java)
+     : ExternalBeginFrameSource(this, restart_id) {
++  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz))
++    fixed_vsync_period_ = base::Hertz(60);
++  else
++    fixed_vsync_period_ = base::TimeDelta();
+   // Android WebView requires begin frame to be inside the "animate" stage of
+   // input-animate-draw stages of the java Choreographer, which requires using
+   // java Choreographer.
+@@ -280,6 +285,14 @@ void ExternalBeginFrameSourceAndroid::OnVSyncImpl(
+   DCHECK_EQ(base::TimeTicks::GetClock(),
+             base::TimeTicks::Clock::LINUX_CLOCK_MONOTONIC);
+   base::TimeTicks frame_time = ToTimeTicks(time_nanos);
++  if (!fixed_vsync_period_.is_zero()) {
++    auto next_tick = frame_time.SnappedToNextTick(base::TimeTicks(), fixed_vsync_period_);
++    if (last_tick_ == next_tick) return;
++
++    last_tick_ = next_tick;
++    vsync_period = fixed_vsync_period_;
++    frame_time = next_tick;
++  }
+   // TODO(crbug.com/40829076): If `possible_deadlines` is present, should
+   // really pick a deadline from `possible_deadlines`. However some code
+   // still assume the deadline is a multiple of interval from frame time.
+diff --git a/components/viz/service/frame_sinks/external_begin_frame_source_android.h b/components/viz/service/frame_sinks/external_begin_frame_source_android.h
+--- a/components/viz/service/frame_sinks/external_begin_frame_source_android.h
++++ b/components/viz/service/frame_sinks/external_begin_frame_source_android.h
+@@ -54,6 +54,8 @@ class VIZ_SERVICE_EXPORT ExternalBeginFrameSourceAndroid
+   std::unique_ptr<AChoreographerImpl> achoreographer_;
+   base::android::ScopedJavaGlobalRef<jobject> j_object_;
+   BeginFrameArgsGenerator begin_frame_args_generator_;
++  base::TimeDelta fixed_vsync_period_;
++  base::TimeTicks last_tick_;
+ };
+ 
+ }  // namespace viz
+diff --git a/components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc b/components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc
+--- a/components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc
++++ b/components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc
+@@ -20,6 +20,7 @@
+ #include "base/time/time.h"
+ #include "base/tracing/protos/chrome_track_event.pbzero.h"
+ #include "build/build_config.h"
++#include "cc/base/features.h"
+ #include "components/viz/common/features.h"
+ #include "components/viz/common/frame_sinks/begin_frame_source.h"
+ #include "components/viz/service/display/display.h"
+@@ -753,7 +754,10 @@ void RootCompositorFrameSinkImpl::FrameIntervalDeciderResultCallback(
+           result);
+   interval = interval_and_compat.first;
+   gfx::SurfaceControlFrameRateCompatibility compat = interval_and_compat.second;
+-
++  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
++    interval = base::Hertz(60);
++    compat = gfx::SurfaceControlFrameRateCompatibility::kFixedSource;
++  }
+   if (decided_display_interval_ == interval &&
+       decided_display_frame_rate_compat_ == compat) {
+     return;
+@@ -775,7 +779,9 @@ void RootCompositorFrameSinkImpl::FrameIntervalDeciderResultCallback(
+             return interval.interval;
+           }),
+       result);
+-
++  if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
++    interval = base::Hertz(60);
++  }
+   if (decided_display_interval_ == interval) {
+     return;
+   }
+diff --git a/third_party/blink/renderer/core/animation/animation_clock.cc b/third_party/blink/renderer/core/animation/animation_clock.cc
+--- a/third_party/blink/renderer/core/animation/animation_clock.cc
++++ b/third_party/blink/renderer/core/animation/animation_clock.cc
+@@ -29,6 +29,7 @@
+  */
+ 
+ #include "third_party/blink/renderer/core/animation/animation_clock.h"
++#include "cc/base/features.h"
+ 
+ #include <math.h>
+ 
+@@ -77,9 +78,13 @@ base::TimeTicks AnimationClock::CurrentTime() {
+     // Attempt to predict what the most recent timestamp would have been. This
+     // may not produce a result greater than |time_|, but it greatly reduces the
+     // chance of conflicting with any future frame timestamp that does come in.
+-    const base::TimeDelta frame_shift =
+-        (current_time - time_) % kApproximateFrameTime;
+-    new_time = current_time - frame_shift;
++    if (base::FeatureList::IsEnabled(features::kThrottleMainFrameTo60Hz)) {
++      new_time = new_time.SnappedToNextTick(base::TimeTicks(), base::Hertz(60));
++    } else {
++      const base::TimeDelta frame_shift =
++          (current_time - time_) % kApproximateFrameTime;
++      new_time = current_time - frame_shift;
++    }
+     DCHECK_GE(new_time, time_);
+   }
+   UpdateTime(new_time);
 --
