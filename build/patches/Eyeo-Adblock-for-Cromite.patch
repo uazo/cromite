@@ -48,9 +48,10 @@ suit Cromite logic.
  .../browser/adblock_content_browser_client.h  |  241 +-
  .../browser/adblock_internals_page_handler.cc |    9 +-
  .../browser/adblock_url_loader_factory.cc     |   71 +-
- .../browser/adblock_webcontents_observer.cc   |   62 +-
+ .../adblock_web_ui_controller_factory.cc      |    1 +
+ .../browser/adblock_webcontents_observer.cc   |   63 +-
  .../browser/adblock_webcontents_observer.h    |    5 +-
- .../content/browser/element_hider_impl.cc     |   13 +-
+ .../content/browser/element_hider_impl.cc     |   17 +-
  .../content/browser/eyeo_document_info.cc     |   15 +
  .../content/browser/eyeo_document_info.h      |    9 +
  .../adblock_request_throttle_factory.cc       |    2 +-
@@ -60,25 +61,28 @@ suit Cromite logic.
  .../factories/subscription_service_factory.cc |   22 +-
  .../factories/subscription_service_factory.h  |    1 +
  .../browser/frame_hierarchy_builder.cc        |    1 +
- .../content/browser/page_view_stats.cc        |   71 +-
+ .../content/browser/page_view_stats.cc        |   83 +-
  .../browser/resource_classification_runner.h  |    7 +
  .../resource_classification_runner_impl.cc    |   71 +-
  .../resource_classification_runner_impl.h     |    8 +
  components/adblock/core/BUILD.gn              |   39 -
  components/adblock/core/common/BUILD.gn       |    8 -
- .../adblock/core/common/adblock_constants.cc  |    2 -
+ .../adblock/core/common/adblock_constants.cc  |   17 +-
  .../adblock/core/common/adblock_constants.h   |    1 -
- .../adblock/core/common/adblock_prefs.cc      |   57 +-
- .../adblock/core/common/adblock_prefs.h       |    7 +-
- components/adblock/core/common/app_info.cc    |   12 -
+ .../adblock/core/common/adblock_prefs.cc      |   66 +-
+ .../adblock/core/common/adblock_prefs.h       |    9 +-
+ components/adblock/core/common/app_info.cc    |   17 +-
+ components/adblock/core/common/app_info.h     |    1 -
  .../configuration/filtering_configuration.h   |    5 +
- .../persistent_filtering_configuration.cc     |   28 +-
+ .../persistent_filtering_configuration.cc     |   37 +-
  .../persistent_filtering_configuration.h      |    6 +
  .../core/converter/flatbuffer_converter.cc    |    2 +-
- .../adblock/core/converter/parser/metadata.cc |    1 +
+ .../converter/parser/filter_classifier.cc     |    5 +-
+ .../adblock/core/converter/parser/metadata.cc |   14 +-
  .../core/converter/parser/test/test_rules.txt |   21 +
- .../core/converter/parser/url_filter.cc       |   15 +-
- .../converter/parser/url_filter_options.cc    |   21 +-
+ .../core/converter/parser/url_filter.cc       |   20 +-
+ .../converter/parser/url_filter_options.cc    |   34 +-
+ .../serializer/filter_keyword_extractor.cc    |   13 +-
  .../serializer/flatbuffer_serializer.cc       |  102 +-
  components/adblock/core/features.cc           |    6 +-
  .../core/net/adblock_resource_request_impl.cc |   26 +-
@@ -99,7 +103,7 @@ suit Cromite logic.
  .../adblock/core/subscription/subscription.cc |   20 +
  .../adblock/core/subscription/subscription.h  |    3 +
  .../subscription_collection_impl.cc           |    1 +
- .../core/subscription/subscription_config.cc  |   41 +-
+ .../core/subscription/subscription_config.cc  |   92 +-
  .../core/subscription/subscription_config.h   |    6 +-
  .../subscription_downloader_impl.cc           |   19 +-
  .../subscription_persistent_metadata.h        |    1 +
@@ -127,7 +131,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 122 files changed, 9249 insertions(+), 618 deletions(-)
+ 126 files changed, 9337 insertions(+), 689 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -3081,16 +3085,28 @@ diff --git a/components/adblock/content/browser/adblock_url_loader_factory.cc b/
      } else {
        // We blocked a subresource request. Collapse whitespace around the
        // blocked element.
+diff --git a/components/adblock/content/browser/adblock_web_ui_controller_factory.cc b/components/adblock/content/browser/adblock_web_ui_controller_factory.cc
+--- a/components/adblock/content/browser/adblock_web_ui_controller_factory.cc
++++ b/components/adblock/content/browser/adblock_web_ui_controller_factory.cc
+@@ -20,6 +20,7 @@
+ #include "components/adblock/content/browser/adblock_internals_ui.h"
+ #include "components/adblock/core/common/web_ui_constants.h"
+ #include "content/public/common/url_utils.h"
++#include "url/gurl.h"
+ 
+ namespace adblock {
+ 
 diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc b/components/adblock/content/browser/adblock_webcontents_observer.cc
 --- a/components/adblock/content/browser/adblock_webcontents_observer.cc
 +++ b/components/adblock/content/browser/adblock_webcontents_observer.cc
-@@ -22,10 +22,15 @@
+@@ -22,10 +22,16 @@
  #include "components/adblock/content/browser/request_initiator.h"
  #include "components/adblock/core/common/sitekey.h"
  #include "components/adblock/core/subscription/subscription_service.h"
 +#include "components/content_settings/core/browser/host_content_settings_map.h"
 +#include "components/content_settings/core/common/content_settings.h"
  #include "content/public/browser/navigation_handle.h"
++#include "content/public/browser/navigation_controller.h"
  #include "net/base/url_util.h"
  #include "third_party/blink/public/common/frame/frame_owner_element_type.h"
  
@@ -3100,7 +3116,7 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc 
  namespace {
  const char* WindowOpenDispositionToString(WindowOpenDisposition value) {
    switch (value) {
-@@ -84,6 +89,16 @@ bool ShouldSkipElementHiding(const GURL& url) {
+@@ -84,6 +90,16 @@ bool ShouldSkipElementHiding(const GURL& url) {
           !url.IsAboutBlank();
  }
  
@@ -3117,7 +3133,7 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc 
  }  // namespace
  
  namespace adblock {
-@@ -94,14 +109,16 @@ AdblockWebContentObserver::AdblockWebContentObserver(
+@@ -94,14 +110,16 @@ AdblockWebContentObserver::AdblockWebContentObserver(
      ElementHider* element_hider,
      SitekeyStorage* sitekey_storage,
      std::unique_ptr<FrameHierarchyBuilder> frame_hierarchy_builder,
@@ -3136,7 +3152,7 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc 
  
  AdblockWebContentObserver::~AdblockWebContentObserver() = default;
  
-@@ -141,7 +158,8 @@ void AdblockWebContentObserver::DidFinishNavigation(
+@@ -141,7 +159,8 @@ void AdblockWebContentObserver::DidFinishNavigation(
    VLOG(1) << "[eyeo] Finished navigation: URL=" << url
            << ", has_commited=" << navigation_handle->HasCommitted()
            << ", is_error=" << navigation_handle->IsErrorPage()
@@ -3146,7 +3162,7 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.cc 
    content::RenderFrameHost* frame = nullptr;
    if (navigation_handle->HasCommitted()) {
      frame = navigation_handle->GetRenderFrameHost();
-@@ -153,6 +171,44 @@ void AdblockWebContentObserver::DidFinishNavigation(
+@@ -153,6 +172,44 @@ void AdblockWebContentObserver::DidFinishNavigation(
      VLOG(1) << "[eyeo] Unsupported scheme, skipping injection.";
      return;
    }
@@ -3223,6 +3239,24 @@ diff --git a/components/adblock/content/browser/adblock_webcontents_observer.h b
 diff --git a/components/adblock/content/browser/element_hider_impl.cc b/components/adblock/content/browser/element_hider_impl.cc
 --- a/components/adblock/content/browser/element_hider_impl.cc
 +++ b/components/adblock/content/browser/element_hider_impl.cc
+@@ -133,7 +133,7 @@ void GenerateElemHidingEmuJavaScript(const GURL& url,
+ }
+ 
+ std::string GenerateXpath3Dep() {
+-  static std::string xpath3_dep =
++  std::string xpath3_dep =
+       "(" +
+       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+           IDR_ADBLOCK_SNIPPETS_XPATH3_DEP_JS) +
+@@ -155,7 +155,7 @@ void GenerateSnippetScript(const GURL& url,
+   serializer.Serialize(std::move(input));
+   // snippets_lib should be the library as-is, without any escaping or JSON
+   // parsing.
+-  static std::string snippets_lib =
++  std::string snippets_lib =
+       ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+           IDR_ADBLOCK_SNIPPETS_JS);
+ 
 @@ -242,7 +242,7 @@ void InsertUserCSSAndApplyElemHidingEmuJS(
    if (!frame_host) {
      // Render frame host was destroyed before element hiding could be applied.
@@ -3500,7 +3534,7 @@ diff --git a/components/adblock/content/browser/frame_hierarchy_builder.cc b/com
 diff --git a/components/adblock/content/browser/page_view_stats.cc b/components/adblock/content/browser/page_view_stats.cc
 --- a/components/adblock/content/browser/page_view_stats.cc
 +++ b/components/adblock/content/browser/page_view_stats.cc
-@@ -57,21 +57,6 @@ const char kBlockedStatsCountKey[] = "blocked_pageviews";
+@@ -57,47 +57,26 @@ const char kBlockedStatsCountKey[] = "blocked_pageviews";
  // than AA page views.
  const char kTotalPagesStatsCountKey[] = "pageviews";
  
@@ -3517,12 +3551,29 @@ diff --git a/components/adblock/content/browser/page_view_stats.cc b/components/
 -    case PageViewStats::Metric::TotalPages:
 -      return kTotalPagesStatsCountKey;
 -  }
--}
--
- base::WeakPtr<PageViewStats> g_last_used_instance;
++base::WeakPtr<PageViewStats>& GetLastUsedInstance() {
++  static base::NoDestructor<base::WeakPtr<PageViewStats>> instance;
++  return *instance;
+ }
  
+-base::WeakPtr<PageViewStats> g_last_used_instance;
+-
  void RegisterNavigationWithLastUsedPageViewStats(
-@@ -89,15 +74,6 @@ void RegisterAcceptableAdsBlockthroughtHitWithLastUsedPageViewStats(
+     content::RenderFrameHost* render_frame_host) {
+-  if (g_last_used_instance) {
+-    g_last_used_instance->RegisterMainFrameNavigation(render_frame_host);
++  if (GetLastUsedInstance()) {
++    GetLastUsedInstance()->RegisterMainFrameNavigation(render_frame_host);
+   }
+ }
+ 
+ void RegisterAcceptableAdsBlockthroughtHitWithLastUsedPageViewStats(
+     content::RenderFrameHost* render_frame_host) {
+-  if (g_last_used_instance) {
+-    g_last_used_instance->RegisterAcceptableAdsBlockthroughtHit(
++  if (GetLastUsedInstance()) {
++    GetLastUsedInstance()->RegisterAcceptableAdsBlockthroughtHit(
+         render_frame_host);
    }
  }
  
@@ -3538,7 +3589,15 @@ diff --git a/components/adblock/content/browser/page_view_stats.cc b/components/
  }  // namespace
  
  PageViewStats::PageViewStats(
-@@ -215,22 +191,6 @@ void PageViewStats::RecordParkedMetrics(content::Page& page) {
+@@ -107,7 +86,6 @@ PageViewStats::PageViewStats(
+   DCHECK(classification_runner_);
+   DCHECK(prefs_);
+   classification_runner_->AddObserver(this);
+-  g_last_used_instance = weak_factory_.GetWeakPtr();
+ }
+ 
+ PageViewStats::~PageViewStats() {
+@@ -215,22 +193,6 @@ void PageViewStats::RecordParkedMetrics(content::Page& page) {
      }
      // If this is the entry matching Page we are looking for...
      if (main_frame_id == it->first) {
@@ -3561,7 +3620,7 @@ diff --git a/components/adblock/content/browser/page_view_stats.cc b/components/
        it = parked_metrics_before_main_navigation_.erase(it);
      } else {
        ++it;
-@@ -239,42 +199,13 @@ void PageViewStats::RecordParkedMetrics(content::Page& page) {
+@@ -239,42 +201,13 @@ void PageViewStats::RecordParkedMetrics(content::Page& page) {
  }
  
  void PageViewStats::RecordPageView(content::Page& page, Metric metric) {
@@ -3878,7 +3937,14 @@ diff --git a/components/adblock/core/common/BUILD.gn b/components/adblock/core/c
 diff --git a/components/adblock/core/common/adblock_constants.cc b/components/adblock/core/common/adblock_constants.cc
 --- a/components/adblock/core/common/adblock_constants.cc
 +++ b/components/adblock/core/common/adblock_constants.cc
-@@ -23,8 +23,6 @@
+@@ -17,14 +17,13 @@
+ 
+ #include "components/adblock/core/common/adblock_constants.h"
+ 
++#include "base/no_destructor.h"
+ #include "base/base64.h"
+ #include "components/adblock/core/schema/filter_list_schema_generated.h"
+ #include "components/adblock/core/schema/schema_hash.h"
  
  namespace adblock {
  
@@ -3887,6 +3953,34 @@ diff --git a/components/adblock/core/common/adblock_constants.cc b/components/ad
  const char kAllowlistEverythingFilter[] = "@@*$document";
  
  const char kAdblockFilteringConfigurationName[] = "adblock";
+@@ -108,20 +107,20 @@ const char kBlankPng32x32[] =
+     "3BAQEAAACCIP+vbkhAAQAAAO8GECAAAZf3V9cAAAAASUVORK5CYII=";
+ 
+ const std::string& CurrentSchemaVersion() {
+-  static std::string kCurrentSchemaVersion =
+-      base::Base64Encode(kSha256_filter_list_schema_generated_h);
+-  return kCurrentSchemaVersion;
++  static const base::NoDestructor<std::string> kCurrentSchemaVersion(
++      base::Base64Encode(kSha256_filter_list_schema_generated_h));
++  return *kCurrentSchemaVersion;
+ }
+ 
+ const GURL& TestPagesSubscriptionUrl() {
+-  static GURL kTestPagesUrl(
++  static const base::NoDestructor<GURL> kTestPagesUrl(
+       "https://abptestpages.org/en/abp-testcase-subscription.txt");
+-  return kTestPagesUrl;
++  return *kTestPagesUrl;
+ }
+ 
+ const GURL& CustomFiltersUrl() {
+-  static GURL kCustomFiltersUrl("adblock:custom");
+-  return kCustomFiltersUrl;
++  static const base::NoDestructor<GURL> kCustomFiltersUrl("adblock:custom");
++  return *kCustomFiltersUrl;
+ }
+ 
+ std::string_view RewriteUrl(flat::AbpResource type) {
 diff --git a/components/adblock/core/common/adblock_constants.h b/components/adblock/core/common/adblock_constants.h
 --- a/components/adblock/core/common/adblock_constants.h
 +++ b/components/adblock/core/common/adblock_constants.h
@@ -3901,7 +3995,14 @@ diff --git a/components/adblock/core/common/adblock_constants.h b/components/adb
 diff --git a/components/adblock/core/common/adblock_prefs.cc b/components/adblock/core/common/adblock_prefs.cc
 --- a/components/adblock/core/common/adblock_prefs.cc
 +++ b/components/adblock/core/common/adblock_prefs.cc
-@@ -23,7 +23,9 @@
+@@ -17,13 +17,16 @@
+ 
+ #include "components/adblock/core/common/adblock_prefs.h"
+ 
++#include "base/no_destructor.h"
+ #include "base/logging.h"
+ #include "components/prefs/pref_registry_simple.h"
+ 
  namespace adblock::common::prefs {
  
  // Legacy: Whether to block ads
@@ -3912,7 +4013,7 @@ diff --git a/components/adblock/core/common/adblock_prefs.cc b/components/adbloc
  
  // Legacy: Whether to allow acceptable ads or block them all.
  // Used now just to map CLI switch. Otherwise use kAdblockSubscriptionsLegacy.
-@@ -65,35 +67,6 @@ const char kLastUsedSchemaVersion[] = "adblock.last_used_schema_version";
+@@ -65,35 +68,6 @@ const char kLastUsedSchemaVersion[] = "adblock.last_used_schema_version";
  // and for setting query parameters in subscription download requests.
  const char kSubscriptionMetadata[] = "adblock.subscription_metadata";
  
@@ -3948,7 +4049,7 @@ diff --git a/components/adblock/core/common/adblock_prefs.cc b/components/adbloc
  // FilteringConfiguration data
  const char kConfigurationsPrefsPath[] = "filtering.configurations";
  
-@@ -106,21 +79,12 @@ const char kAutoInstalledSubscriptionsNextUpdateTime[] =
+@@ -106,21 +80,12 @@ const char kAutoInstalledSubscriptionsNextUpdateTime[] =
      "adblock.auto_installed_subscriptions.last_update_time";
  
  // Dict containing stats about acceptable ads page views
@@ -3973,7 +4074,7 @@ diff --git a/components/adblock/core/common/adblock_prefs.cc b/components/adbloc
    registry->RegisterListPref(kAdblockAllowedDomainsLegacy, {});
    registry->RegisterListPref(kAdblockCustomFiltersLegacy, {});
    registry->RegisterListPref(kAdblockSubscriptionsLegacy, {});
-@@ -130,11 +94,10 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
+@@ -130,17 +95,16 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
    registry->RegisterStringPref(kLastUsedSchemaVersion, "");
    registry->RegisterDictionaryPref(kSubscriptionMetadata);
    registry->RegisterDictionaryPref(kConfigurationsPrefsPath);
@@ -3986,7 +4087,15 @@ diff --git a/components/adblock/core/common/adblock_prefs.cc b/components/adbloc
  
    VLOG(3) << "[eyeo] Registered prefs";
  }
-@@ -152,12 +115,6 @@ std::vector<std::string_view> GetPrefs() {
+ 
+-std::vector<std::string_view> GetPrefs() {
+-  static std::vector<std::string_view> prefs = {
++const std::vector<std::string_view>& GetPrefs() {
++  static const base::NoDestructor<std::vector<std::string_view>> prefs({
+       kEnableAdblockLegacy,
+       kEnableAcceptableAdsLegacy,
+       kAdblockMoreOptionsEnabled,
+@@ -152,16 +116,10 @@ std::vector<std::string_view> GetPrefs() {
        kSubscriptionSignatures,
        kLastUsedSchemaVersion,
        kSubscriptionMetadata,
@@ -3998,7 +4107,13 @@ diff --git a/components/adblock/core/common/adblock_prefs.cc b/components/adbloc
 -      kTelemetryPageViewStats,
        kConfigurationsPrefsPath,
        kEnableAutoInstalledSubscriptions,
-       kAutoInstalledSubscriptionsNextUpdateTime};
+-      kAutoInstalledSubscriptionsNextUpdateTime};
+-  return prefs;
++      kAutoInstalledSubscriptionsNextUpdateTime});
++  return *prefs;
+ }
+ 
+ }  // namespace adblock::common::prefs
 diff --git a/components/adblock/core/common/adblock_prefs.h b/components/adblock/core/common/adblock_prefs.h
 --- a/components/adblock/core/common/adblock_prefs.h
 +++ b/components/adblock/core/common/adblock_prefs.h
@@ -4010,7 +4125,7 @@ diff --git a/components/adblock/core/common/adblock_prefs.h b/components/adblock
  extern const char kEnableAcceptableAdsLegacy[];
  extern const char kAdblockAllowedDomainsLegacy[];
  extern const char kAdblockCustomFiltersLegacy[];
-@@ -36,12 +37,6 @@ extern const char kInstallFirstStartSubscriptions[];
+@@ -36,19 +37,13 @@ extern const char kInstallFirstStartSubscriptions[];
  extern const char kSubscriptionSignatures[];
  extern const char kLastUsedSchemaVersion[];
  extern const char kSubscriptionMetadata[];
@@ -4023,10 +4138,33 @@ diff --git a/components/adblock/core/common/adblock_prefs.h b/components/adblock
  extern const char kConfigurationsPrefsPath[];
  extern const char kEnableAutoInstalledSubscriptions[];
  extern const char kAutoInstalledSubscriptionsNextUpdateTime[];
+ 
+ void RegisterProfilePrefs(PrefRegistrySimple* registry);
+ 
+-std::vector<std::string_view> GetPrefs();
++const std::vector<std::string_view>& GetPrefs();
+ 
+ }  // namespace adblock::common::prefs
+ 
 diff --git a/components/adblock/core/common/app_info.cc b/components/adblock/core/common/app_info.cc
 --- a/components/adblock/core/common/app_info.cc
 +++ b/components/adblock/core/common/app_info.cc
-@@ -29,18 +29,6 @@ const AppInfo& AppInfo::Get() {
+@@ -17,6 +17,7 @@
+ 
+ #include "components/adblock/core/common/app_info.h"
+ 
++#include "base/no_destructor.h"
+ #include "base/strings/string_util.h"
+ #include "components/version_info/version_info.h"
+ 
+@@ -24,23 +25,11 @@ namespace adblock {
+ 
+ // static
+ const AppInfo& AppInfo::Get() {
+-  static AppInfo instance;
+-  return instance;
++  static const base::NoDestructor<AppInfo> instance;
++  return *instance;
  }
  
  AppInfo::AppInfo() {
@@ -4045,6 +4183,17 @@ diff --git a/components/adblock/core/common/app_info.cc b/components/adblock/cor
  }
  
  }  // namespace adblock
+diff --git a/components/adblock/core/common/app_info.h b/components/adblock/core/common/app_info.h
+--- a/components/adblock/core/common/app_info.h
++++ b/components/adblock/core/common/app_info.h
+@@ -34,7 +34,6 @@ class AppInfo {
+   std::string client_os;
+   std::string version;
+ 
+- private:
+   AppInfo();
+ };
+ 
 diff --git a/components/adblock/core/configuration/filtering_configuration.h b/components/adblock/core/configuration/filtering_configuration.h
 --- a/components/adblock/core/configuration/filtering_configuration.h
 +++ b/components/adblock/core/configuration/filtering_configuration.h
@@ -4070,7 +4219,12 @@ diff --git a/components/adblock/core/configuration/filtering_configuration.h b/c
 diff --git a/components/adblock/core/configuration/persistent_filtering_configuration.cc b/components/adblock/core/configuration/persistent_filtering_configuration.cc
 --- a/components/adblock/core/configuration/persistent_filtering_configuration.cc
 +++ b/components/adblock/core/configuration/persistent_filtering_configuration.cc
-@@ -25,6 +25,7 @@
+@@ -21,10 +21,12 @@
+ #include <string>
+ #include <string_view>
+ 
++#include "base/no_destructor.h"
+ #include "base/strings/string_util.h"
  #include "components/adblock/core/common/adblock_prefs.h"
  #include "components/prefs/pref_service.h"
  #include "components/prefs/scoped_user_pref_update.h"
@@ -4078,7 +4232,7 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
  
  #include "base/logging.h"
  
-@@ -34,6 +35,7 @@ namespace {
+@@ -34,6 +36,7 @@ namespace {
  constexpr auto kEnabledKey = std::string_view("enabled");
  constexpr auto kDomainsKey = std::string_view("domains");
  constexpr auto kCustomFiltersKey = std::string_view("filters");
@@ -4086,7 +4240,7 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
  constexpr auto kFilterListsKey = std::string_view("subscriptions");
  
  base::Value::Dict ReadFromPrefs(PrefService* pref_service,
-@@ -42,7 +44,9 @@ base::Value::Dict ReadFromPrefs(PrefService* pref_service,
+@@ -42,7 +45,9 @@ base::Value::Dict ReadFromPrefs(PrefService* pref_service,
        pref_service->GetValue(common::prefs::kConfigurationsPrefsPath).GetDict();
    const auto* this_config = all_configurations.FindDict(configuration_name);
    if (this_config) {
@@ -4097,7 +4251,19 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
    }
    return base::Value::Dict();
  }
-@@ -63,6 +67,7 @@ void SetDefaultValuesIfNeeded(base::Value::Dict& configuration) {
+@@ -51,9 +56,9 @@ void StoreToPrefs(const base::Value::Dict& configuration,
+                   PrefService* pref_service,
+                   std::string_view configuration_name) {
+   // ScopedDictPrefUpdate requires an std::string for some reason:
+-  static std::string kConfigurationsPrefsPathString(
++  static const base::NoDestructor<std::string> kConfigurationsPrefsPathString(
+       common::prefs::kConfigurationsPrefsPath);
+-  ScopedDictPrefUpdate update(pref_service, kConfigurationsPrefsPathString);
++  ScopedDictPrefUpdate update(pref_service, *kConfigurationsPrefsPathString);
+   update.Get().Set(configuration_name, configuration.Clone());
+ }
+ 
+@@ -63,6 +68,7 @@ void SetDefaultValuesIfNeeded(base::Value::Dict& configuration) {
    }
    configuration.EnsureList(kDomainsKey);
    configuration.EnsureList(kCustomFiltersKey);
@@ -4105,7 +4271,7 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
    configuration.EnsureList(kFilterListsKey);
  }
  
-@@ -133,6 +138,7 @@ const std::string& PersistentFilteringConfiguration::GetName() const {
+@@ -133,6 +139,7 @@ const std::string& PersistentFilteringConfiguration::GetName() const {
  }
  
  void PersistentFilteringConfiguration::SetEnabled(bool enabled) {
@@ -4113,7 +4279,7 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
    if (IsEnabled() == enabled) {
      return;
    }
-@@ -141,6 +147,14 @@ void PersistentFilteringConfiguration::SetEnabled(bool enabled) {
+@@ -141,6 +148,14 @@ void PersistentFilteringConfiguration::SetEnabled(bool enabled) {
    NotifyEnabledStateChanged();
  }
  
@@ -4128,7 +4294,7 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
  bool PersistentFilteringConfiguration::IsEnabled() const {
    const auto pref_value = dictionary_.FindBool(kEnabledKey);
    DCHECK(pref_value);
-@@ -209,6 +223,18 @@ void PersistentFilteringConfiguration::RemoveCustomFilter(
+@@ -209,6 +224,18 @@ void PersistentFilteringConfiguration::RemoveCustomFilter(
    }
  }
  
@@ -4147,6 +4313,18 @@ diff --git a/components/adblock/core/configuration/persistent_filtering_configur
  std::vector<std::string> PersistentFilteringConfiguration::GetCustomFilters()
      const {
    return GetFromList<std::string>(dictionary_, kCustomFiltersKey);
+@@ -261,9 +288,9 @@ PersistentFilteringConfiguration::GetPersistedConfigurations(
+ void PersistentFilteringConfiguration::RemovePersistedData(
+     PrefService* pref_service,
+     const std::string& name) {
+-  static std::string kConfigurationsPrefsPathString(
++  static const base::NoDestructor<std::string> kConfigurationsPrefsPathString(
+       common::prefs::kConfigurationsPrefsPath);
+-  ScopedDictPrefUpdate update(pref_service, kConfigurationsPrefsPathString);
++  ScopedDictPrefUpdate update(pref_service, *kConfigurationsPrefsPathString);
+   update.Get().Remove(name);
+ }
+ 
 diff --git a/components/adblock/core/configuration/persistent_filtering_configuration.h b/components/adblock/core/configuration/persistent_filtering_configuration.h
 --- a/components/adblock/core/configuration/persistent_filtering_configuration.h
 +++ b/components/adblock/core/configuration/persistent_filtering_configuration.h
@@ -4182,17 +4360,89 @@ diff --git a/components/adblock/core/converter/flatbuffer_converter.cc b/compone
        }
        break;
    }
+diff --git a/components/adblock/core/converter/parser/filter_classifier.cc b/components/adblock/core/converter/parser/filter_classifier.cc
+--- a/components/adblock/core/converter/parser/filter_classifier.cc
++++ b/components/adblock/core/converter/parser/filter_classifier.cc
+@@ -17,6 +17,7 @@
+ 
+ #include "components/adblock/core/converter/parser/filter_classifier.h"
+ 
++#include "base/no_destructor.h"
+ #include "third_party/re2/src/re2/re2.h"
+ 
+ namespace adblock {
+@@ -26,8 +27,8 @@ FilterType FilterClassifier::Classify(std::string_view filter) {
+   if (!filter.empty() && filter.back() == '}' &&
+       (base::StartsWith(filter, kElemHideFilterSeparator) ||
+        base::StartsWith(filter, kElemHideEmulationFilterSeparator))) {
+-    static re2::RE2 remove_re("\\{\\s*remove\\s*:\\s*true\\s*;\\s*\\}$");
+-    if (re2::RE2::PartialMatch(filter, remove_re)) {
++    static const base::NoDestructor<re2::RE2> remove_re("\\{\\s*remove\\s*:\\s*true\\s*;\\s*\\}$");
++    if (re2::RE2::PartialMatch(filter, *remove_re)) {
+       return FilterType::Remove;
+     } else {
+       return FilterType::InlineCss;
 diff --git a/components/adblock/core/converter/parser/metadata.cc b/components/adblock/core/converter/parser/metadata.cc
 --- a/components/adblock/core/converter/parser/metadata.cc
 +++ b/components/adblock/core/converter/parser/metadata.cc
-@@ -108,6 +108,7 @@ Metadata::~Metadata() = default;
+@@ -19,6 +19,7 @@
+ 
+ #include <algorithm>
+ 
++#include "base/no_destructor.h"
+ #include "base/logging.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/strings/string_util.h"
+@@ -30,7 +31,7 @@ namespace adblock {
+ // comment line any upcoming comments will be skipped.
+ // static
+ absl::optional<Metadata> Metadata::FromStream(std::istream& filter_stream) {
+-  static re2::RE2 comment_re("^!\\s*(.*?)\\s*:\\s*(.*)");
++  static base::NoDestructor<re2::RE2> comment_re("^!\\s*(.*?)\\s*:\\s*(.*)");
+ 
+   std::string homepage;
+   std::string title;
+@@ -51,7 +52,7 @@ absl::optional<Metadata> Metadata::FromStream(std::istream& filter_stream) {
+   auto position_in_stream = filter_stream.tellg();
+   while (std::getline(filter_stream, line)) {
+     base::TrimWhitespaceASCII(line, base::TRIM_ALL, &line);
+-    if (!re2::RE2::FullMatch(line, comment_re, &key, &value)) {
++    if (!re2::RE2::FullMatch(line, *comment_re, &key, &value)) {
+       break;
+     }
+ 
+@@ -108,14 +109,15 @@ Metadata::~Metadata() = default;
  
  // static
  bool Metadata::IsValidAdblockHeader(const std::string& adblock_header) {
+-  static re2::RE2 adblock_header_re("^\\[Adblock.*\\]");
 +  if ((true)) return true;
-   static re2::RE2 adblock_header_re("^\\[Adblock.*\\]");
++  static base::NoDestructor<re2::RE2> adblock_header_re("^\\[Adblock.*\\]");
    std::string adblock_header_trimmed;
  
+   base::TrimWhitespaceASCII(adblock_header, base::TRIM_ALL,
+                             &adblock_header_trimmed);
+   if (!re2::RE2::FullMatch(re2::StringPiece(adblock_header_trimmed.data(),
+                                             adblock_header_trimmed.size()),
+-                           adblock_header_re)) {
++                           *adblock_header_re)) {
+     return false;
+   }
+   return true;
+@@ -126,11 +128,11 @@ bool Metadata::IsValidAdblockHeader(const std::string& adblock_header) {
+ // static
+ base::TimeDelta Metadata::ParseExpirationTime(
+     const std::string& expiration_value) {
+-  static re2::RE2 expiration_time_re("\\s*([0-9]+)\\s*(h)?.*");
++  static base::NoDestructor<re2::RE2> expiration_time_re("\\s*([0-9]+)\\s*(h)?.*");
+   std::string expiration_unit;
+   uint64_t expiration_time;
+ 
+-  if (!re2::RE2::FullMatch(expiration_value, expiration_time_re,
++  if (!re2::RE2::FullMatch(expiration_value, *expiration_time_re,
+                            &expiration_time, &expiration_unit)) {
+     VLOG(1) << "[eyeo] Invalid expiration time format: " << expiration_value
+             << ". Will use default value of "
 diff --git a/components/adblock/core/converter/parser/test/test_rules.txt b/components/adblock/core/converter/parser/test/test_rules.txt
 new file mode 100644
 --- /dev/null
@@ -4222,7 +4472,15 @@ new file mode 100644
 diff --git a/components/adblock/core/converter/parser/url_filter.cc b/components/adblock/core/converter/parser/url_filter.cc
 --- a/components/adblock/core/converter/parser/url_filter.cc
 +++ b/components/adblock/core/converter/parser/url_filter.cc
-@@ -50,6 +50,10 @@ std::string SanitizePipeCharacters(std::string pattern) {
+@@ -19,6 +19,7 @@
+ 
+ #include <string_view>
+ 
++#include "base/no_destructor.h"
+ #include "base/command_line.h"
+ #include "base/logging.h"
+ #include "base/strings/string_util.h"
+@@ -50,6 +51,10 @@ std::string SanitizePipeCharacters(std::string pattern) {
    // Skip up to one trailing | characters, this is the right anchor.
    bool pattern_has_right_anchor = base::EndsWith(piece, "|");
    if (pattern_has_right_anchor) {
@@ -4233,7 +4491,18 @@ diff --git a/components/adblock/core/converter/parser/url_filter.cc b/components
      piece.remove_suffix(1);
    }
    if (piece.find('|') == std::string_view::npos) {
-@@ -133,25 +137,18 @@ absl::optional<UrlFilter> UrlFilter::FromString(std::string filter_str) {
+@@ -81,8 +86,8 @@ bool IsInvalidHostAnchoredFilter(const std::string& pattern) {
+   // "http://domain.com".
+   // However, "||domain.com/url=http://example.com" is valid.
+   // Discard filters that start with "||http://" or similar.
+-  static re2::RE2 starts_with_protocol(R"(^\|\|\w*:\/\/)");
+-  return re2::RE2::PartialMatch(pattern, starts_with_protocol);
++  static const base::NoDestructor<re2::RE2> starts_with_protocol(R"(^\|\|\w*:\/\/)");
++  return re2::RE2::PartialMatch(pattern, *starts_with_protocol);
+ }
+ 
+ }  // namespace
+@@ -133,25 +138,18 @@ absl::optional<UrlFilter> UrlFilter::FromString(std::string filter_str) {
  
      if (options->Csp().has_value() && options->Csp().value().empty() &&
          !is_allowing) {
@@ -4264,7 +4533,15 @@ diff --git a/components/adblock/core/converter/parser/url_filter.cc b/components
 diff --git a/components/adblock/core/converter/parser/url_filter_options.cc b/components/adblock/core/converter/parser/url_filter_options.cc
 --- a/components/adblock/core/converter/parser/url_filter_options.cc
 +++ b/components/adblock/core/converter/parser/url_filter_options.cc
-@@ -92,20 +92,14 @@ absl::optional<UrlFilterOptions> UrlFilterOptions::FromString(
+@@ -17,6 +17,7 @@
+ 
+ #include "components/adblock/core/converter/parser/url_filter_options.h"
+ 
++#include "base/no_destructor.h"
+ #include "base/logging.h"
+ #include "base/strings/string_split.h"
+ #include "base/strings/string_util.h"
+@@ -92,20 +93,14 @@ absl::optional<UrlFilterOptions> UrlFilterOptions::FromString(
          return {};
        }
      } else if (key == "sitekey") {
@@ -4291,7 +4568,7 @@ diff --git a/components/adblock/core/converter/parser/url_filter_options.cc b/co
      } else {
        ContentType content_type = ContentTypeFromString(key);
        if (content_type != ContentType::Unknown) {
-@@ -188,6 +182,7 @@ absl::optional<UrlFilterOptions::RewriteOption> UrlFilterOptions::ParseRewrite(
+@@ -188,6 +183,7 @@ absl::optional<UrlFilterOptions::RewriteOption> UrlFilterOptions::ParseRewrite(
  // static
  SiteKeys UrlFilterOptions::ParseSitekeys(const std::string& sitekey_value) {
    SiteKeys sitekeys;
@@ -4299,22 +4576,72 @@ diff --git a/components/adblock/core/converter/parser/url_filter_options.cc b/co
    for (auto& sitekey : base::SplitString(
             base::ToUpperASCII(sitekey_value), kDomainOrSitekeySeparator,
             base::KEEP_WHITESPACE, base::SPLIT_WANT_NONEMPTY)) {
-@@ -199,6 +194,7 @@ SiteKeys UrlFilterOptions::ParseSitekeys(const std::string& sitekey_value) {
+@@ -199,23 +195,25 @@ SiteKeys UrlFilterOptions::ParseSitekeys(const std::string& sitekey_value) {
  
  // static
  bool UrlFilterOptions::IsValidCsp(const std::string& csp_value) {
+-  static re2::RE2 invalid_csp(
 +  if ((true)) return false;
-   static re2::RE2 invalid_csp(
++  static const base::NoDestructor<re2::RE2> invalid_csp(
        "(;|^) "
        "?(base-uri|referrer|report-to|report-uri|upgrade-insecure-requests)\\b");
-@@ -209,6 +205,7 @@ bool UrlFilterOptions::IsValidCsp(const std::string& csp_value) {
+ 
+   return !(re2::RE2::PartialMatch(
+-      re2::StringPiece(csp_value.data(), csp_value.size()), invalid_csp));
++      re2::StringPiece(csp_value.data(), csp_value.size()), *invalid_csp));
+ }
  
  // static
  void UrlFilterOptions::ParseHeaders(std::string& headers_value) {
 +  if ((true)) return;
    // replace \x2c with actual ,
-   static re2::RE2 r1("([^\\\\])\\\\x2c");
-   re2::RE2::GlobalReplace(&headers_value, r1, "\\1,");
+-  static re2::RE2 r1("([^\\\\])\\\\x2c");
+-  re2::RE2::GlobalReplace(&headers_value, r1, "\\1,");
++  static const base::NoDestructor<re2::RE2> r1("([^\\\\])\\\\x2c");
++  re2::RE2::GlobalReplace(&headers_value, *r1, "\\1,");
+ 
+   // remove extra escape for \\x2c which left
+-  static re2::RE2 r2("\\\\x2c");
+-  re2::RE2::GlobalReplace(&headers_value, r2, "x2c");
++  static const base::NoDestructor<re2::RE2> r2("\\\\x2c");
++  re2::RE2::GlobalReplace(&headers_value, *r2, "x2c");
+ }
+ 
+ // static
+diff --git a/components/adblock/core/converter/serializer/filter_keyword_extractor.cc b/components/adblock/core/converter/serializer/filter_keyword_extractor.cc
+--- a/components/adblock/core/converter/serializer/filter_keyword_extractor.cc
++++ b/components/adblock/core/converter/serializer/filter_keyword_extractor.cc
+@@ -20,6 +20,7 @@
+ #include <algorithm>
+ #include <cctype>
+ 
++#include "base/no_destructor.h"
+ #include "base/strings/string_util.h"
+ #include "components/adblock/core/common/keyword_extractor_utils.h"
+ #include "third_party/re2/src/re2/re2.h"
+@@ -38,16 +39,16 @@ absl::optional<std::string> FilterKeywordExtractor::GetNextKeyword() {
+     // keyword because when we have a valid to block url like this one
+     // domain.cc/in_discovery5 returns with "discovery5" as
+     // one of the extracted keywords instead of "discovery"
+-    static const re2::RE2 filter_keyword_extractor(
++    static const base::NoDestructor<re2::RE2> filter_keyword_extractor(
+         "([^a-zA-Z0-9%*][a-zA-Z0-9%]{2,})");
+-    static const re2::RE2 has_a_following_keyword("(^[^a-zA-Z0-9%*])");
+-    static const re2::RE2 following_keyword_consume("(^[a-zA-Z0-9%*]*)");
+-    if (!RE2::FindAndConsume(&input_, filter_keyword_extractor,
++    static const base::NoDestructor<re2::RE2> has_a_following_keyword("(^[^a-zA-Z0-9%*])");
++    static const base::NoDestructor<re2::RE2> following_keyword_consume("(^[a-zA-Z0-9%*]*)");
++    if (!RE2::FindAndConsume(&input_, *filter_keyword_extractor,
+                              &current_keyword)) {
+       return absl::nullopt;
+     }
+-    if (!RE2::PartialMatch(input_, has_a_following_keyword)) {
+-      RE2::Consume(&input_, following_keyword_consume);
++    if (!RE2::PartialMatch(input_, *has_a_following_keyword)) {
++      RE2::Consume(&input_, *following_keyword_consume);
+       current_keyword.clear();
+       continue;
+     }
 diff --git a/components/adblock/core/converter/serializer/flatbuffer_serializer.cc b/components/adblock/core/converter/serializer/flatbuffer_serializer.cc
 --- a/components/adblock/core/converter/serializer/flatbuffer_serializer.cc
 +++ b/components/adblock/core/converter/serializer/flatbuffer_serializer.cc
@@ -11848,15 +12175,16 @@ diff --git a/components/adblock/core/subscription/subscription_collection_impl.c
 diff --git a/components/adblock/core/subscription/subscription_config.cc b/components/adblock/core/subscription/subscription_config.cc
 --- a/components/adblock/core/subscription/subscription_config.cc
 +++ b/components/adblock/core/subscription/subscription_config.cc
-@@ -19,6 +19,7 @@
+@@ -19,6 +19,8 @@
  
  #include <map>
  
++#include "base/no_destructor.h"
 +#include "base/strings/string_number_conversions.h"
  #include "base/strings/string_split.h"
  #include "base/strings/string_util.h"
  #include "components/adblock/core/common/adblock_constants.h"
-@@ -29,7 +30,7 @@ namespace {
+@@ -29,7 +31,7 @@ namespace {
  int g_port_for_testing = 0;
  
  std::string GetHost() {
@@ -11865,7 +12193,53 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
    if (!g_port_for_testing) {
      return url.spec();
    }
-@@ -108,7 +109,19 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+@@ -43,29 +45,29 @@ std::string GetHost() {
+ namespace adblock {
+ 
+ const GURL& AdblockBaseFilterListUrl() {
+-  static GURL kAdblockBaseFilterListUrl(GetHost());
+-  return kAdblockBaseFilterListUrl;
++  static const base::NoDestructor<GURL> kAdblockBaseFilterListUrl(GetHost());
++  return *kAdblockBaseFilterListUrl;
+ }
+ 
+ const GURL& AcceptableAdsUrl() {
+-  static GURL kAcceptableAds(GetHost() + "exceptionrules.txt");
+-  return kAcceptableAds;
++  static const base::NoDestructor<GURL> kAcceptableAds(GetHost() + "exceptionrules.txt");
++  return *kAcceptableAds;
+ }
+ 
+ const GURL& AntiCVUrl() {
+-  static GURL kAntiCV(GetHost() + "abp-filters-anti-cv.txt");
+-  return kAntiCV;
++  static const base::NoDestructor<GURL> kAntiCV(GetHost() + "abp-filters-anti-cv.txt");
++  return *kAntiCV;
+ }
+ 
+ const GURL& DefaultSubscriptionUrl() {
+-  static GURL kEasylistUrl(GetHost() + "easylist.txt");
+-  return kEasylistUrl;
++  static const base::NoDestructor<GURL> kEasylistUrl(GetHost() + "easylist.txt");
++  return *kEasylistUrl;
+ }
+ 
+ const GURL& RecommendedSubscriptionListUrl() {
+-  static GURL kRecommendedSubscriptionListUrl(GetHost() +
++  static const base::NoDestructor<GURL> kRecommendedSubscriptionListUrl(GetHost() +
+                                               "recommendations.json");
+-  return kRecommendedSubscriptionListUrl;
++  return *kRecommendedSubscriptionListUrl;
+ }
+ 
+ KnownSubscriptionInfo::KnownSubscriptionInfo() = default;
+@@ -103,12 +105,24 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+   // The list isn't updated very often. If it starts to become a burden to
+   // align the C++ representation, better to update it manually because it also
+   // contains visibility and first run behavior options.
+-  static std::vector<KnownSubscriptionInfo> recommendations = {
++  static const base::NoDestructor<std::vector<KnownSubscriptionInfo>> recommendations({
+       {DefaultSubscriptionUrl(),
         "EasyList",
         {"en"},
         SubscriptionUiVisibility::Visible,
@@ -11886,7 +12260,7 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
         SubscriptionPrivilegedFilterStatus::Forbidden},
        {GURL(GetHost() + "abpindo.txt"),
         "ABPindo",
-@@ -262,17 +275,23 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+@@ -262,17 +276,23 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
         SubscriptionFirstRunBehavior::SubscribeIfLocaleMatch,
         SubscriptionPrivilegedFilterStatus::Forbidden},
        {AcceptableAdsUrl(),
@@ -11914,7 +12288,7 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
        {GURL(GetHost() + "i_dont_care_about_cookies.txt"),
         "I don't care about cookies",
         {},
-@@ -303,13 +322,13 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+@@ -303,13 +323,13 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
         {},
         SubscriptionUiVisibility::Invisible,
         SubscriptionFirstRunBehavior::Ignore,
@@ -11930,7 +12304,19 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
  
        // You can customize subscriptions available on first run and in settings
        // here. Items are displayed in settings in order declared here. See
-@@ -346,7 +365,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
+@@ -329,9 +349,9 @@ const std::vector<KnownSubscriptionInfo>& config::GetKnownSubscriptions() {
+       */
+       // clang-format on
+ 
+-  };
++  });
+ 
+-  return recommendations;
++  return *recommendations;
+ }
+ 
+ bool config::AllowPrivilegedFilters(const GURL& url) {
+@@ -346,7 +366,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
    for (const auto& cur : GetKnownSubscriptions()) {
      if (cur.url == url) {
        return cur.privileged_status ==
@@ -11939,7 +12325,7 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
      }
    }
  
-@@ -356,9 +375,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
+@@ -356,9 +376,7 @@ bool config::AllowPrivilegedFilters(const GURL& url) {
  const std::vector<PreloadedSubscriptionInfo>&
  config::GetPreloadedSubscriptionConfiguration() {
    static const std::vector<PreloadedSubscriptionInfo> preloaded_subscriptions =
@@ -11950,6 +12336,49 @@ diff --git a/components/adblock/core/subscription/subscription_config.cc b/compo
    return preloaded_subscriptions;
  }
  
+@@ -368,10 +386,11 @@ void SetFilterListServerPortForTesting(int port_for_testing) {
+ 
+ const std::vector<std::string_view>& config::MaybeSplitCombinedAdblockList(
+     const GURL& filter_list) {
+-  static std::vector<std::string_view> EMPTY_VALUE;
+-  static std::string_view VALUE_EASYLIST_EN = "easylist.txt";
+-  static std::map<std::string_view, std::vector<std::string_view>>
+-      filter_lists_map = {
++  static const base::NoDestructor<std::vector<std::string_view>> EMPTY_VALUE;
++  static constexpr std::string_view VALUE_EASYLIST_EN = "easylist.txt";
++  static const base::NoDestructor<
++      std::map<std::string_view, std::vector<std::string_view>>>
++      filter_lists_map({
+           {"abpindo+easylist.txt", {"abpindo.txt", VALUE_EASYLIST_EN}},
+           {"abpvn+easylist", {"abpvn.txt", VALUE_EASYLIST_EN}},
+           {"bulgarian_list+easylist.",
+@@ -410,17 +429,20 @@ const std::vector<std::string_view>& config::MaybeSplitCombinedAdblockList(
+           {"rolist+easylist.txt", {"rolist.txt", VALUE_EASYLIST_EN}},
+           {"ruadlist+easylist.txt", {"ruadlist.txt", VALUE_EASYLIST_EN}},
+           {"turkish+easylist.txt", {"turkish.txt", VALUE_EASYLIST_EN}},
+-      };
++      });
+   if (filter_list.host() != AdblockBaseFilterListUrl().host()) {
+-    // This method works only for ad block maintained lists.
+-    return EMPTY_VALUE;
++    return *EMPTY_VALUE;
+   }
++
+   auto path =
+       base::TrimString(filter_list.path_piece(), "/", base::TRIM_LEADING);
+-  if (filter_lists_map.find(path) == filter_lists_map.end()) {
+-    return EMPTY_VALUE;
++
++  auto it = filter_lists_map->find(path);
++  if (it == filter_lists_map->end()) {
++    return *EMPTY_VALUE;
+   }
+-  return filter_lists_map[path];
++
++  return it->second;
+ }
+ 
+ }  // namespace adblock
 diff --git a/components/adblock/core/subscription/subscription_config.h b/components/adblock/core/subscription/subscription_config.h
 --- a/components/adblock/core/subscription/subscription_config.h
 +++ b/components/adblock/core/subscription/subscription_config.h

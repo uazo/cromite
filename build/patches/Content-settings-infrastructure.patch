@@ -32,7 +32,7 @@ Require: bromite-build-utils.patch
  .../ui/views/page_info/page_info_main_view.cc |  28 +-
  .../views/page_info/page_info_view_factory.cc |  20 +
  .../views/page_info/page_info_view_factory.h  |   5 +
- .../page_info/permission_toggle_row_view.cc   | 183 ++++++--
+ .../page_info/permission_toggle_row_view.cc   | 188 ++++++--
  .../page_info/permission_toggle_row_view.h    |  18 +-
  .../settings_localized_strings_provider.cc    |  54 +++
  .../ui/webui/settings/site_settings_helper.cc |  46 +-
@@ -43,9 +43,9 @@ Require: bromite-build-utils.patch
  .../res/xml/site_settings_preferences.xml     |   7 +
  .../site_settings/AllSiteSettings.java        |   5 +-
  .../BromiteCustomContentSetting.java          | 155 +++++++
- .../BromiteCustomContentSettingImpl.java      | 412 ++++++++++++++++++
+ .../BromiteCustomContentSettingImpl.java      | 415 ++++++++++++++++++
  ...tomTriStateSiteSettingsPreferenceImpl.java |  24 +
- .../ContentSettingsResources.java             |  37 +-
+ .../ContentSettingsResources.java             |  39 +-
  .../site_settings/SingleCategorySettings.java |  57 ++-
  .../site_settings/SingleWebsiteSettings.java  |  53 ++-
  .../site_settings/SiteSettings.java           |  33 +-
@@ -78,7 +78,6 @@ Require: bromite-build-utils.patch
  .../renderer/content_settings_agent_impl.cc   |  74 ++++
  .../renderer/content_settings_agent_impl.h    |   9 +
  .../PageInfoPermissionsController.java        |   9 +
- .../PermissionParamsListBuilder.java          |   8 +
  .../android/page_info_controller_android.cc   |  18 +
  components/page_info/page_info.cc             |  23 +-
  components/page_info/page_info_ui.cc          |  25 ++
@@ -86,7 +85,7 @@ Require: bromite-build-utils.patch
  .../platform/web_content_settings_client.h    |  13 +
  .../execution_context/execution_context.cc    |  16 +
  .../execution_context/execution_context.h     |   5 +
- 75 files changed, 1963 insertions(+), 108 deletions(-)
+ 74 files changed, 1965 insertions(+), 108 deletions(-)
  create mode 100644 components/browser_ui/settings/android/java/res/layout/preference_spinner_single_widget.xml
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSetting.java
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
@@ -866,14 +865,14 @@ diff --git a/chrome/browser/ui/views/page_info/page_info_view_factory.cc b/chrom
      bool blocked_on_system_level) {
    PermissionSetting setting =
        permission.setting.value_or(permission.default_setting);
-+  return GetPermissionIcon(info, blocked_on_system_level, setting);
++  return GetPermissionIcon(permission, blocked_on_system_level, setting);
 +}
  
 +// static
 +const ui::ImageModel PageInfoViewFactory::GetPermissionIcon(
 +    const PageInfo::PermissionInfo& permission,
 +    bool blocked_on_system_level,
-+    ContentSetting setting) {
++    PermissionSetting setting) {
    auto* info = content_settings::PermissionSettingsRegistry::GetInstance()->Get(
        permission.type);
    // For guard content settings and Automatic Picture-in-Picture, ASK is treated
@@ -885,7 +884,7 @@ diff --git a/chrome/browser/ui/views/page_info/page_info_view_factory.cc b/chrom
 +      content_settings::WebsiteSettingsRegistry* website_settings =
 +          content_settings::WebsiteSettingsRegistry::GetInstance();
 +      for (const content_settings::WebsiteSettingsInfo* cs : *website_settings) {
-+        if (cs->type() == info.type && cs->show_into_info_page()) {
++        if (cs->type() == permission.type && cs->show_into_info_page()) {
 +          icon = &vector_icons::kProtectedContentIcon;
 +          found = true;
 +          break;
@@ -905,7 +904,7 @@ diff --git a/chrome/browser/ui/views/page_info/page_info_view_factory.h b/chrome
 +  static const ui::ImageModel GetPermissionIcon(
 +      const PageInfo::PermissionInfo& info,
 +      bool blocked_on_system_level,
-+      ContentSetting setting);
++      PermissionSetting setting);
 +
    // Returns the icon for the given object |info|.
    static const ui::ImageModel GetChosenObjectIcon(
@@ -913,7 +912,7 @@ diff --git a/chrome/browser/ui/views/page_info/page_info_view_factory.h b/chrome
 diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc
 --- a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc
 +++ b/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc
-@@ -39,6 +39,31 @@
+@@ -39,6 +39,34 @@
  #include "ui/views/controls/styled_label.h"
  #include "ui/views/style/typography.h"
  #include "ui/views/view_class_properties.h"
@@ -922,30 +921,33 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
 +
 +namespace {
 +  bool IsAllowed(const PageInfo::PermissionInfo& permission) {
-+    if (permission.setting == CONTENT_SETTING_DEFAULT)
-+      return permission.default_setting == CONTENT_SETTING_ALLOW;
++    auto value = std::get<ContentSetting>(permission.setting.value_or(CONTENT_SETTING_DEFAULT));
++    if (value == CONTENT_SETTING_DEFAULT)
++      return std::get<ContentSetting>(permission.default_setting) == CONTENT_SETTING_ALLOW;
 +    else
-+      return permission.setting == CONTENT_SETTING_ALLOW;
++      return value == CONTENT_SETTING_ALLOW;
 +  }
 +
 +  bool IsBlocked(const PageInfo::PermissionInfo& permission) {
-+    if (permission.setting == CONTENT_SETTING_DEFAULT)
-+      return permission.default_setting == CONTENT_SETTING_BLOCK;
++    auto value = std::get<ContentSetting>(permission.setting.value_or(CONTENT_SETTING_DEFAULT));
++    if (value == CONTENT_SETTING_DEFAULT)
++      return std::get<ContentSetting>(permission.default_setting) == CONTENT_SETTING_BLOCK;
 +    else
-+      return permission.setting == CONTENT_SETTING_BLOCK;
++      return value == CONTENT_SETTING_BLOCK;
 +  }
 +
 +  bool IsAsk(const PageInfo::PermissionInfo& permission) {
-+    if (permission.setting == CONTENT_SETTING_DEFAULT)
-+      return permission.default_setting == CONTENT_SETTING_ASK;
++    auto value = std::get<ContentSetting>(permission.setting.value_or(CONTENT_SETTING_DEFAULT));
++    if (value == CONTENT_SETTING_DEFAULT)
++      return std::get<ContentSetting>(permission.default_setting) == CONTENT_SETTING_ASK;
 +    else
-+      return permission.setting == CONTENT_SETTING_ASK;
++      return value == CONTENT_SETTING_ASK;
 +  }
 +}
  
  namespace {
  
-@@ -73,17 +98,12 @@ PermissionToggleRowView::PermissionToggleRowView(
+@@ -73,17 +101,12 @@ PermissionToggleRowView::PermissionToggleRowView(
        navigation_handler_(navigation_handler) {
    SetUseDefaultFillLayout(true);
    row_view_ = AddChildView(std::make_unique<RichControlsContainerView>());
@@ -964,7 +966,7 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
    if (permission.requesting_origin.has_value()) {
      std::u16string requesting_origin_string;
      switch (permission.type) {
-@@ -181,6 +201,90 @@ void PermissionToggleRowView::UpdatePermission(
+@@ -181,6 +204,91 @@ void PermissionToggleRowView::UpdatePermission(
    UpdateUiOnPermissionChanged();
  }
  
@@ -1022,7 +1024,8 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
 +}
 +
 +bool PermissionToggleRowView::IsCommandIdChecked(int command_id) const {
-+  if (permission_.setting == CONTENT_SETTING_DEFAULT && command_id == 4) {
++  auto value = std::get<ContentSetting>(permission_.setting.value_or(CONTENT_SETTING_DEFAULT));
++  if (value == CONTENT_SETTING_DEFAULT && command_id == 4) {
 +    return true;
 +  } else if (IsAllowed(permission_)) {
 +    return command_id == 1;
@@ -1055,7 +1058,7 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
  void PermissionToggleRowView::OnToggleButtonPressed() {
    PageInfoUI::ToggleBetweenAllowAndBlock(permission_);
    PermissionChanged();
-@@ -189,27 +293,19 @@ void PermissionToggleRowView::OnToggleButtonPressed() {
+@@ -189,27 +297,19 @@ void PermissionToggleRowView::OnToggleButtonPressed() {
  void PermissionToggleRowView::AddToggleButton(
      const std::u16string& toggle_accessible_name,
      int icon_label_spacing) {
@@ -1090,7 +1093,7 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
  }
  
  void PermissionToggleRowView::InitForUserSource(
-@@ -251,12 +347,6 @@ void PermissionToggleRowView::InitForUserSource(
+@@ -251,12 +351,6 @@ void PermissionToggleRowView::InitForUserSource(
        auto spacer_view = std::make_unique<views::View>();
        spacer_view->SetPreferredSize(gfx::Size(icon_size, icon_size));
        spacer_view_ = row_view_->AddControl(std::move(spacer_view));
@@ -1103,13 +1106,14 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
      }
    }
  }
-@@ -282,6 +372,14 @@ void PermissionToggleRowView::InitForManagedSource(
+@@ -282,6 +376,15 @@ void PermissionToggleRowView::InitForManagedSource(
  }
  
  void PermissionToggleRowView::UpdateUiOnPermissionChanged() {
++  auto value = std::get<ContentSetting>(permission_.setting.value_or(CONTENT_SETTING_DEFAULT));
 +  if (choose_button_) {
 +    choose_button_->SetEnabledTextColors(std::nullopt);
-+    if (permission_.setting == CONTENT_SETTING_DEFAULT) {
++    if (value == CONTENT_SETTING_DEFAULT) {
 +      choose_button_->SetTextColor(views::Button::ButtonState::STATE_NORMAL,
 +        ui::kColorLabelForeground);
 +    }
@@ -1118,7 +1122,7 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
    if (blocked_on_system_level_label_) {
      if (!permission_.setting) {
        permission_blocked_on_system_level_ = false;
-@@ -326,6 +424,37 @@ void PermissionToggleRowView::UpdateUiOnPermissionChanged() {
+@@ -326,6 +429,37 @@ void PermissionToggleRowView::UpdateUiOnPermissionChanged() {
        }
      }
    }
@@ -1148,7 +1152,7 @@ diff --git a/chrome/browser/ui/views/page_info/permission_toggle_row_view.cc b/c
 +      caption = u"Unknown";
 +    }
 +    choose_button_->SetText(caption);
-+    if (permission_.setting == CONTENT_SETTING_DEFAULT) {
++    if (value == CONTENT_SETTING_DEFAULT) {
 +      choose_button_->SetTextColor(views::Button::ButtonState::STATE_NORMAL,
 +        ui::kColorLabelForeground);
 +    }
@@ -1641,7 +1645,7 @@ new file mode 100644
 +
 +import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
 +import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
-+import org.chromium.components.content_settings.ContentSettingValues;
++import org.chromium.components.content_settings.ContentSetting;
 +import org.chromium.components.content_settings.ContentSettingsType;
 +import org.chromium.content_public.browser.BrowserContextHandle;
 +
@@ -1655,15 +1659,15 @@ new file mode 100644
 +
 +    private @ContentSettingsType.EnumType int mContentSettingsType;
 +    private @SiteSettingsCategory.Type int mSiteSettingsCategory;
-+    private @ContentSettingValues Integer mDefaultEnabledValue;
-+    private @ContentSettingValues Integer mDefaultDisabledValue;
++    private @ContentSetting Integer mDefaultEnabledValue;
++    private @ContentSetting Integer mDefaultDisabledValue;
 +    private boolean mAllowException;
 +    private String mPreferenceKey;
 +    private String mProfilePrefKey;
 +
 +    public BromiteCustomContentSetting(@ContentSettingsType.EnumType int contentSettingsType,
-+                                       @ContentSettingValues Integer defaultEnabledValue,
-+                                       @ContentSettingValues Integer defaultDisabledValue,
++                                       @ContentSetting Integer defaultEnabledValue,
++                                       @ContentSetting Integer defaultDisabledValue,
 +                                       boolean allowException,
 +                                       String preferenceKey,
 +                                       String profilePrefKey) {
@@ -1687,21 +1691,21 @@ new file mode 100644
 +        return mSiteSettingsCategory;
 +    }
 +
-+    protected @ContentSettingValues Integer getDefaultEnabledValue() {
++    protected @ContentSetting Integer getDefaultEnabledValue() {
 +        return mDefaultEnabledValue;
 +    }
 +
-+    public @ContentSettingValues Integer getDefaultDisabledValue() {
++    public @ContentSetting Integer getDefaultDisabledValue() {
 +        return mDefaultDisabledValue;
 +    }
 +
 +    public Preference createWebSitePreference(Context context,
-+                        @ContentSettingValues @Nullable Integer value) {
++                        @ContentSetting @Nullable Integer value) {
 +        return null;
 +    }
 +
 +    public boolean setWebSitePreferenceValue(Preference preference,
-+                        @ContentSettingValues @Nullable Integer value) {
++                        @ContentSetting @Nullable Integer value) {
 +        return false;
 +    }
 +
@@ -1726,22 +1730,22 @@ new file mode 100644
 +    }
 +
 +    public abstract ContentSettingsResources.ResourceItem getResourceItem();
-+    public abstract int getCategorySummary(@Nullable @ContentSettingValues int value);
++    public abstract int getCategorySummary(@Nullable @ContentSetting int value);
 +    public abstract int getAddExceptionDialogMessage();
 +    public abstract int getCategoryDescription();
 +
-+    public boolean processOnBlockList(@ContentSettingValues Integer value) {
++    public boolean processOnBlockList(@ContentSetting Integer value) {
 +        return true;
 +    }
 +
-+    public boolean isOnBlockList(@ContentSettingValues Integer contentSetting) {
++    public boolean isOnBlockList(@ContentSetting Integer contentSetting) {
 +        return mDefaultDisabledValue == contentSetting;
 +    }
 +
-+    public abstract @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSettingValues int value);
++    public abstract @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSetting int value);
 +
 +    public ContentSettingException createCustomException(@ContentSettingsType.EnumType int type,
-+                                                         @ContentSettingValues int value,
++                                                         @ContentSetting int value,
 +                                                         WebsiteAddress websiteAddress) {
 +        return null;
 +    }
@@ -1777,7 +1781,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 new file mode 100644
 --- /dev/null
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
-@@ -0,0 +1,412 @@
+@@ -0,0 +1,415 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -1804,7 +1808,7 @@ new file mode 100644
 +import org.chromium.components.browser_ui.settings.SpinnerPreference;
 +import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
 +import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
-+import org.chromium.components.content_settings.ContentSettingValues;
++import org.chromium.components.content_settings.ContentSetting;
 +import org.chromium.components.content_settings.ContentSettingsType;
 +import org.chromium.components.content_settings.ProviderType;
 +import org.chromium.content_public.browser.BrowserContextHandle;
@@ -1824,17 +1828,17 @@ new file mode 100644
 +                            extends BromiteCustomContentSettingImplBase {
 +
 +    static class ContentSettingsSpinnerOption {
-+        private @ContentSettingValues int mValue;
++        private @ContentSetting int mValue;
 +        private String mDescription;
 +
 +        public ContentSettingsSpinnerOption(
-+                    @ContentSettingValues int value,
++                    @ContentSetting int value,
 +                    String description) {
 +            mValue = value;
 +            mDescription = description;
 +        }
 +
-+        public @ContentSettingValues int getValue() {
++        public @ContentSetting int getValue() {
 +            return mValue;
 +        }
 +
@@ -1870,7 +1874,7 @@ new file mode 100644
 +    public static Preference createWebSitePreference(
 +                                @ContentSettingsType.EnumType int type,
 +                                Context context,
-+                                @ContentSettingValues @Nullable Integer value) {
++                                @ContentSetting @Nullable Integer value) {
 +        BromiteCustomContentSetting cs = getContentSetting(type);
 +        if (cs != null) {
 +            Preference pref = cs.createWebSitePreference(context, value);
@@ -1881,13 +1885,13 @@ new file mode 100644
 +
 +                List<ContentSettingsSpinnerOption> options = new ArrayList<>();
 +                options.add(new ContentSettingsSpinnerOption(
-+                    ContentSettingValues.ALLOW,
++                    ContentSetting.ALLOW,
 +                    context.getText(descriptions[0]).toString()));
 +                options.add(new ContentSettingsSpinnerOption(
-+                    ContentSettingValues.ASK,
++                    ContentSetting.ASK,
 +                    context.getText(descriptions[1]).toString()));
 +                options.add(new ContentSettingsSpinnerOption(
-+                    ContentSettingValues.BLOCK,
++                    ContentSetting.BLOCK,
 +                    context.getText(descriptions[2]).toString()));
 +
 +                SpinnerPreference spinner = new SpinnerPreference(context, true);
@@ -1900,14 +1904,14 @@ new file mode 100644
 +    }
 +
 +    private static int GetContentSettingValuesIndex(
-+                    @ContentSettingValues @Nullable Integer value) {
++                    @ContentSetting @Nullable Integer value) {
 +        if (value == null)
 +            return 0;
-+        else if (value == ContentSettingValues.ALLOW)
++        else if (value == ContentSetting.ALLOW)
 +            return 0;
-+        else if (value == ContentSettingValues.ASK)
++        else if (value == ContentSetting.ASK)
 +            return 1;
-+        else if (value == ContentSettingValues.BLOCK)
++        else if (value == ContentSetting.BLOCK)
 +            return 2;
 +        return 0;
 +    }
@@ -1915,7 +1919,7 @@ new file mode 100644
 +    public static void setWebSitePreferenceValue(
 +                                @ContentSettingsType.EnumType int type,
 +                                Preference preference,
-+                                @ContentSettingValues @Nullable Integer value) {
++                                @ContentSetting @Nullable Integer value) {
 +        BromiteCustomContentSetting cs = getContentSetting(type);
 +        if (cs != null) {
 +            if (cs.setWebSitePreferenceValue(preference, value))
@@ -1984,7 +1988,10 @@ new file mode 100644
 +        return null;
 +    }
 +
-+    public static int getCategorySummary(@ContentSettingsType.EnumType int type, @Nullable @ContentSettingValues int value) {
++    public static int getCategorySummary(@ContentSettingsType.EnumType int type,
++                                         @Nullable @ContentSetting int value,
++                                         boolean isOneTime,
++                                         boolean isApproximateGeolocation) {
 +        BromiteCustomContentSetting cs = getContentSetting(type);
 +        if (cs != null) return cs.getCategorySummary(value);
 +        return 0;
@@ -2032,7 +2039,7 @@ new file mode 100644
 +        return false;
 +    }
 +
-+    public static boolean processOnBlockList(@ContentSettingsType.EnumType int type, @ContentSettingValues Integer value) {
++    public static boolean processOnBlockList(@ContentSettingsType.EnumType int type, @ContentSetting Integer value) {
 +        BromiteCustomContentSetting cs = getContentSetting(type);
 +        if (cs != null) return cs.processOnBlockList(value);
 +        return false;
@@ -2040,13 +2047,13 @@ new file mode 100644
 +
 +    public static boolean isOnBlockList(@ContentSettingsType.EnumType int type,
 +                                        WebsitePreference website,
-+                                        @ContentSettingValues Integer contentSetting) {
++                                        @ContentSetting Integer contentSetting) {
 +        BromiteCustomContentSetting cs = getContentSetting(type);
 +        if (cs != null) return cs.isOnBlockList(contentSetting);
 +        return false;
 +    }
 +
-+    public static @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSettingValues int value) {
++    public static @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSetting int value) {
 +        for (BromiteCustomContentSetting cs : mItemList) {
 +            if (category.getType() == cs.getSiteSettingsCategory()) {
 +                return cs.considerException(category, value);
@@ -2131,7 +2138,7 @@ new file mode 100644
 +    }
 +
 +    public static ContentSettingException createCustomException(@ContentSettingsType.EnumType int type,
-+                                                                @ContentSettingValues int value,
++                                                                @ContentSetting int value,
 +                                                                WebsiteAddress websiteAddress) {
 +        BromiteCustomContentSetting cs = getContentSetting(type);
 +        if (cs != null) {
@@ -2159,7 +2166,7 @@ new file mode 100644
 +            descriptions[1] = context.getString(values[1]); // ASK
 +            descriptions[2] = context.getString(values[2]); // BLOCKED
 +
-+            @ContentSettingValues
++            @ContentSetting
 +            Integer value = site.getContentSetting(browserContextHandle, type);
 +
 +            return new AlertDialog.Builder(context, R.style.ThemeOverlay_BrowserUI_AlertDialog)
@@ -2167,19 +2174,19 @@ new file mode 100644
 +                    .setNegativeButton(R.string.remove,
 +                            (dialog, which) -> {
 +                                site.setContentSetting(browserContextHandle, type,
-+                                        ContentSettingValues.DEFAULT);
++                                        ContentSetting.DEFAULT);
 +                                listener.onClick(dialog, which);
 +                                dialog.dismiss();
 +                            })
 +                    .setSingleChoiceItems(descriptions,
-+                            value == ContentSettingValues.ALLOW ? 0 :
-+                            value == ContentSettingValues.ASK ? 1 :
++                            value == ContentSetting.ALLOW ? 0 :
++                            value == ContentSetting.ASK ? 1 :
 +                                     2,
 +                            (dialog, which) -> {
-+                                @ContentSettingValues
-+                                int permission = which == 0 ? ContentSettingValues.ALLOW :
-+                                                 which == 1 ? ContentSettingValues.ASK :
-+                                                              ContentSettingValues.BLOCK;
++                                @ContentSetting
++                                int permission = which == 0 ? ContentSetting.ALLOW :
++                                                 which == 1 ? ContentSetting.ASK :
++                                                              ContentSetting.BLOCK;
 +                                site.setContentSetting(
 +                                        browserContextHandle, type, permission);
 +
@@ -2214,10 +2221,10 @@ new file mode 100644
 +
 +package org.chromium.components.browser_ui.site_settings;
 +
-+import org.chromium.components.content_settings.ContentSettingValues;
++import org.chromium.components.content_settings.ContentSetting;
 +
 +public interface BromiteCustomTriStateSiteSettingsPreferenceImpl {
-+    public @ContentSettingValues int getCheckedSetting();
++    public @ContentSetting int getCheckedSetting();
 +}
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/ContentSettingsResources.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/ContentSettingsResources.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/ContentSettingsResources.java
@@ -2239,8 +2246,8 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 +        public ResourceItem(
 +                int icon,
 +                int title,
-+                @ContentSettingValues @Nullable Integer defaultEnabledValue,
-+                @ContentSettingValues @Nullable Integer defaultDisabledValue,
++                @ContentSetting @Nullable Integer defaultEnabledValue,
++                @ContentSetting @Nullable Integer defaultDisabledValue,
 +                int enabledSummary,
 +                int disabledSummary,
 +                int summaryOverrideForScreenReader) {
@@ -2270,14 +2277,16 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          assert false; // NOTREACHED
          return assumeNonNull(null);
      }
-@@ -824,6 +847,14 @@ public class ContentSettingsResources {
+@@ -824,6 +847,16 @@ public class ContentSettingsResources {
          return getCategorySummary(value, isOneTime, /* isApproximateGeolocation= */ false);
      }
  
 +    public static int getCategorySummary(int contentType,
-+                                         @Nullable @ContentSettingValues int value,
-+                                         boolean isOneTime) {
-+        int result = BromiteCustomContentSettingImpl.getCategorySummary(contentType, value);
++                                         @Nullable @ContentSetting int value,
++                                         boolean isOneTime,
++                                         boolean isApproximateGeolocation) {
++        int result = BromiteCustomContentSettingImpl.getCategorySummary(contentType,
++                            value, isOneTime, isApproximateGeolocation);
 +        if (result != 0) return result;
 +        return getCategorySummary(value, isOneTime);
 +    }
@@ -2285,7 +2294,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
      /**
       * Returns the string resource id for a given ContentSetting to show with a permission category.
       *
-@@ -1002,6 +1033,8 @@ public class ContentSettingsResources {
+@@ -1002,6 +1035,8 @@ public class ContentSettingsResources {
       */
      public static int @Nullable [] getTriStateSettingDescriptionIDs(
              int contentType, boolean isPermissionSiteSettingsRadioButtonFeatureEnabled) {
@@ -2486,7 +2495,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 -        for (@ContentSettingsType.EnumType int type : SiteSettingsUtil.SETTINGS_ORDER) {
 +        List<Integer> order = BromiteCustomContentSettingImpl.getSettingsOrder();
 +        for (@ContentSettingsType.EnumType int type : order) {
-+            @ContentSettingValues @Nullable Integer value =
++            @ContentSetting @Nullable Integer value =
 +                mSite.getContentSetting(
 +                    getSiteSettingsDelegate().getBrowserContextHandle(), type);
 +            if (value == null) {
@@ -2545,7 +2554,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 -                switchPreference.setBackgroundColor(
 +            Preference switchPreference = preference;
 +            if (preference instanceof ChromeSwitchPreference) {
-+                ((ChromeSwitchPreference)switchPreference).setChecked(value != ContentSettingValues.BLOCK);
++                ((ChromeSwitchPreference)switchPreference).setChecked(value != ContentSetting.BLOCK);
 +            } else {
 +                BromiteCustomContentSettingImpl.setWebSitePreferenceValue(content_type, preference, value);
 +            }
@@ -2626,7 +2635,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 -                        ContentSettingsResources.getCategorySummary(
 -                                defaultForToggle, /* isOneTime= */ false));
 +                int summary = ContentSettingsResources.getCategorySummary(
-+                                    contentType, setting, /* isOneTime= */ false);
++                                    contentType, setting, /* isOneTime= */ false, /*isApproximateGeolocation*/ false);
 +                if (summary != 0) {
 +                    p.setSummary(summary);
 +                } else {
@@ -2637,7 +2646,7 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
 +                                    : ContentSettingsResources.getDefaultDisabledValue(contentType);
 +                    assumeNonNull(defaultForToggle);
 +                    summary = ContentSettingsResources.getCategorySummary(
-+                                   contentType, defaultForToggle, /* isOneTime= */ false);
++                                   contentType, defaultForToggle, /* isOneTime= */ false, /*isApproximateGeolocation*/ false);
 +                    p.setSummary(summary);
 +                }
              }
@@ -3415,24 +3424,6 @@ diff --git a/components/page_info/android/java/src/org/chromium/components/page_
          // More than 2 permissions.
          if (same) {
              int resId =
-diff --git a/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java b/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java
---- a/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java
-+++ b/components/page_info/android/java/src/org/chromium/components/page_info/PermissionParamsListBuilder.java
-@@ -100,6 +100,14 @@ public class PermissionParamsListBuilder {
-         nameStringMidSentence.setSpan(
-                 span, 0, nameStringMidSentence.length(), Spannable.SPAN_INCLUSIVE_EXCLUSIVE);
- 
-+        if (permission.setting == ContentSettingValues.ASK) {
-+            allowed = false;
-+        }
-+        if (permission.type == ContentSettingsType.FILE_SYSTEM_WRITE_GUARD
-+                && permission.setting == ContentSettingValues.ASK) {
-+            // see https://source.chromium.org/chromium/chromium/src/+/e3e48613de29440ae1cf11b0ff7fa7c613d9f416
-+            allowed = true;
-+        }
-         return new PermissionObject(
-                 /* type= */ permission.type,
-                 /* name= */ nameString,
 diff --git a/components/page_info/android/page_info_controller_android.cc b/components/page_info/android/page_info_controller_android.cc
 --- a/components/page_info/android/page_info_controller_android.cc
 +++ b/components/page_info/android/page_info_controller_android.cc

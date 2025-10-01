@@ -97,8 +97,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../components/webauthn/GmsCoreUtils.java     |  31 +-
  .../webauthn/IdentityCredentialsHelper.java   |  78 +-
  .../webauthn/WebauthnModeProvider.java        |  15 -
- .../webauthn/cred_man/CredManHelper.java      |  15 +-
- .../cred_man/CredManMetricsHelper.java        |   2 +-
+ .../webauthn/cred_man/CredManHelper.java      |  24 +-
+ .../cred_man/CredManMetricsHelper.java        |  17 +-
  .../push_messaging/push_messaging_manager.cc  |   2 +-
  content/public/android/BUILD.gn               |   4 -
  content/test/BUILD.gn                         |   4 -
@@ -112,7 +112,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../gms/ChromiumPlayServicesAvailability.java |  10 +-
  third_party/androidx/customizations.gni       |  14 +-
  third_party/cardboard/BUILD.gn                |   4 -
- 88 files changed, 128 insertions(+), 2603 deletions(-)
+ 88 files changed, 137 insertions(+), 2618 deletions(-)
  create mode 100644 components/webauthn/android/java/src/org/chromium/components/webauthn/ConditionalUiState.java
 
 diff --git a/android_webview/expectations/system_webview_bundle.AndroidManifest.expected b/android_webview/expectations/system_webview_bundle.AndroidManifest.expected
@@ -732,7 +732,7 @@ diff --git a/chrome/browser/password_manager/android/java/src/org/chromium/chrom
  import org.jni_zero.JniType;
  import org.jni_zero.NativeMethods;
  
-@@ -534,13 +532,6 @@ public class PasswordManagerHelper {
+@@ -531,13 +529,6 @@ public class PasswordManagerHelper {
          // If the exception is not a Chrome-defined one, it means that the call failed at the
          // API call level. It could have either failed with a known ApiException or because of a
          // different error (e.g. a different exception thrown by the implementation of the API).
@@ -3816,17 +3816,33 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java
-@@ -40,8 +40,7 @@ import org.chromium.build.annotations.NullMarked;
+@@ -40,8 +40,6 @@ import org.chromium.build.annotations.NullMarked;
  import org.chromium.build.annotations.Nullable;
  import org.chromium.components.webauthn.AuthenticationContextProvider;
  import org.chromium.components.webauthn.Barrier;
 -import org.chromium.components.webauthn.Fido2CredentialRequest.CancellableUiState;
 -import org.chromium.components.webauthn.Fido2CredentialRequestJni;
-+import org.chromium.components.webauthn.CancellableUiState;
  import org.chromium.components.webauthn.GetAssertionOutcome;
  import org.chromium.components.webauthn.GetCredentialResponseCallback;
  import org.chromium.components.webauthn.MakeCredentialOutcome;
-@@ -113,8 +112,7 @@ public class CredManHelper {
+@@ -83,6 +81,16 @@ public class CredManHelper {
+     private CredManMetricsHelper mMetricsHelper;
+     private @Nullable Runnable mNoCredentialsFallback;
+ 
++    public enum CancellableUiState {
++        NONE,
++        WAITING_FOR_RP_ID_VALIDATION,
++        WAITING_FOR_CREDENTIAL_LIST,
++        WAITING_FOR_SELECTION,
++        REQUEST_SENT_TO_PLATFORM,
++        CANCEL_PENDING,
++        CANCEL_PENDING_RP_ID_VALIDATION_COMPLETE,
++    }
++
+     // A callback that provides an AuthenticatorStatus error in the first argument, and optionally a
+     // metrics recording outcome in the second.
+     public interface ErrorCallback {
+@@ -113,8 +121,7 @@ public class CredManHelper {
              ErrorCallback errorCallback) {
          log(TAG, "startMakeRequest");
          mClientDataJson = clientDataJson;
@@ -3836,7 +3852,7 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
  
          OutcomeReceiver<CreateCredentialResponse, CreateCredentialException> receiver =
                  new OutcomeReceiver<>() {
-@@ -450,8 +448,7 @@ public class CredManHelper {
+@@ -450,8 +457,7 @@ public class CredManHelper {
                                          CRED_MAN_PREFIX
                                                  + "BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON");
                          assertNonNull(json);
@@ -3846,7 +3862,7 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
                          if (responseSerialized == null) {
                              logError(
                                      TAG,
-@@ -619,8 +616,7 @@ public class CredManHelper {
+@@ -619,8 +625,7 @@ public class CredManHelper {
              boolean requestPasswords,
              boolean preferImmediatelyAvailable,
              boolean ignoreGpm) {
@@ -3856,7 +3872,7 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
  
          boolean hasAllowCredentials =
                  options.allowCredentials != null && options.allowCredentials.length != 0;
-@@ -658,8 +654,7 @@ public class CredManHelper {
+@@ -658,8 +663,7 @@ public class CredManHelper {
              Bundle data) {
          String json = data.getString(BUNDLE_KEY_REGISTRATION_RESPONSE_JSON);
          assertNonNull(json);
@@ -3869,15 +3885,36 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java
-@@ -8,7 +8,7 @@ import androidx.annotation.IntDef;
+@@ -8,7 +8,6 @@ import androidx.annotation.IntDef;
  
  import org.chromium.base.metrics.RecordHistogram;
  import org.chromium.build.annotations.NullMarked;
 -import org.chromium.components.webauthn.Fido2CredentialRequest.CancellableUiState;
-+import org.chromium.components.webauthn.CancellableUiState;
  
  /**
   * This class is responsible for emitting histograms regarding CredMan usage in
+@@ -104,20 +103,6 @@ public class CredManMetricsHelper {
+     }
+ 
+     public void reportGetCredentialMetrics(
+-            @CredManGetRequestEnum int value, CancellableUiState cancellableUiState) {
+-        assert !(cancellableUiState == CancellableUiState.NONE)
+-                        || !(value == CredManGetRequestEnum.SUCCESS_PASSWORD)
+-                : "Passwords cannot be received from modal requests!";
+-        if (cancellableUiState == CancellableUiState.NONE) {
+-            RecordHistogram.recordEnumeratedHistogram(
+-                    "WebAuthentication.Android.CredManModalRequests",
+-                    value,
+-                    CredManGetRequestEnum.NUM_ENTRIES);
+-            return;
+-        }
+-        RecordHistogram.recordEnumeratedHistogram(
+-                "WebAuthentication.Android.CredManConditionalRequest",
+-                value,
+-                CredManGetRequestEnum.NUM_ENTRIES);
++            @CredManGetRequestEnum int value, Object cancellableUiState) {
+     }
+ }
 diff --git a/content/browser/push_messaging/push_messaging_manager.cc b/content/browser/push_messaging/push_messaging_manager.cc
 --- a/content/browser/push_messaging/push_messaging_manager.cc
 +++ b/content/browser/push_messaging/push_messaging_manager.cc
