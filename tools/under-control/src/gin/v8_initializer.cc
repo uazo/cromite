@@ -419,6 +419,9 @@ void SetFeatureFlags() {
   SetV8FlagsIfOverridden(features::kV8IdleGcOnContextDisposal,
                          "--idle-gc-on-context-disposal",
                          "--no-idle-gc-on-context-disposal");
+  SetV8FlagsIfOverridden(features::kV8MemoryPoolReleaseOnMallocFailures,
+                         "--memory-pool-release-on-malloc-failures",
+                         "--no-memory-pool-release-on-malloc-failures");
   SetV8FlagsIfOverridden(features::kV8MinorMS, "--minor-ms", "--no-minor-ms");
   if (base::FeatureList::IsEnabled(features::kV8ScavengerHigherCapacity)) {
     SetV8FlagsFormatted("--scavenger-max-new-space-capacity-mb=%i",
@@ -490,8 +493,6 @@ void SetFeatureFlags() {
   bool any_slow_histograms_alias =
       base::FeatureList::IsEnabled(
           features::kV8SlowHistogramsCodeMemoryWriteProtection) ||
-      base::FeatureList::IsEnabled(
-          features::kV8SlowHistogramsIntelJCCErratumMitigation) ||
       base::FeatureList::IsEnabled(features::kV8SlowHistogramsSparkplug) ||
       base::FeatureList::IsEnabled(
           features::kV8SlowHistogramsSparkplugAndroid) ||
@@ -506,10 +507,6 @@ void SetFeatureFlags() {
   SetV8FlagsIfOverridden(features::kV8IgnitionElideRedundantTdzChecks,
                          "--ignition-elide-redundant-tdz-checks",
                          "--no-ignition-elide-redundant-tdz-checks");
-
-  SetV8FlagsIfOverridden(features::kV8IntelJCCErratumMitigation,
-                         "--intel-jcc-erratum-mitigation",
-                         "--no-intel-jcc-erratum-mitigation");
 
   SetV8FlagsIfOverridden(features::kV8UseLibmTrigFunctions,
                          "--use-libm-trig-functions",

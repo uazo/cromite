@@ -18,7 +18,7 @@
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/invert_bubble_prefs.h"
-#include "chrome/browser/accessibility/page_colors.h"
+#include "chrome/browser/accessibility/page_colors_controller.h"
 #include "chrome/browser/accessibility/prefers_default_scrollbar_styles_prefs.h"
 #include "chrome/browser/actor/ui/actor_ui_state_manager_prefs.h"
 #include "chrome/browser/browser_process_impl.h"
@@ -95,7 +95,6 @@
 #include "chrome/browser/ui/webui/policy/policy_ui.h"
 #include "chrome/browser/ui/webui/print_preview/policy_settings.h"
 #include "chrome/browser/updates/announcement_notification/announcement_notification_service.h"
-#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
 #include "chrome/browser/webauthn/webauthn_pref_names.h"
 #include "chrome/common/buildflags.h"
 #include "chrome/common/pref_names.h"
@@ -132,6 +131,7 @@
 #include "components/metrics/metrics_pref_names.h"
 #include "components/network_time/network_time_tracker.h"
 #include "components/ntp_tiles/custom_links_manager_impl.h"
+#include "components/ntp_tiles/enterprise/enterprise_shortcuts_manager_impl.h"
 #include "components/ntp_tiles/most_visited_sites.h"
 #include "components/offline_pages/buildflags/buildflags.h"
 #include "components/omnibox/browser/aim_eligibility_service.h"
@@ -146,7 +146,7 @@
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/permissions/permission_hats_trigger_helper.h"
 #include "components/permissions/pref_names.h"
-#include "components/plus_addresses/plus_address_prefs.h"
+#include "components/plus_addresses/core/common/plus_address_prefs.h"
 #include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/core/browser/url_blocklist_manager.h"
 #include "components/policy/core/common/local_test_policy_provider.h"
@@ -289,6 +289,7 @@
 #include "chrome/browser/new_tab_page/modules/v2/calendar/google_calendar_page_handler.h"
 #include "chrome/browser/new_tab_page/modules/v2/calendar/outlook_calendar_page_handler.h"
 #include "chrome/browser/new_tab_page/modules/v2/most_relevant_tab_resumption/most_relevant_tab_resumption_page_handler.h"
+#include "chrome/browser/new_tab_page/modules/v2/tab_groups/tab_groups_page_handler.h"
 #include "chrome/browser/new_tab_page/promos/promo_service.h"
 #include "chrome/browser/promos/promos_utils.h"  // nogncheck crbug.com/1125897
 #include "chrome/browser/screen_ai/pref_names.h"
@@ -311,11 +312,13 @@
 #include "chrome/browser/ui/webui/new_tab_footer/new_tab_footer_ui.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_handler.h"
 #include "chrome/browser/ui/webui/new_tab_page/new_tab_page_ui.h"
+#include "chrome/browser/ui/webui/new_tab_page/ntp_pref_names.h"
 #include "chrome/browser/ui/webui/settings/settings_ui.h"
 #include "chrome/browser/ui/webui/side_panel/read_anything/read_anything_prefs.h"
 #include "chrome/browser/ui/webui/tab_search/tab_search_prefs.h"
 #include "chrome/browser/upgrade_detector/upgrade_detector.h"
 #include "chrome/browser/user_education/browser_user_education_storage_service.h"
+#include "chrome/browser/webauthn/chrome_authenticator_request_delegate.h"
 #include "components/headless/policy/headless_mode_prefs.h"
 #include "components/lens/lens_overlay_permission_utils.h"
 #include "components/live_caption/live_caption_controller.h"
@@ -384,6 +387,7 @@
 #include "chrome/browser/ash/login/session/user_session_manager.h"
 #include "chrome/browser/ash/login/signin/legacy_token_handle_fetcher.h"
 #include "chrome/browser/ash/login/signin/signin_error_notifier.h"
+#include "chrome/browser/ash/login/signin/token_handle_store_impl.h"
 #include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_manager_impl.h"
 #include "chrome/browser/ash/login/users/avatar/user_image_prefs.h"
@@ -396,7 +400,6 @@
 #include "chrome/browser/ash/policy/core/device_cloud_policy_manager_ash.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_requisition_manager.h"
 #include "chrome/browser/ash/policy/enrollment/enrollment_state_fetcher.h"
-#include "chrome/browser/ash/policy/external_data/handlers/device_wallpaper_image_external_data_handler.h"
 #include "chrome/browser/ash/policy/handlers/adb_sideloading_allowance_mode_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/minimum_version_policy_handler.h"
 #include "chrome/browser/ash/policy/handlers/tpm_auto_update_mode_policy_handler.h"
@@ -406,7 +409,6 @@
 #include "chrome/browser/ash/policy/scheduled_task_handler/reboot_notifications_scheduler.h"
 #include "chrome/browser/ash/policy/status_collector/device_status_collector.h"
 #include "chrome/browser/ash/policy/status_collector/status_collector.h"
-#include "chrome/browser/ash/power/auto_screen_brightness/metrics_reporter.h"
 #include "chrome/browser/ash/power/power_metrics_reporter.h"
 #include "chrome/browser/ash/preferences/preferences.h"
 #include "chrome/browser/ash/printing/cups_printers_manager.h"
@@ -1105,6 +1107,42 @@ inline constexpr char kInvalidationClientIDCache[] =
 inline constexpr char kInvalidationTopicsToHandler[] =
     "invalidation.per_sender_topics_to_handler";
 
+#if BUILDFLAG(IS_ANDROID)
+// Deprecated 08/2025.
+constexpr char kObsoleteAccountStorageNoticeShown[] =
+    "password_manager.account_storage_notice_shown";
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID)
+// Deprecated 08/2025.
+constexpr char kObsoleteAutofillableCredentialsProfileStoreLoginDatabase[] =
+    "password_manager.autofillable_credentials_profile_store_login_database";
+constexpr char kObsoleteAutofillableCredentialsAccountStoreLoginDatabase[] =
+    "password_manager.autofillable_credentials_account_store_login_database";
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+// Deprecated 08/2025.
+constexpr char kAutoScreenBrightnessMetricsDailySample[] =
+    "auto_screen_brightness.metrics.daily_sample";
+constexpr char kAutoScreenBrightnessMetricsAtlasUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.atlas_user_adjustment_count";
+constexpr char kAutoScreenBrightnessMetricsEveUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.eve_user_adjustment_count";
+constexpr char kAutoScreenBrightnessMetricsNocturneUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.nocturne_user_adjustment_count";
+constexpr char kAutoScreenBrightnessMetricsKohakuUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.kohaku_user_adjustment_count";
+constexpr char kAutoScreenBrightnessMetricsNoAlsUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.no_als_user_adjustment_count";
+constexpr char kAutoScreenBrightnessMetricsSupportedAlsUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.supported_als_user_adjustment_count";
+constexpr char kAutoScreenBrightnessMetricsUnsupportedAlsUserAdjustmentCount[] =
+    "auto_screen_brightness.metrics.unsupported_als_user_adjustment_count";
+constexpr char kDesksLacrosProfileIdList[] =
+    "ash.desks.desks_lacros_profile_id_list";
+#endif  // BUILDFLAG(IS_CHROMEOS)
+
 // Register local state used only for migration (clearing or moving to a new
 // key).
 void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
@@ -1210,6 +1248,25 @@ void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
   // Deprecated 08/2025.
   registry->RegisterDictionaryPref(kInvalidationClientIDCache);
   registry->RegisterDictionaryPref(kInvalidationTopicsToHandler);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Deprecated 08/2025.
+  registry->RegisterDictionaryPref(kAutoScreenBrightnessMetricsDailySample);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsAtlasUserAdjustmentCount, 0);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsEveUserAdjustmentCount, 0);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsNocturneUserAdjustmentCount, 0);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsKohakuUserAdjustmentCount, 0);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsNoAlsUserAdjustmentCount, 0);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsSupportedAlsUserAdjustmentCount, 0);
+  registry->RegisterIntegerPref(
+      kAutoScreenBrightnessMetricsUnsupportedAlsUserAdjustmentCount, 0);
+#endif
 }
 
 // Register prefs used only for migration (clearing or moving to a new key).
@@ -1568,6 +1625,29 @@ void RegisterProfilePrefsForMigration(
   // Deprecated 08/2025.
   registry->RegisterDictionaryPref(kInvalidationClientIDCache);
   registry->RegisterDictionaryPref(kInvalidationTopicsToHandler);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Deprecated 08/2025.
+  registry->RegisterBooleanPref(kObsoleteAccountStorageNoticeShown, false);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Deprecated 08/2025.
+  registry->RegisterBooleanPref(
+      kObsoleteAutofillableCredentialsProfileStoreLoginDatabase, false);
+  registry->RegisterBooleanPref(
+      kObsoleteAutofillableCredentialsAccountStoreLoginDatabase, false);
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Deprecated 08/2025.
+  registry->RegisterBooleanPref(ntp_prefs::kNtpUseMostVisitedTiles, false);
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Deprecated 08/2025.
+  registry->RegisterListPref(kDesksLacrosProfileIdList);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 }
 
 }  // namespace
@@ -1751,8 +1831,6 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   ash::PowerMetricsReporter::RegisterLocalStatePrefs(registry);
   ash::platform_keys::KeyPermissionsManagerImpl::RegisterLocalStatePrefs(
       registry);
-  ash::power::auto_screen_brightness::MetricsReporter::RegisterLocalStatePrefs(
-      registry);
   ash::Preferences::RegisterPrefs(registry);
   ash::ResetScreen::RegisterPrefs(registry);
   ash::SchedulerConfigurationManager::RegisterLocalStatePrefs(registry);
@@ -1777,7 +1855,6 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   policy::DeviceRestrictionScheduleController::RegisterLocalStatePrefs(
       registry);
   policy::DeviceStatusCollector::RegisterPrefs(registry);
-  policy::DeviceWallpaperImageExternalDataHandler::RegisterPrefs(registry);
   policy::EnrollmentRequisitionManager::RegisterPrefs(registry);
   policy::EnrollmentStateFetcher::RegisterPrefs(registry);
   policy::EuiccStatusUploader::RegisterLocalStatePrefs(registry);
@@ -1940,7 +2017,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   ntp_tiles::MostVisitedSites::RegisterProfilePrefs(registry);
   optimization_guide::prefs::RegisterProfilePrefs(registry);
   optimization_guide::model_execution::prefs::RegisterProfilePrefs(registry);
-  PageColors::RegisterProfilePrefs(registry);
+  PageColorsController::RegisterProfilePrefs(registry);
   password_manager::PasswordManager::RegisterProfilePrefs(registry);
   payments::RegisterProfilePrefs(registry);
   performance_manager::user_tuning::prefs::RegisterProfilePrefs(registry);
@@ -2097,6 +2174,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   signin::RegisterProfilePrefs(registry);
   StartupBrowserCreator::RegisterProfilePrefs(registry);
   MostRelevantTabResumptionPageHandler::RegisterProfilePrefs(registry);
+  TabGroupsPageHandler::RegisterProfilePrefs(registry);
   tab_groups::saved_tab_groups::prefs::RegisterProfilePrefs(registry);
   tab_organization_prefs::RegisterProfilePrefs(registry);
   tab_search_prefs::RegisterProfilePrefs(registry);
@@ -2119,6 +2197,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   chromeos::cloud_upload::RegisterProfilePrefs(registry);
   policy::NetworkAnnotationBlocklistHandler::RegisterPrefs(registry);
   quickoffice::RegisterProfilePrefs(registry);
+  registry->RegisterBooleanPref(prefs::kAutoSignOutEnabled, false);
   registry->RegisterBooleanPref(prefs::kDeskAPIThirdPartyAccessEnabled, false);
   registry->RegisterBooleanPref(prefs::kDeskAPIDeskSaveAndShareEnabled, false);
   registry->RegisterListPref(prefs::kDeskAPIThirdPartyAllowlist);
@@ -2233,6 +2312,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
   device_signals::RegisterProfilePrefs(registry);
+  ntp_tiles::EnterpriseShortcutsManagerImpl::RegisterProfilePrefs(registry);
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
 
@@ -2327,6 +2407,12 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   registry->RegisterDictionaryPref(prefs::kReportingEndpoints);
 
   registry->RegisterBooleanPref(prefs::kViewSourceLineWrappingEnabled, false);
+
+#if BUILDFLAG(IS_ANDROID)
+  registry->RegisterBooleanPref(
+      omnibox::kIsOmniboxInBottomPosition, false,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+#endif
 }
 
 void RegisterUserProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
@@ -2343,6 +2429,7 @@ void RegisterUserProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
 #if BUILDFLAG(IS_CHROMEOS)
   ash::RegisterUserProfilePrefs(registry, locale);
   ash::LegacyTokenHandleFetcher::RegisterPrefs(registry);
+  ash::TokenHandleStoreImpl::RegisterPrefs(registry);
 #endif
 }
 
@@ -2482,6 +2569,21 @@ void MigrateObsoleteLocalStatePrefs(PrefService* local_state) {
   // Added 08/2025.
   local_state->ClearPref(kInvalidationClientIDCache);
   local_state->ClearPref(kInvalidationTopicsToHandler);
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Added 08/2025.
+  local_state->ClearPref(kAutoScreenBrightnessMetricsDailySample);
+  local_state->ClearPref(kAutoScreenBrightnessMetricsNoAlsUserAdjustmentCount);
+  local_state->ClearPref(
+      kAutoScreenBrightnessMetricsSupportedAlsUserAdjustmentCount);
+  local_state->ClearPref(
+      kAutoScreenBrightnessMetricsUnsupportedAlsUserAdjustmentCount);
+  local_state->ClearPref(kAutoScreenBrightnessMetricsAtlasUserAdjustmentCount);
+  local_state->ClearPref(kAutoScreenBrightnessMetricsEveUserAdjustmentCount);
+  local_state->ClearPref(
+      kAutoScreenBrightnessMetricsNocturneUserAdjustmentCount);
+  local_state->ClearPref(kAutoScreenBrightnessMetricsKohakuUserAdjustmentCount);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_LOCAL_STATE_PREFS
@@ -2867,6 +2969,29 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
   // Added 08/2025.
   profile_prefs->ClearPref(kInvalidationClientIDCache);
   profile_prefs->ClearPref(kInvalidationTopicsToHandler);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Added 08/2025.
+  profile_prefs->ClearPref(kObsoleteAccountStorageNoticeShown);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Deprecated 08/2025.
+  profile_prefs->ClearPref(
+      kObsoleteAutofillableCredentialsProfileStoreLoginDatabase);
+  profile_prefs->ClearPref(
+      kObsoleteAutofillableCredentialsAccountStoreLoginDatabase);
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if !BUILDFLAG(IS_ANDROID)
+  // Added 08/2025.
+  NewTabPageUI::MigrateDeprecatedUseMostVisitedTilesPref(profile_prefs);
+#endif  // !BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_CHROMEOS)
+  // Added 08/2025.
+  profile_prefs->ClearPref(kDesksLacrosProfileIdList);
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_PROFILE_PREFS
