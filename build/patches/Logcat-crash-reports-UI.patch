@@ -10,7 +10,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../crash_upload_list_android.h               |   1 +
  chrome/browser/net/chrome_network_delegate.cc |   7 +
  chrome/browser/ui/BUILD.gn                    |   1 +
- chrome/browser/ui/webui/crashes/crashes_ui.cc | 175 ++++++++++++++++--
+ chrome/browser/ui/webui/crashes/crashes_ui.cc | 176 ++++++++++++++++--
  .../crash/core/browser/crashes_ui_util.h      |   4 +
  .../crash/core/browser/resources/crashes.css  |  67 ++++++-
  .../crash/core/browser/resources/crashes.html |  17 ++
@@ -18,16 +18,16 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/crash_strings.grdp                 |  22 ++-
  .../minidump_uploader/CrashFileManager.java   |   7 +-
  .../MinidumpUploadCallable.java               |  24 +--
- .../minidump_uploader/MinidumpUploader.java   |  31 +---
+ .../minidump_uploader/MinidumpUploader.java   |  31 +--
  .../upload_list/text_log_upload_list.cc       |   1 +
  components/upload_list/upload_list.cc         |  14 ++
  components/upload_list/upload_list.h          |   9 +
- 17 files changed, 377 insertions(+), 138 deletions(-)
+ 17 files changed, 378 insertions(+), 138 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
-@@ -50,6 +50,11 @@ import java.lang.annotation.Retention;
+@@ -51,6 +51,11 @@ import java.lang.annotation.Retention;
  import java.lang.annotation.RetentionPolicy;
  import java.util.concurrent.atomic.AtomicBoolean;
  
@@ -38,8 +38,8 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpU
 +
  /** Service that is responsible for uploading crash minidumps to the Google crash server. */
  @NullMarked
- public class MinidumpUploadServiceImpl extends MinidumpUploadService.Impl {
-@@ -94,6 +99,23 @@ public class MinidumpUploadServiceImpl extends MinidumpUploadService.Impl {
+ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
+@@ -95,6 +100,23 @@ public class MinidumpUploadServiceImpl extends SplitCompatIntentService.Impl {
          assumeNonNull(getService()).setIntentRedelivery(true);
      }
  
@@ -153,7 +153,7 @@ diff --git a/chrome/browser/net/chrome_network_delegate.cc b/chrome/browser/net/
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -639,6 +639,7 @@ static_library("ui") {
+@@ -630,6 +630,7 @@ static_library("ui") {
      "//third_party/re2",
      "//third_party/webrtc_overrides:webrtc_component",
      "//third_party/zlib",
@@ -164,7 +164,7 @@ diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/webui/crashes/crashes_ui.cc
 --- a/chrome/browser/ui/webui/crashes/crashes_ui.cc
 +++ b/chrome/browser/ui/webui/crashes/crashes_ui.cc
-@@ -39,6 +39,19 @@
+@@ -39,6 +39,20 @@
  #include "ui/base/resource/resource_scale_factor.h"
  #include "ui/webui/webui_util.h"
  
@@ -177,6 +177,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
 +#include "base/task/thread_pool.h"
 +#if BUILDFLAG(IS_ANDROID)
 +#include "base/android/path_utils.h"
++#include "content/public/browser/navigation_controller.h"
 +#endif
 +#include "net/base/filename_util.h"
 +#include "third_party/zlib/google/zip.h"
@@ -184,7 +185,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  #if BUILDFLAG(IS_CHROMEOS)
  #include "chromeos/ash/components/dbus/debug_daemon/debug_daemon_client.h"
  #endif
-@@ -68,6 +81,10 @@ void CreateAndAddCrashesUIHTMLSource(Profile* profile) {
+@@ -68,6 +82,10 @@ void CreateAndAddCrashesUIHTMLSource(Profile* profile) {
                                IDR_CRASHES_CRASHES_HTML);
  }
  
@@ -195,7 +196,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  ////////////////////////////////////////////////////////////////////////////////
  //
  // CrashesDOMHandler
-@@ -77,7 +94,7 @@ void CreateAndAddCrashesUIHTMLSource(Profile* profile) {
+@@ -77,7 +95,7 @@ void CreateAndAddCrashesUIHTMLSource(Profile* profile) {
  // The handler for Javascript messages for the chrome://crashes/ page.
  class CrashesDOMHandler : public WebUIMessageHandler {
   public:
@@ -204,7 +205,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  
    CrashesDOMHandler(const CrashesDOMHandler&) = delete;
    CrashesDOMHandler& operator=(const CrashesDOMHandler&) = delete;
-@@ -94,6 +111,8 @@ class CrashesDOMHandler : public WebUIMessageHandler {
+@@ -94,6 +112,8 @@ class CrashesDOMHandler : public WebUIMessageHandler {
    // Asynchronously fetches the list of crashes. Called from JS.
    void HandleRequestCrashes(const base::Value::List& args);
  
@@ -213,7 +214,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  #if BUILDFLAG(IS_CHROMEOS)
    // Asynchronously triggers crash uploading. Called from JS.
    void HandleRequestUploads(const base::Value::List& args);
-@@ -105,13 +124,30 @@ class CrashesDOMHandler : public WebUIMessageHandler {
+@@ -105,13 +125,30 @@ class CrashesDOMHandler : public WebUIMessageHandler {
    // Asynchronously requests a user triggered upload. Called from JS.
    void HandleRequestSingleCrashUpload(const base::Value::List& args);
  
@@ -245,7 +246,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  }
  
  CrashesDOMHandler::~CrashesDOMHandler() {
-@@ -137,6 +173,16 @@ void CrashesDOMHandler::RegisterMessages() {
+@@ -137,6 +174,16 @@ void CrashesDOMHandler::RegisterMessages() {
        crash_reporter::kCrashesUIRequestSingleCrashUpload,
        base::BindRepeating(&CrashesDOMHandler::HandleRequestSingleCrashUpload,
                            base::Unretained(this)));
@@ -262,7 +263,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  }
  
  void CrashesDOMHandler::OnJavascriptDisallowed() {
-@@ -145,6 +191,10 @@ void CrashesDOMHandler::OnJavascriptDisallowed() {
+@@ -145,6 +192,10 @@ void CrashesDOMHandler::OnJavascriptDisallowed() {
  
  void CrashesDOMHandler::HandleRequestCrashes(const base::Value::List& args) {
    AllowJavascript();
@@ -273,7 +274,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
    if (first_load_) {
      first_load_ = false;
      if (list_available_) {
-@@ -178,8 +228,7 @@ void CrashesDOMHandler::OnUploadListAvailable() {
+@@ -178,8 +229,7 @@ void CrashesDOMHandler::OnUploadListAvailable() {
  }
  
  void CrashesDOMHandler::UpdateUI() {
@@ -283,7 +284,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  
    bool system_crash_reporter = false;
  #if BUILDFLAG(IS_CHROMEOS)
-@@ -228,14 +277,117 @@ void CrashesDOMHandler::UpdateUI() {
+@@ -228,14 +278,117 @@ void CrashesDOMHandler::UpdateUI() {
  
  void CrashesDOMHandler::HandleRequestSingleCrashUpload(
      const base::Value::List& args) {
@@ -407,7 +408,7 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  }
  
  }  // namespace
-@@ -247,7 +399,8 @@ void CrashesDOMHandler::HandleRequestSingleCrashUpload(
+@@ -247,7 +400,8 @@ void CrashesDOMHandler::HandleRequestSingleCrashUpload(
  ///////////////////////////////////////////////////////////////////////////////
  
  CrashesUI::CrashesUI(content::WebUI* web_ui) : WebUIController(web_ui) {

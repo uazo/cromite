@@ -15,9 +15,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../modules/webaudio/base_audio_context.cc         | 12 ++++++++++++
  .../renderer/modules/webaudio/base_audio_context.h |  2 ++
  .../modules/webaudio/offline_audio_context.cc      |  1 +
- .../renderer/modules/webaudio/realtime_analyser.cc |  9 ++++++++-
+ .../renderer/modules/webaudio/realtime_analyser.cc | 13 ++++++++++---
  .../platform/runtime_enabled_features.json5        |  5 ++---
- 11 files changed, 57 insertions(+), 5 deletions(-)
+ 11 files changed, 59 insertions(+), 7 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/AudioBuffer-AnalyserNode-fp-mitigations.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/AudioBuffer-AnalyserNode-fp-mitigations.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_h/AudioBuffer-AnalyserNode-fp-mitigations.inc
@@ -88,7 +88,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.h b/third_
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
 --- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
-@@ -16,6 +16,7 @@
+@@ -17,6 +17,7 @@
  #include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/common/mediastream/media_devices.h"
  #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
@@ -96,7 +96,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/thir
  #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
  #include "third_party/blink/public/platform/web_audio_latency_hint.h"
  #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-@@ -678,7 +679,9 @@ double AudioContext::baseLatency() const {
+@@ -850,7 +851,9 @@ double AudioContext::baseLatency() const {
    DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_sequence_checker_);
    DCHECK(destination());
  
@@ -118,7 +118,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b
  #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
  #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
  #include "third_party/blink/public/platform/platform.h"
-@@ -710,6 +711,17 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
+@@ -774,6 +775,17 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
    return To<LocalDOMWindow>(GetExecutionContext());
  }
  
@@ -170,25 +170,22 @@ diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc b/
  #include "third_party/blink/renderer/platform/audio/audio_bus.h"
  #include "third_party/blink/renderer/platform/audio/audio_utilities.h"
  #include "third_party/blink/renderer/platform/audio/vector_math.h"
-@@ -156,6 +157,7 @@ void RealtimeAnalyser::GetFloatTimeDomainData(
-           input_buffer[(i + write_index - fft_size + kInputBufferSize) %
-                        kInputBufferSize]);
- 
-+      value = BaseAudioContext::ShuffleAudioData(value, i);
-       UNSAFE_TODO(destination[i]) = value;
+@@ -117,7 +118,8 @@ void RealtimeAnalyser::GetFloatFrequencyData(DOMFloat32Array* destination_array,
+     for (unsigned i = 0; i < len; ++i) {
+       const float linear_value = UNSAFE_TODO(source[i]);
+       const double db_mag = audio_utilities::LinearToDecibels(linear_value);
+-      UNSAFE_TODO(destination[i]) = static_cast<float>(db_mag);
++      auto v = static_cast<float>(db_mag);
++      UNSAFE_TODO(destination[i]) = BaseAudioContext::ShuffleAudioData(v, i);
      }
    }
-@@ -183,6 +185,8 @@ void RealtimeAnalyser::GetByteTimeDomainData(DOMUint8Array* destination_array) {
-           input_buffer[(i + write_index - fft_size + kInputBufferSize) %
-                        kInputBufferSize]);
+ }
+@@ -155,9 +157,11 @@ void RealtimeAnalyser::GetByteFrequencyData(DOMUint8Array* destination_array,
  
-+      value = BaseAudioContext::ShuffleAudioData(value, i);
-+
-       // Scale from nominal -1 -> +1 to unsigned byte.
-       double scaled_value = 128 * (value + 1);
- 
-@@ -306,6 +310,8 @@ void RealtimeAnalyser::ConvertToByteData(DOMUint8Array* destination_array) {
-       double scaled_value =
+       // The range m_minDecibels to m_maxDecibels will be scaled to byte values
+       // from 0 to UCHAR_MAX.
+-      const double scaled_value =
++      double scaled_value =
            UCHAR_MAX * (db_mag - min_decibels) * range_scale_factor;
  
 +      scaled_value = BaseAudioContext::ShuffleAudioData(scaled_value, i);
@@ -196,20 +193,32 @@ diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc b/
        // Clip to valid range.
        UNSAFE_TODO(destination[i]) =
            static_cast<unsigned char>(ClampTo(scaled_value, 0, UCHAR_MAX));
-@@ -324,7 +330,8 @@ void RealtimeAnalyser::ConvertFloatToDb(DOMFloat32Array* destination_array) {
-     for (unsigned i = 0; i < len; ++i) {
-       float linear_value = UNSAFE_TODO(source[i]);
-       double db_mag = audio_utilities::LinearToDecibels(linear_value);
--      UNSAFE_TODO(destination[i]) = static_cast<float>(db_mag);
-+      auto v = static_cast<float>(db_mag);
-+      UNSAFE_TODO(destination[i]) = BaseAudioContext::ShuffleAudioData(v, i);
+@@ -188,6 +192,7 @@ void RealtimeAnalyser::GetFloatTimeDomainData(
+           input_buffer[(i + write_index - fft_size + kInputBufferSize) %
+                        kInputBufferSize]);
+ 
++      value = BaseAudioContext::ShuffleAudioData(value, i);
+       UNSAFE_TODO(destination[i]) = value;
      }
    }
- }
+@@ -211,10 +216,12 @@ void RealtimeAnalyser::GetByteTimeDomainData(DOMUint8Array* destination_array) {
+ 
+     for (unsigned i = 0; i < len; ++i) {
+       // Buffer access is protected due to modulo operation.
+-      const float value = UNSAFE_TODO(
++      float value = UNSAFE_TODO(
+           input_buffer[(i + write_index - fft_size + kInputBufferSize) %
+                        kInputBufferSize]);
+ 
++      value = BaseAudioContext::ShuffleAudioData(value, i);
++
+       // Scale from nominal -1 -> +1 to unsigned byte.
+       const double scaled_value = 128 * (value + 1);
+ 
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -575,9 +575,8 @@
+@@ -594,9 +594,8 @@
      {
        // AudioContext.playoutStats interface.
        // https://chromestatus.com/feature/5172818344148992
