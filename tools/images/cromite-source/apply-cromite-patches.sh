@@ -36,6 +36,16 @@ mv third_party/skia-bis third_party/skia
 git add -f third_party/skia >/dev/null
 git commit -m ":NOEXPORT: third_party/skia repo" >/dev/null
 
+echo -e ${RED} ------- remove third_party/perfetto subrepo ${NC}
+rm -rf third_party/perfetto/.git 
+cp -r third_party/perfetto third_party/perfetto-bis
+git rm -rf third_party/perfetto || true
+git submodule deinit -f third_party/perfetto || true
+rm -rf third_party/perfetto
+mv third_party/perfetto-bis third_party/perfetto
+git add -f third_party/perfetto >/dev/null
+git commit -m ":NOEXPORT: third_party/perfetto repo" >/dev/null
+
 git prune
 
 echo -e ${RED} ------- patches ${NC}
