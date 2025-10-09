@@ -1,0 +1,336 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Thu, 9 Oct 2025 09:11:01 +0000
+Subject: Add setting to enable Credman for passkeys
+
+Enables Credential Manager for passkey management on A14+ devices via a switch
+in the settings. By default, the feature is disabled.
+In other versions of Android, webauthn appears to be enabled on websites but
+always returns a timeout error as per specifications.
+Conditional immediate support is disabled.
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ .../settings/PasswordSettings.java            | 27 +++++++++++++++++
+ ...etting-to-enable-Credman-for-passkeys.grdp | 12 ++++++++
+ .../webauthn/AuthenticatorImpl.java           | 29 +++++++------------
+ .../components/webauthn/WebauthnFeatures.java |  2 ++
+ .../cred_man/CredManSupportProvider.java      | 27 +++++------------
+ .../webauthn/android/webauthn_feature_map.cc  |  1 +
+ components/webauthn/features.cc               |  4 +++
+ components/webauthn/features.h                |  3 ++
+ device/fido/features.cc                       |  2 ++
+ .../authentication_credentials_container.cc   |  5 ++++
+ 10 files changed, 75 insertions(+), 37 deletions(-)
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-enable-Credman-for-passkeys.grdp
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
+@@ -10,6 +10,7 @@ import android.app.Activity;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.net.Uri;
++import android.os.Build;
+ import android.os.Bundle;
+ import android.text.SpannableString;
+ import android.text.style.ForegroundColorSpan;
+@@ -64,6 +65,10 @@ import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
+ import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+ import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+ 
++import org.chromium.chrome.browser.flags.CromiteNativeUtils;
++import org.chromium.components.webauthn.WebauthnFeatureMap;
++import org.chromium.components.webauthn.WebauthnFeatures;
++
+ /**
+  * The "Passwords" screen in Settings, which allows the user to enable or disable password saving,
+  * to view saved passwords (just the username and URL), and to delete saved passwords.
+@@ -322,6 +327,7 @@ public class PasswordSettings extends ChromeBaseSettingsFragment
+         createSavePasswordsSwitch();
+         createAutoSignInCheckbox();
+         createEnableAndroidAutofillSwitch();
++        createCredManSwitch();
+ 
+         PasswordManagerHandlerProvider.getForProfile(getProfile())
+                 .getPasswordManagerHandler()
+@@ -673,6 +679,27 @@ public class PasswordSettings extends ChromeBaseSettingsFragment
+                 getPrefService().getBoolean(Pref.CREDENTIALS_ENABLE_AUTOSIGNIN));
+     }
+ 
++    private void createCredManSwitch() {
++        ChromeSwitchPreference credManSwitch =
++                new ChromeSwitchPreference(getStyledContext(), null);
++        credManSwitch.setTitle(R.string.enable_android_credman_title);
++        credManSwitch.setOrder(0);
++        credManSwitch.setSummary(R.string.enable_android_credman_summary);
++        credManSwitch.setChecked(
++                WebauthnFeatureMap.getInstance().isEnabled(WebauthnFeatures.WEBAUTHN_ANDROID_PASSKEY));
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++            credManSwitch.setSummary(R.string.enable_android_credman_disabled_summary);
++            credManSwitch.setEnabled(false);
++        }
++        credManSwitch.setOnPreferenceChangeListener((preference, newValue) -> {
++            CromiteNativeUtils.setFlagEnabled("WebAuthenticationAndroidPasskey", (boolean)newValue);
++            if (!mSnackbarManagerSupplier.get().isShowing())
++                mSnackbarManagerSupplier.get().showSnackbar(mSnackbar);
++            return true;
++        });
++        getPreferenceScreen().addPreference(credManSwitch);
++    }
++
+     private void displayManageAccountLink() {
+         SyncService syncService = SyncServiceFactory.getForProfile(getProfile());
+         if (syncService == null || !syncService.isEngineInitialized()) {
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-enable-Credman-for-passkeys.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-enable-Credman-for-passkeys.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-enable-Credman-for-passkeys.grdp
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_ENABLE_ANDROID_CREDMAN_TITLE" desc="" formatter_data="android_java">
++        Enable Android Credential Manager
++    </message>
++    <message name="IDS_ENABLE_ANDROID_CREDMAN_SUMMARY" desc="" formatter_data="android_java">
++        Enable support for Android Credential Manager
++    </message>
++    <message name="IDS_ENABLE_ANDROID_CREDMAN_DISABLED_SUMMARY" desc="" formatter_data="android_java">
++        Not supported on your device (require A14+)
++    </message>
++</grit-part>
+diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
+--- a/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
++++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
+@@ -34,6 +34,8 @@ import org.chromium.blink.mojom.PublicKeyCredentialReportOptions;
+ import org.chromium.blink.mojom.WebAuthnClientCapability;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.components.webauthn.CredManSupport;
++import org.chromium.components.webauthn.cred_man.CredManSupportProvider;
+ import org.chromium.components.ukm.UkmRecorder;
+ import org.chromium.content_public.browser.RenderFrameHost;
+ import org.chromium.content_public.browser.WebContents;
+@@ -169,8 +171,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+         mIsPaymentRequest = options.isPaymentCredentialCreation;
+         mMakeCredentialCallback = callback;
+         mIsOperationPending = true;
+-        if (!GmsCoreUtils.isWebauthnSupported()
+-                || (!isChrome(mWebContents) && !GmsCoreUtils.isResultReceiverSupported())) {
++        if (CredManSupportProvider.getCredManSupport() == CredManSupport.DISABLED) {
+             recordOutcomeEvent(MakeCredentialOutcome.OTHER_FAILURE);
+             onError(AuthenticatorStatus.NOT_IMPLEMENTED);
+             return;
+@@ -234,8 +235,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+         mIsConditionalRequest = options.mediation == Mediation.CONDITIONAL;
+         mIsImmediateRequest = options.mediation == Mediation.IMMEDIATE;
+ 
+-        if (!GmsCoreUtils.isWebauthnSupported()
+-                || (!isChrome(mWebContents) && !GmsCoreUtils.isResultReceiverSupported())
++        if (CredManSupportProvider.getCredManSupport() == CredManSupport.DISABLED
+                 || options.publicKey == null) {
+             recordOutcomeEvent(GetAssertionOutcome.OTHER_FAILURE);
+             onError(AuthenticatorStatus.NOT_IMPLEMENTED);
+@@ -260,12 +260,11 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+     }
+ 
+     private boolean couldSupportConditionalMediation() {
+-        return GmsCoreUtils.isWebauthnSupported() && isChrome(mWebContents);
++        return isChrome(mWebContents);
+     }
+ 
+     private boolean couldSupportUvpaa() {
+-        return GmsCoreUtils.isWebauthnSupported()
+-                && (isChrome(mWebContents) || GmsCoreUtils.isResultReceiverSupported());
++        return isChrome(mWebContents);
+     }
+ 
+     @Override
+@@ -329,26 +328,20 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+                             capabilities.add(
+                                     createWebAuthnClientCapability(
+                                             AuthenticatorConstants.CAPABILITY_CONDITIONAL_GET,
+-                                            couldSupportConditionalMediation() && isUvpaa));
++                                            true));
+                             capabilities.add(
+                                     createWebAuthnClientCapability(
+                                             AuthenticatorConstants.CAPABILITY_UVPAA,
+-                                            couldSupportUvpaa() && isUvpaa));
+-                            boolean conditionalCreateEnabled =
+-                                    couldSupportConditionalMediation()
+-                                            && DeviceFeatureMap.isEnabled(
+-                                                    DeviceFeatureList.WEBAUTHN_PASSKEY_UPGRADE);
++                                            true));
+                             capabilities.add(
+                                     createWebAuthnClientCapability(
+                                             AuthenticatorConstants.CAPABILITY_CONDITIONAL_CREATE,
+-                                            isUvpaa && conditionalCreateEnabled));
++                                            DeviceFeatureMap.isEnabled(
++                                                    DeviceFeatureList.WEBAUTHN_PASSKEY_UPGRADE)));
+                             capabilities.add(
+                                     createWebAuthnClientCapability(
+                                             AuthenticatorConstants.CAPABILITY_IMMEDIATE_GET,
+-                                            DeviceFeatureMap.isEnabled(
+-                                                            DeviceFeatureList
+-                                                                    .WEBAUTHN_IMMEDIATE_GET)
+-                                                    && isUvpaa));
++                                            false));
+                             callback.call(capabilities.toArray(new WebAuthnClientCapability[0]));
+                         });
+     }
+diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java
+--- a/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java
++++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java
+@@ -16,4 +16,6 @@ import org.chromium.build.annotations.NullMarked;
+ public abstract class WebauthnFeatures {
+     public static final String WEBAUTHN_ANDROID_PASSKEY_CACHE_MIGRATION =
+             "WebAuthenticationAndroidPasskeyCacheMigration";
++    public static final String WEBAUTHN_ANDROID_PASSKEY =
++            "WebAuthenticationAndroidPasskey";
+ }
+diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManSupportProvider.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManSupportProvider.java
+--- a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManSupportProvider.java
++++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManSupportProvider.java
+@@ -19,9 +19,11 @@ import org.chromium.base.version_info.VersionInfo;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.components.webauthn.CredManSupport;
+-import org.chromium.components.webauthn.GmsCoreUtils;
+ import org.chromium.components.webauthn.WebauthnMode;
+ import org.chromium.components.webauthn.WebauthnModeProvider;
++import org.chromium.components.webauthn.WebauthnFeatureMap;
++import org.chromium.components.webauthn.WebauthnFeatures;
++import org.chromium.components.webauthn.WebauthnLogger;
+ 
+ @NullMarked
+ public class CredManSupportProvider {
+@@ -57,12 +59,12 @@ public class CredManSupportProvider {
+         }
+         if (getAndroidVersion() < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+             sCredManSupport = CredManSupport.DISABLED;
+-            log(TAG, "Disabled because of Android version.");
++            WebauthnLogger.logError(TAG, "Disabled because of Android version.");
+             return sCredManSupport;
+         }
+-        if (notSkippedBecauseInTests() && hasOldGmsVersion()) {
++        if (!WebauthnFeatureMap.getInstance().isEnabled(WebauthnFeatures.WEBAUTHN_ANDROID_PASSKEY)) {
+             sCredManSupport = CredManSupport.DISABLED;
+-            log(TAG, "Disabled because of old GMS version.");
++            WebauthnLogger.logError(TAG, "Disabled because of user.");
+             return sCredManSupport;
+         }
+         if (notSkippedBecauseInTests()
+@@ -70,14 +72,14 @@ public class CredManSupportProvider {
+                         == null) {
+             sCredManSupport = CredManSupport.DISABLED;
+             recordCredManAvailability(/*available*/ false);
+-            log(TAG, "Disabled because CredentialManager is not available.");
++            WebauthnLogger.logError(TAG, "Disabled because CredentialManager is not available.");
+             return sCredManSupport;
+         }
+         recordCredManAvailability(/*available*/ true);
+ 
+         final CredManUiRecommender recommender =
+                 ServiceLoaderUtil.maybeCreate(CredManUiRecommender.class);
+-        boolean customUiRecommended = recommender != null && recommender.recommendsCustomUi();
++        boolean customUiRecommended = true;
+         boolean gpmInCredMan =
+                 sOverrideForcesGpm != null ? sOverrideForcesGpm : customUiRecommended;
+         boolean isChrome3pPwmMode =
+@@ -116,13 +118,6 @@ public class CredManSupportProvider {
+                 "WebAuthentication.Android.CredManAvailability", available);
+     }
+ 
+-    private static boolean hasOldGmsVersion() {
+-        assert sOverrideAndroidVersion == null : "Don't use in testing!";
+-        // The check works for unavailable and low GMS versions. `getGmsCoreVersion()` is -1 if the
+-        // GMS version can't be retrieved. Chrome assumes an insufficient GMS availability then.
+-        return GmsCoreUtils.getGmsCoreVersion() < getMinGmsVersionForCurrentChannel();
+-    }
+-
+     private static int getAndroidVersion() {
+         return sOverrideAndroidVersion == null ? Build.VERSION.SDK_INT : sOverrideAndroidVersion;
+     }
+@@ -130,10 +125,4 @@ public class CredManSupportProvider {
+     private static boolean notSkippedBecauseInTests() {
+         return sOverrideForcesGpm == null && sOverrideAndroidVersion == null;
+     }
+-
+-    private static int getMinGmsVersionForCurrentChannel() {
+-        return (VersionInfo.isBetaBuild() || VersionInfo.isStableBuild())
+-                ? GMSCORE_MIN_VERSION_BETA_STABLE
+-                : GMSCORE_MIN_VERSION_CANARY_DEV;
+-    }
+ }
+diff --git a/components/webauthn/android/webauthn_feature_map.cc b/components/webauthn/android/webauthn_feature_map.cc
+--- a/components/webauthn/android/webauthn_feature_map.cc
++++ b/components/webauthn/android/webauthn_feature_map.cc
+@@ -16,6 +16,7 @@ namespace {
+ // Array of features exposed through the Java WebauthnFeatureMap API.
+ const base::Feature* const kFeaturesExposedToJava[] = {
+     &kWebAuthnAndroidPasskeyCacheMigration,
++    &kWebAuthnAndroidPasskey,
+ };
+ 
+ // static
+diff --git a/components/webauthn/features.cc b/components/webauthn/features.cc
+--- a/components/webauthn/features.cc
++++ b/components/webauthn/features.cc
+@@ -16,6 +16,10 @@ BASE_FEATURE(kWebAuthnAndroidPasskeyCacheMigration,
+              "WebAuthenticationAndroidPasskeyCacheMigration",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
++CROMITE_FEATURE(kWebAuthnAndroidPasskey,
++                "WebAuthenticationAndroidPasskey",
++                base::FEATURE_DISABLED_BY_DEFAULT);
++
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ }  // namespace webauthn::features
+diff --git a/components/webauthn/features.h b/components/webauthn/features.h
+--- a/components/webauthn/features.h
++++ b/components/webauthn/features.h
+@@ -20,6 +20,9 @@ namespace webauthn::features {
+ COMPONENT_EXPORT(WEBAUTHN)
+ BASE_DECLARE_FEATURE(kWebAuthnAndroidPasskeyCacheMigration);
+ 
++COMPONENT_EXPORT(WEBAUTHN)
++BASE_DECLARE_FEATURE(kWebAuthnAndroidPasskey);
++
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ }  // namespace webauthn::features
+diff --git a/device/fido/features.cc b/device/fido/features.cc
+--- a/device/fido/features.cc
++++ b/device/fido/features.cc
+@@ -163,6 +163,7 @@ BASE_FEATURE(kWebAuthnImmediateGet,
+ #else
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ #endif  // BUILDFLAG(IS_ANDROID)
++SET_CROMITE_FEATURE_DISABLED(kWebAuthnImmediateGet);
+ 
+ BASE_FEATURE_PARAM(int,
+                    kWebAuthnImmediateMediationTimeoutMilliseconds,
+@@ -175,6 +176,7 @@ BASE_FEATURE_PARAM(int,
+ BASE_FEATURE(kWebAuthnImmediateGetAutoselect,
+              "WebAuthenticationImmediateGetAutoselect",
+              base::FEATURE_ENABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_DISABLED(kWebAuthnImmediateGetAutoselect);
+ 
+ #if BUILDFLAG(IS_MAC)
+ // Default enabled in M139. Remove in or after M142.
+diff --git a/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc b/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc
+--- a/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc
++++ b/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc
+@@ -1057,6 +1057,11 @@ DOMException* AuthenticatorStatusToDOMException(
+     const WebAuthnDOMExceptionDetailsPtr& dom_exception_details) {
+   DCHECK_EQ(status != AuthenticatorStatus::ERROR_WITH_DOM_EXCEPTION_DETAILS,
+             dom_exception_details.is_null());
++  if (status == AuthenticatorStatus::UNKNOWN_ERROR ||
++      status == AuthenticatorStatus::NOT_IMPLEMENTED) {
++      status = AuthenticatorStatus::NOT_ALLOWED_ERROR;
++      base::PlatformThread::Sleep(base::Milliseconds(base::RandInt(1000, 6000)));
++  }
+   switch (status) {
+     case AuthenticatorStatus::SUCCESS:
+       NOTREACHED();
+--

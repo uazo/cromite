@@ -90,14 +90,13 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/omnibox/common/BUILD.gn            |   1 -
  .../components/omnibox/OmniboxFeatures.java   |   8 -
  components/signin/public/android/BUILD.gn     |   3 -
- components/webauthn/android/BUILD.gn          |  18 +-
- .../webauthn/AuthenticatorImpl.java           |  97 +--
+ components/webauthn/android/BUILD.gn          |  12 +-
  .../webauthn/ConditionalUiState.java          |  15 +
+ .../webauthn/Fido2CredentialRequest.java      | 107 +--
  .../webauthn/GmsCoreGetCredentialsHelper.java |  78 +-
  .../components/webauthn/GmsCoreUtils.java     |  31 +-
  .../webauthn/IdentityCredentialsHelper.java   |  78 +-
  .../webauthn/WebauthnModeProvider.java        |  15 -
- .../webauthn/cred_man/CredManHelper.java      |  24 +-
  .../cred_man/CredManMetricsHelper.java        |  17 +-
  .../push_messaging/push_messaging_manager.cc  |   2 +-
  content/public/android/BUILD.gn               |   4 -
@@ -112,7 +111,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../gms/ChromiumPlayServicesAvailability.java |  10 +-
  third_party/androidx/customizations.gni       |  14 +-
  third_party/cardboard/BUILD.gn                |   4 -
- 88 files changed, 137 insertions(+), 2618 deletions(-)
+ 87 files changed, 123 insertions(+), 2612 deletions(-)
  create mode 100644 components/webauthn/android/java/src/org/chromium/components/webauthn/ConditionalUiState.java
 
 diff --git a/android_webview/expectations/system_webview_bundle.AndroidManifest.expected b/android_webview/expectations/system_webview_bundle.AndroidManifest.expected
@@ -3254,27 +3253,16 @@ diff --git a/components/signin/public/android/BUILD.gn b/components/signin/publi
 diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/BUILD.gn
 --- a/components/webauthn/android/BUILD.gn
 +++ b/components/webauthn/android/BUILD.gn
-@@ -7,8 +7,6 @@ import("//third_party/jni_zero/jni_zero.gni")
- 
- generate_jni("jni_headers") {
-   sources = [
--    "java/src/org/chromium/components/webauthn/Fido2Api.java",
--    "java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java",
-     "java/src/org/chromium/components/webauthn/InternalAuthenticator.java",
-     "java/src/org/chromium/components/webauthn/WebauthnBrowserBridge.java",
-     "java/src/org/chromium/components/webauthn/WebauthnFeatureMap.java",
-@@ -40,10 +38,6 @@ android_library("java") {
-     "java/src/org/chromium/components/webauthn/AuthenticatorImpl.java",
+@@ -41,8 +41,6 @@ android_library("java") {
      "java/src/org/chromium/components/webauthn/Barrier.java",
      "java/src/org/chromium/components/webauthn/CreateConfirmationUiDelegate.java",
--    "java/src/org/chromium/components/webauthn/Fido2Api.java",
+     "java/src/org/chromium/components/webauthn/Fido2Api.java",
 -    "java/src/org/chromium/components/webauthn/Fido2ApiCall.java",
 -    "java/src/org/chromium/components/webauthn/Fido2ApiCallHelper.java",
--    "java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java",
+     "java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java",
      "java/src/org/chromium/components/webauthn/FidoIntentSender.java",
      "java/src/org/chromium/components/webauthn/GetCredentialResponseCallback.java",
-     "java/src/org/chromium/components/webauthn/GetMatchingCredentialIdsResponseCallback.java",
-@@ -73,11 +67,11 @@ android_library("java") {
+@@ -73,11 +71,11 @@ android_library("java") {
      "java/src/org/chromium/components/webauthn/cred_man/GpmCredManRequestDecorator.java",
    ]
  
@@ -3290,16 +3278,7 @@ diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/
      "//base:base_java",
      "//base:service_loader_java",
      "//base/version_info/android:version_constants_java",
-@@ -148,8 +142,6 @@ android_library("test_support_java") {
- source_set("android") {
-   sources = [
-     "cred_man_support.h",
--    "fido2api_native_android.cc",
--    "fido2credentialrequest_native_android.cc",
-     "internal_authenticator_android.cc",
-     "internal_authenticator_android.h",
-     "webauthn_browser_bridge.cc",
-@@ -223,8 +215,6 @@ robolectric_library("junit") {
+@@ -223,8 +221,6 @@ robolectric_library("junit") {
    deps = [
      ":java",
      ":test_support_java",
@@ -3308,193 +3287,6 @@ diff --git a/components/webauthn/android/BUILD.gn b/components/webauthn/android/
      "//base:base_java",
      "//base:base_java_test_support",
      "//base:base_junit_test_support",
-diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
---- a/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
-+++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
-@@ -76,19 +76,11 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
- 
-     private @Nullable MakeCredential_Response mMakeCredentialCallback;
-     private @Nullable GetCredential_Response mGetCredentialCallback;
--    private @Nullable Fido2CredentialRequest mPendingFido2CredentialRequest;
--    private final Set<Fido2CredentialRequest> mUnclosedFido2CredentialRequests = new HashSet<>();
--
-     // Information about the request cached here for metric reporting purposes.
-     private boolean mIsConditionalRequest;
-     private boolean mIsPaymentRequest;
-     private boolean mIsImmediateRequest;
- 
--    // StaticFieldLeak complains that this is a memory leak because
--    // `Fido2CredentialRequest` contains a `Context`. But this field is only
--    // used in tests so a memory leak is irrelevent.
--    @SuppressLint("StaticFieldLeak")
--    private static @Nullable Fido2CredentialRequest sFido2CredentialRequestOverrideForTesting;
- 
-     /**
-      * Builds the Authenticator service implementation.
-@@ -124,19 +116,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-         mCreateConfirmationUiDelegate = createConfirmationUiDelegate;
-     }
- 
--    public static void overrideFido2CredentialRequestForTesting(Fido2CredentialRequest request) {
--        sFido2CredentialRequestOverrideForTesting = request;
--    }
--
--    private Fido2CredentialRequest getFido2CredentialRequest() {
--        if (sFido2CredentialRequestOverrideForTesting != null) {
--            return sFido2CredentialRequestOverrideForTesting;
--        }
--        Fido2CredentialRequest request = new Fido2CredentialRequest(this);
--        mUnclosedFido2CredentialRequests.add(request);
--        return request;
--    }
--
-     /**
-      * Called by InternalAuthenticatorAndroid, which facilitates WebAuthn for processes that
-      * originate from the browser process. Since the request is from the browser process, the
-@@ -196,16 +175,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
- 
-     private void continueMakeCredential(PublicKeyCredentialCreationOptions options) {
-         log(TAG, "continueMakeCredential");
--        mPendingFido2CredentialRequest = getFido2CredentialRequest();
--        mPendingFido2CredentialRequest.handleMakeCredentialRequest(
--                options,
--                maybeCreateBrowserOptions(),
--                assertNonNull(mOrigin),
--                mTopOrigin,
--                mPayment,
--                this::onRegisterResponse,
--                this::onError,
--                this::recordOutcomeEvent);
-     }
- 
-     private @Nullable Bundle maybeCreateBrowserOptions() {
-@@ -241,17 +210,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-             onError(AuthenticatorStatus.NOT_IMPLEMENTED);
-             return;
-         }
--        assumeNonNull(options.publicKey);
--
--        mPendingFido2CredentialRequest = getFido2CredentialRequest();
--        mPendingFido2CredentialRequest.handleGetCredentialRequest(
--                options,
--                assertNonNull(mOrigin),
--                mTopOrigin,
--                mPayment,
--                this::onCredentialResponse,
--                this::onError,
--                this::recordOutcomeEvent);
-     }
- 
-     @Override
-@@ -283,10 +241,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-             decoratedCallback.call(false);
-             return;
-         }
--
--        getFido2CredentialRequest()
--                .handleIsUserVerifyingPlatformAuthenticatorAvailableRequest(
--                        isUvpaa -> decoratedCallback.call(isUvpaa));
-     }
- 
-     @Override
-@@ -323,34 +277,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-             return;
-         }
- 
--        getFido2CredentialRequest()
--                .handleIsUserVerifyingPlatformAuthenticatorAvailableRequest(
--                        isUvpaa -> {
--                            capabilities.add(
--                                    createWebAuthnClientCapability(
--                                            AuthenticatorConstants.CAPABILITY_CONDITIONAL_GET,
--                                            couldSupportConditionalMediation() && isUvpaa));
--                            capabilities.add(
--                                    createWebAuthnClientCapability(
--                                            AuthenticatorConstants.CAPABILITY_UVPAA,
--                                            couldSupportUvpaa() && isUvpaa));
--                            boolean conditionalCreateEnabled =
--                                    couldSupportConditionalMediation()
--                                            && DeviceFeatureMap.isEnabled(
--                                                    DeviceFeatureList.WEBAUTHN_PASSKEY_UPGRADE);
--                            capabilities.add(
--                                    createWebAuthnClientCapability(
--                                            AuthenticatorConstants.CAPABILITY_CONDITIONAL_CREATE,
--                                            isUvpaa && conditionalCreateEnabled));
--                            capabilities.add(
--                                    createWebAuthnClientCapability(
--                                            AuthenticatorConstants.CAPABILITY_IMMEDIATE_GET,
--                                            DeviceFeatureMap.isEnabled(
--                                                            DeviceFeatureList
--                                                                    .WEBAUTHN_IMMEDIATE_GET)
--                                                    && isUvpaa));
--                            callback.call(capabilities.toArray(new WebAuthnClientCapability[0]));
--                        });
-+        callback.call(capabilities.toArray(new WebAuthnClientCapability[0]));
-     }
- 
-     // Helper function to create WebAuthnClientCapability instances
-@@ -381,14 +308,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-             callback.onResponse(new ArrayList<byte[]>());
-             return;
-         }
--
--        getFido2CredentialRequest()
--                .handleGetMatchingCredentialIdsRequest(
--                        relyingPartyId,
--                        credentialIds,
--                        requireThirdPartyPayment,
--                        callback,
--                        this::onError);
-     }
- 
-     @Override
-@@ -399,13 +318,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-             callback.call(false);
-             return;
-         }
--
--        // If the gmscore and chromium versions are out of sync for some reason, this method will
--        // return true but chrome will ignore conditional requests. Android surfaces only platform
--        // credentials on conditional requests, use IsUVPAA as a proxy for availability.
--        getFido2CredentialRequest()
--                .handleIsUserVerifyingPlatformAuthenticatorAvailableRequest(
--                        isUvpaa -> callback.call(isUvpaa));
-     }
- 
-     @Override
-@@ -417,9 +329,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-         if (!mIsOperationPending || mGetCredentialCallback == null) {
-             return;
-         }
--
--        assumeNonNull(mPendingFido2CredentialRequest);
--        mPendingFido2CredentialRequest.cancelGetAssertion();
-     }
- 
-     /** Callbacks for receiving responses from the internal handlers. */
-@@ -468,7 +377,6 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-         } else if (mGetCredentialCallback != null) {
-             mGetCredentialCallback.call(getCredentialResponseForAssertion(status, null));
-         }
--        if (mPendingFido2CredentialRequest != null) mPendingFido2CredentialRequest.destroyBridge();
-         cleanupRequest();
-     }
- 
-@@ -508,14 +416,11 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-         mIsOperationPending = false;
-         mMakeCredentialCallback = null;
-         mGetCredentialCallback = null;
--        mPendingFido2CredentialRequest = null;
-     }
- 
-     @Override
-     public void close() {
-         log(TAG, "close");
--        mUnclosedFido2CredentialRequests.forEach(Fido2CredentialRequest::destroyBridge);
--        mUnclosedFido2CredentialRequests.clear();
-         cleanupRequest();
-     }
- 
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/ConditionalUiState.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/ConditionalUiState.java
 new file mode 100644
 --- /dev/null
@@ -3515,6 +3307,172 @@ new file mode 100644
 +    CANCEL_PENDING,
 +    CANCEL_PENDING_RP_ID_VALIDATION_COMPLETE,
 +}
+diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java
+--- a/components/webauthn/android/java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java
++++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/Fido2CredentialRequest.java
+@@ -26,8 +26,6 @@ import android.util.Pair;
+ import androidx.annotation.RequiresApi;
+ import androidx.annotation.VisibleForTesting;
+ 
+-import com.google.android.gms.tasks.Task;
+-
+ import org.jni_zero.JNINamespace;
+ import org.jni_zero.NativeMethods;
+ 
+@@ -48,7 +46,6 @@ import org.chromium.blink.mojom.ResidentKeyRequirement;
+ import org.chromium.blink_public.common.BlinkFeatures;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+-import org.chromium.components.webauthn.Fido2ApiCall.Fido2ApiCallParams;
+ import org.chromium.components.webauthn.cred_man.CredManHelper;
+ import org.chromium.components.webauthn.cred_man.CredManSupportProvider;
+ import org.chromium.content_public.browser.ClientDataJson;
+@@ -132,12 +129,7 @@ public class Fido2CredentialRequest
+      */
+     public Fido2CredentialRequest(AuthenticationContextProvider authenticationContextProvider) {
+         mAuthenticationContextProvider = authenticationContextProvider;
+-        boolean playServicesAvailable;
+-        try {
+-            playServicesAvailable = Fido2ApiCallHelper.getInstance().arePlayServicesAvailable();
+-        } catch (Exception e) {
+-            playServicesAvailable = false;
+-        }
++        boolean playServicesAvailable = false;
+         mPlayServicesAvailable = playServicesAvailable;
+         mCredManHelper =
+                 new CredManHelper(mAuthenticationContextProvider, this, mPlayServicesAvailable);
+@@ -334,22 +326,6 @@ public class Fido2CredentialRequest
+                     returnErrorAndResetCallback(AuthenticatorStatus.UNKNOWN_ERROR);
+                     return;
+                 }
+-                try {
+-                    Fido2ApiCallHelper.getInstance()
+-                            .invokeFido2MakeCredential(
+-                                    mAuthenticationContextProvider,
+-                                    options,
+-                                    Uri.parse(convertOriginToString(origin)),
+-                                    clientDataHash,
+-                                    maybeBrowserOptions,
+-                                    getMaybeResultReceiver(),
+-                                    this::onGotPendingIntent,
+-                                    this::onBinderCallException);
+-                } catch (NoSuchAlgorithmException e) {
+-                    mMakeCredentialErrorOutcome = MakeCredentialOutcome.ALGORITHM_NOT_SUPPORTED;
+-                    returnErrorAndResetCallback(AuthenticatorStatus.ALGORITHM_UNSUPPORTED);
+-                    return;
+-                }
+                 return;
+             }
+             int result =
+@@ -397,23 +373,6 @@ public class Fido2CredentialRequest
+             returnErrorAndResetCallback(AuthenticatorStatus.UNKNOWN_ERROR);
+             return;
+         }
+-
+-        try {
+-            Fido2ApiCallHelper.getInstance()
+-                    .invokeFido2MakeCredential(
+-                            mAuthenticationContextProvider,
+-                            options,
+-                            Uri.parse(convertOriginToString(origin)),
+-                            clientDataHash,
+-                            maybeBrowserOptions,
+-                            getMaybeResultReceiver(),
+-                            this::onGotPendingIntent,
+-                            this::onBinderCallException);
+-        } catch (NoSuchAlgorithmException e) {
+-            mMakeCredentialErrorOutcome = MakeCredentialOutcome.ALGORITHM_NOT_SUPPORTED;
+-            returnErrorAndResetCallback(AuthenticatorStatus.ALGORITHM_UNSUPPORTED);
+-            return;
+-        }
+     }
+ 
+     /**
+@@ -785,32 +744,6 @@ public class Fido2CredentialRequest
+             callback.onIsUserVerifyingPlatformAuthenticatorAvailableResponse(false);
+             return;
+         }
+-
+-        Fido2ApiCallParams params =
+-                WebauthnModeProvider.getInstance()
+-                        .getFido2ApiCallParams(mAuthenticationContextProvider.getWebContents());
+-        assertNonNull(mAuthenticationContextProvider.getContext());
+-        assertNonNull(params);
+-        Fido2ApiCall call = new Fido2ApiCall(mAuthenticationContextProvider.getContext(), params);
+-        Fido2ApiCall.BooleanResult result = new Fido2ApiCall.BooleanResult();
+-        Parcel args = call.start();
+-        args.writeStrongBinder(result);
+-
+-        Task<Boolean> task =
+-                call.run(
+-                        params.mIsUserVerifyingPlatformAuthenticatorAvailableMethodId,
+-                        Fido2ApiCall.TRANSACTION_ISUVPAA,
+-                        args,
+-                        result);
+-        task.addOnSuccessListener(
+-                (isUvpaa) -> {
+-                    callback.onIsUserVerifyingPlatformAuthenticatorAvailableResponse(isUvpaa);
+-                });
+-        task.addOnFailureListener(
+-                (e) -> {
+-                    logError(TAG, "FIDO2 API call failed", e);
+-                    callback.onIsUserVerifyingPlatformAuthenticatorAvailableResponse(false);
+-                });
+     }
+ 
+     public void handleGetMatchingCredentialIdsRequest(
+@@ -1139,16 +1072,6 @@ public class Fido2CredentialRequest
+         if (options.mediation == Mediation.CONDITIONAL) {
+             mCancellableUiState = CancellableUiState.REQUEST_SENT_TO_PLATFORM;
+         }
+-
+-        Fido2ApiCallHelper.getInstance()
+-                .invokeFido2GetAssertion(
+-                        mAuthenticationContextProvider,
+-                        publicKeyOptions,
+-                        Uri.parse(callerOriginString),
+-                        clientDataHash,
+-                        getMaybeResultReceiver(),
+-                        this::onGotPendingIntent,
+-                        this::onBinderCallException);
+     }
+ 
+     private void handleNonCredentialReturn(GetCredentialOptions options, Integer reason) {
+@@ -1192,34 +1115,6 @@ public class Fido2CredentialRequest
+             return;
+         }
+         mCancellableUiState = CancellableUiState.REQUEST_SENT_TO_PLATFORM;
+-
+-        Fido2ApiCallParams params =
+-                WebauthnModeProvider.getInstance()
+-                        .getFido2ApiCallParams(mAuthenticationContextProvider.getWebContents());
+-        assertNonNull(mAuthenticationContextProvider.getContext());
+-        assertNonNull(params);
+-        Fido2ApiCall call = new Fido2ApiCall(mAuthenticationContextProvider.getContext(), params);
+-        Parcel args = call.start();
+-        String callbackDescriptor = params.mCallbackDescriptor;
+-        Fido2ApiCall.PendingIntentResult result =
+-                new Fido2ApiCall.PendingIntentResult(callbackDescriptor);
+-        args.writeStrongBinder(result);
+-        args.writeInt(1); // This indicates that the following options are present.
+-        Fido2Api.appendBrowserGetAssertionOptionsToParcel(
+-                options,
+-                Uri.parse(callerOriginString),
+-                clientDataHash,
+-                /* tunnelId= */ null,
+-                /* resultReceiver= */ null,
+-                args);
+-        Task<PendingIntent> task =
+-                call.run(
+-                        Fido2ApiCall.METHOD_BROWSER_HYBRID_SIGN,
+-                        Fido2ApiCall.TRANSACTION_HYBRID_SIGN,
+-                        args,
+-                        result);
+-        task.addOnSuccessListener(this::onGotPendingIntent);
+-        task.addOnFailureListener(this::onBinderCallException);
+     }
+ 
+     // Handles a PendingIntent from the GMSCore FIDO library.
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/GmsCoreGetCredentialsHelper.java
@@ -3813,75 +3771,6 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
      public @WebauthnMode int getWebauthnMode(@Nullable WebContents webContents) {
          if (mGlobalMode != WebauthnMode.NONE) return mGlobalMode;
          return WebauthnModeProviderJni.get().getWebauthnModeForWebContents(webContents);
-diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java
---- a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java
-+++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManHelper.java
-@@ -40,8 +40,6 @@ import org.chromium.build.annotations.NullMarked;
- import org.chromium.build.annotations.Nullable;
- import org.chromium.components.webauthn.AuthenticationContextProvider;
- import org.chromium.components.webauthn.Barrier;
--import org.chromium.components.webauthn.Fido2CredentialRequest.CancellableUiState;
--import org.chromium.components.webauthn.Fido2CredentialRequestJni;
- import org.chromium.components.webauthn.GetAssertionOutcome;
- import org.chromium.components.webauthn.GetCredentialResponseCallback;
- import org.chromium.components.webauthn.MakeCredentialOutcome;
-@@ -83,6 +81,16 @@ public class CredManHelper {
-     private CredManMetricsHelper mMetricsHelper;
-     private @Nullable Runnable mNoCredentialsFallback;
- 
-+    public enum CancellableUiState {
-+        NONE,
-+        WAITING_FOR_RP_ID_VALIDATION,
-+        WAITING_FOR_CREDENTIAL_LIST,
-+        WAITING_FOR_SELECTION,
-+        REQUEST_SENT_TO_PLATFORM,
-+        CANCEL_PENDING,
-+        CANCEL_PENDING_RP_ID_VALIDATION_COMPLETE,
-+    }
-+
-     // A callback that provides an AuthenticatorStatus error in the first argument, and optionally a
-     // metrics recording outcome in the second.
-     public interface ErrorCallback {
-@@ -113,8 +121,7 @@ public class CredManHelper {
-             ErrorCallback errorCallback) {
-         log(TAG, "startMakeRequest");
-         mClientDataJson = clientDataJson;
--        final String requestAsJson =
--                Fido2CredentialRequestJni.get().createOptionsToJson(options.serialize());
-+        final String requestAsJson = "";
- 
-         OutcomeReceiver<CreateCredentialResponse, CreateCredentialException> receiver =
-                 new OutcomeReceiver<>() {
-@@ -450,8 +457,7 @@ public class CredManHelper {
-                                         CRED_MAN_PREFIX
-                                                 + "BUNDLE_KEY_AUTHENTICATION_RESPONSE_JSON");
-                         assertNonNull(json);
--                        byte[] responseSerialized =
--                                Fido2CredentialRequestJni.get().getCredentialResponseFromJson(json);
-+                        byte[] responseSerialized = null;
-                         if (responseSerialized == null) {
-                             logError(
-                                     TAG,
-@@ -619,8 +625,7 @@ public class CredManHelper {
-             boolean requestPasswords,
-             boolean preferImmediatelyAvailable,
-             boolean ignoreGpm) {
--        final String requestAsJson =
--                Fido2CredentialRequestJni.get().getOptionsToJson(options.serialize());
-+        final String requestAsJson = "";
- 
-         boolean hasAllowCredentials =
-                 options.allowCredentials != null && options.allowCredentials.length != 0;
-@@ -658,8 +663,7 @@ public class CredManHelper {
-             Bundle data) {
-         String json = data.getString(BUNDLE_KEY_REGISTRATION_RESPONSE_JSON);
-         assertNonNull(json);
--        byte[] responseSerialized =
--                Fido2CredentialRequestJni.get().makeCredentialResponseFromJson(json);
-+        byte[] responseSerialized = null;
-         if (responseSerialized == null) {
-             logError(TAG, "Failed to convert response from CredMan to Mojo object: %s", json);
-             return null;
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/cred_man/CredManMetricsHelper.java
