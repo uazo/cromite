@@ -1143,6 +1143,10 @@ constexpr char kDesksLacrosProfileIdList[] =
     "ash.desks.desks_lacros_profile_id_list";
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+// Deprecated 09/2025.
+constexpr char kLensOverlayEduActionChipShownCount[] =
+    "lens.edu_action_chip.shown_count";
+
 // Register local state used only for migration (clearing or moving to a new
 // key).
 void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
@@ -1648,6 +1652,9 @@ void RegisterProfilePrefsForMigration(
   // Deprecated 08/2025.
   registry->RegisterListPref(kDesksLacrosProfileIdList);
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // Deprecated 09/2025.
+  registry->RegisterIntegerPref(kLensOverlayEduActionChipShownCount, 0);
 }
 
 }  // namespace
@@ -2992,6 +2999,9 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
   // Added 08/2025.
   profile_prefs->ClearPref(kDesksLacrosProfileIdList);
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // Added 09/2025.
+  profile_prefs->ClearPref(kLensOverlayEduActionChipShownCount);
 
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_PROFILE_PREFS
