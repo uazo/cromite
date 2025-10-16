@@ -1,0 +1,332 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Wed, 15 Oct 2025 13:58:11 +0000
+Subject: Enable ClientHello Segmentation
+
+Allows the ClientHello packet to be sent by segmenting it into multiple packets.
+Can be useful for circumventing censorship via DIP introspection.
+The patch automatically disables the mode in case of outdated or
+incompatible servers, if the TLS handshake fails or times out.
+The mode is accessible via the flag clienthello-fragmentation and is
+currently disabled.
+
+Based on the work of Shukan (https://habr.com/ru/articles/954284)
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ .../Enable-clienthello-fragmentation.inc      |  8 +++++
+ .../Enable-clienthello-fragmentation.inc      |  3 ++
+ .../Enable-clienthello-fragmentation.inc      |  1 +
+ net/http/http_proxy_connect_job.cc            |  3 +-
+ net/http/http_proxy_connect_job.h             |  2 +-
+ net/socket/connect_job.cc                     |  9 ++++--
+ net/socket/connect_job.h                      |  2 +-
+ net/socket/ssl_client_socket.h                |  2 ++
+ net/socket/ssl_client_socket_impl.cc          | 14 ++++++++-
+ net/socket/ssl_client_socket_impl.h           |  3 ++
+ net/socket/ssl_connect_job.cc                 | 29 +++++++++++++++++--
+ net/socket/ssl_connect_job.h                  |  3 ++
+ net/ssl/ssl_config.h                          |  2 ++
+ third_party/boringssl/src/ssl/s3_both.cc      |  5 +++-
+ 14 files changed, 76 insertions(+), 10 deletions(-)
+ create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Enable-clienthello-fragmentation.inc
+ create mode 100644 cromite_flags/net/base/features_cc/Enable-clienthello-fragmentation.inc
+ create mode 100644 cromite_flags/net/base/features_h/Enable-clienthello-fragmentation.inc
+
+diff --git a/cromite_flags/chrome/browser/about_flags_cc/Enable-clienthello-fragmentation.inc b/cromite_flags/chrome/browser/about_flags_cc/Enable-clienthello-fragmentation.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/about_flags_cc/Enable-clienthello-fragmentation.inc
+@@ -0,0 +1,8 @@
++#ifdef FLAG_SECTION
++
++    {"clienthello-fragmentation",
++     "Enable ClientHello Segmentation",
++     "Enable packet segmentation when sending ClientHello to bypass censorship.", kOsAll,
++     FEATURE_VALUE_TYPE(net::features::kClientHelloFragmentation)},
++
++#endif // ifdef FLAG_SECTION
+diff --git a/cromite_flags/net/base/features_cc/Enable-clienthello-fragmentation.inc b/cromite_flags/net/base/features_cc/Enable-clienthello-fragmentation.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/net/base/features_cc/Enable-clienthello-fragmentation.inc
+@@ -0,0 +1,3 @@
++CROMITE_FEATURE(kClientHelloFragmentation,
++                "ClientHelloFragmentation",
++                base::FEATURE_DISABLED_BY_DEFAULT);
+diff --git a/cromite_flags/net/base/features_h/Enable-clienthello-fragmentation.inc b/cromite_flags/net/base/features_h/Enable-clienthello-fragmentation.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/net/base/features_h/Enable-clienthello-fragmentation.inc
+@@ -0,0 +1 @@
++NET_EXPORT BASE_DECLARE_FEATURE(kClientHelloFragmentation);
+diff --git a/net/http/http_proxy_connect_job.cc b/net/http/http_proxy_connect_job.cc
+--- a/net/http/http_proxy_connect_job.cc
++++ b/net/http/http_proxy_connect_job.cc
+@@ -891,7 +891,7 @@ void HttpProxyConnectJob::ChangePriorityInternal(RequestPriority priority) {
+   }
+ }
+ 
+-void HttpProxyConnectJob::OnTimedOutInternal() {
++bool HttpProxyConnectJob::OnTimedOutInternal() {
+   // Only record latency for connections to the first proxy in a chain.
+   if (next_state_ == STATE_TRANSPORT_CONNECT_COMPLETE &&
+       params_->proxy_chain_index() == 0) {
+@@ -900,6 +900,7 @@ void HttpProxyConnectJob::OnTimedOutInternal() {
+                        HttpConnectResult::kTimedOut,
+                        base::TimeTicks::Now() - connect_start_time_);
+   }
++  return true;
+ }
+ 
+ void HttpProxyConnectJob::OnAuthChallenge() {
+diff --git a/net/http/http_proxy_connect_job.h b/net/http/http_proxy_connect_job.h
+--- a/net/http/http_proxy_connect_job.h
++++ b/net/http/http_proxy_connect_job.h
+@@ -283,7 +283,7 @@ class NET_EXPORT_PRIVATE HttpProxyConnectJob : public ConnectJob,
+ 
+   // ConnectJob implementation.
+   void ChangePriorityInternal(RequestPriority priority) override;
+-  void OnTimedOutInternal() override;
++  bool OnTimedOutInternal() override;
+ 
+   void OnAuthChallenge();
+ 
+diff --git a/net/socket/connect_job.cc b/net/socket/connect_job.cc
+--- a/net/socket/connect_job.cc
++++ b/net/socket/connect_job.cc
+@@ -220,16 +220,19 @@ void ConnectJob::StopTimerAndLogConnectCompletion(int net_error) {
+ }
+ 
+ void ConnectJob::OnTimeout() {
++  if (!OnTimedOutInternal()) {
++    Connect();
++    return;
++  }
++
+   // Make sure the socket is NULL before calling into |delegate|.
+   SetSocket(nullptr, std::nullopt /* dns_aliases */);
+ 
+-  OnTimedOutInternal();
+-
+   net_log_.AddEvent(NetLogEventType::CONNECT_JOB_TIMED_OUT);
+ 
+   NotifyDelegateOfCompletion(ERR_TIMED_OUT);
+ }
+ 
+-void ConnectJob::OnTimedOutInternal() {}
++bool ConnectJob::OnTimedOutInternal() { return true; }
+ 
+ }  // namespace net
+diff --git a/net/socket/connect_job.h b/net/socket/connect_job.h
+--- a/net/socket/connect_job.h
++++ b/net/socket/connect_job.h
+@@ -344,7 +344,7 @@ class NET_EXPORT_PRIVATE ConnectJob {
+   void OnTimeout();
+ 
+   // Invoked to notify subclasses that the has request timed out.
+-  virtual void OnTimedOutInternal();
++  virtual bool OnTimedOutInternal();
+ 
+   const base::TimeDelta timeout_duration_;
+   RequestPriority priority_;
+diff --git a/net/socket/ssl_client_socket.h b/net/socket/ssl_client_socket.h
+--- a/net/socket/ssl_client_socket.h
++++ b/net/socket/ssl_client_socket.h
+@@ -100,6 +100,8 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
+   virtual std::vector<std::vector<uint8_t>>
+   GetServerTrustAnchorIDsForRetry() = 0;
+ 
++  virtual bool IsTlsFragmentationFailed() const = 0;
++
+   // Log SSL key material to |logger|. Must be called before any
+   // SSLClientSockets are created.
+   //
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -327,6 +327,10 @@ void SSLClientSocketImpl::SetSSLKeyLogger(
+   SSLContext::GetInstance()->SetSSLKeyLogger(std::move(logger));
+ }
+ 
++bool SSLClientSocketImpl::IsTlsFragmentationFailed() const {
++  return tls_fragmentation_error_;
++}
++
+ std::vector<uint8_t> SSLClientSocketImpl::GetECHRetryConfigs() {
+   const uint8_t* retry_configs;
+   size_t retry_configs_len;
+@@ -395,6 +399,10 @@ int SSLClientSocketImpl::Connect(CompletionOnceCallback callback) {
+     return rv;
+   }
+ 
++  if (ssl_config_.enable_client_hello_fragmentation) {
++    SSL_set_max_send_fragment(ssl_.get(), 500);
++  }
++
+   // Set SSL to client mode. Handshake happens in the loop below.
+   SSL_set_connect_state(ssl_.get());
+ 
+@@ -903,6 +911,7 @@ int SSLClientSocketImpl::DoHandshake() {
+ 
+   int rv = SSL_do_handshake(ssl_.get());
+   int net_error = OK;
++  tls_fragmentation_error_ = false;
+   if (rv <= 0) {
+     int ssl_error = SSL_get_error(ssl_.get(), rv);
+     if (ssl_error == SSL_ERROR_WANT_X509_LOOKUP && !send_client_cert_) {
+@@ -928,8 +937,11 @@ int SSLClientSocketImpl::DoHandshake() {
+       return ERR_IO_PENDING;
+     }
+ 
++    tls_fragmentation_error_ = ssl_config_.enable_client_hello_fragmentation;
+     LOG(ERROR) << "handshake failed; returned " << rv << ", SSL error code "
+-               << ssl_error << ", net_error " << net_error;
++               << ssl_error << ", net_error " << net_error
++               << ", enable_client_hello_fragmentation "
++               << ssl_config_.enable_client_hello_fragmentation;
+     NetLogOpenSSLError(net_log_, NetLogEventType::SSL_HANDSHAKE_ERROR,
+                        net_error, ssl_error, error_info);
+   }
+diff --git a/net/socket/ssl_client_socket_impl.h b/net/socket/ssl_client_socket_impl.h
+--- a/net/socket/ssl_client_socket_impl.h
++++ b/net/socket/ssl_client_socket_impl.h
+@@ -76,6 +76,7 @@ class NET_EXPORT_PRIVATE SSLClientSocketImpl
+   // SSLClientSocket implementation.
+   std::vector<uint8_t> GetECHRetryConfigs() override;
+   std::vector<std::vector<uint8_t>> GetServerTrustAnchorIDsForRetry() override;
++  bool IsTlsFragmentationFailed() const override;
+ 
+   // SSLSocket implementation.
+   int ExportKeyingMaterial(std::string_view label,
+@@ -252,6 +253,8 @@ class NET_EXPORT_PRIVATE SSLClientSocketImpl
+   // network.
+   bool was_ever_used_ = false;
+ 
++  bool tls_fragmentation_error_ = false;
++
+   const raw_ptr<SSLClientContext> context_;
+ 
+   // Stores the value of SSLClientSessionCache's generation number at the time
+diff --git a/net/socket/ssl_connect_job.cc b/net/socket/ssl_connect_job.cc
+--- a/net/socket/ssl_connect_job.cc
++++ b/net/socket/ssl_connect_job.cc
+@@ -42,6 +42,7 @@ namespace {
+ 
+ // Timeout for the SSL handshake portion of the connect.
+ constexpr base::TimeDelta kSSLHandshakeTimeout(base::Seconds(30));
++constexpr base::TimeDelta kSSLHandshakeTimeoutWithFragmentation(base::Seconds(5));
+ 
+ }  // namespace
+ 
+@@ -100,7 +101,10 @@ SSLConnectJob::SSLConnectJob(
+           NetLogEventType::SSL_CONNECT_JOB_CONNECT),
+       params_(std::move(params)),
+       callback_(base::BindRepeating(&SSLConnectJob::OnIOComplete,
+-                                    base::Unretained(this))) {}
++                                    base::Unretained(this))) {
++  enable_client_hello_fragmentation_ =
++    base::FeatureList::IsEnabled(net::features::kClientHelloFragmentation);
++}
+ 
+ SSLConnectJob::~SSLConnectJob() {
+   // In the case the job was canceled, need to delete nested job first to
+@@ -346,7 +350,10 @@ int SSLConnectJob::DoSSLConnect() {
+   next_state_ = STATE_SSL_CONNECT_COMPLETE;
+ 
+   // Set the timeout to just the time allowed for the SSL handshake.
+-  ResetTimer(kSSLHandshakeTimeout);
++  if (enable_client_hello_fragmentation_)
++    ResetTimer(kSSLHandshakeTimeoutWithFragmentation);
++  else
++    ResetTimer(kSSLHandshakeTimeout);
+ 
+   // Get the transport's connect start and DNS times.
+   const LoadTimingInfo::ConnectTiming& socket_connect_timing =
+@@ -401,6 +408,8 @@ int SSLConnectJob::DoSSLConnect() {
+     }
+   }
+ 
++  ssl_config.enable_client_hello_fragmentation = enable_client_hello_fragmentation_;
++
+   net_log().AddEvent(NetLogEventType::SSL_CONNECT_JOB_SSL_CONNECT, [&] {
+     base::Value::Dict dict;
+     dict.Set("ech_enabled", ssl_client_context()->config().ech_enabled);
+@@ -432,6 +441,12 @@ int SSLConnectJob::DoSSLConnectComplete(int result) {
+   // retry on a potentially unreliably network connection.
+   //
+   // TODO(crbug.com/40085786): Remove this now redundant retry.
++  if (enable_client_hello_fragmentation_ && ssl_socket_->IsTlsFragmentationFailed()) {
++    ResetStateForRestart();
++    enable_client_hello_fragmentation_ = false;
++    next_state_ = GetInitialState(params_->GetConnectionType());
++    return OK;
++  }
+   if (disable_legacy_crypto_with_fallback_ &&
+       (result == ERR_CONNECTION_CLOSED || result == ERR_CONNECTION_RESET ||
+        result == ERR_SSL_PROTOCOL_ERROR ||
+@@ -528,6 +543,16 @@ SSLConnectJob::State SSLConnectJob::GetInitialState(
+   NOTREACHED();
+ }
+ 
++bool SSLConnectJob::OnTimedOutInternal() {
++  if (enable_client_hello_fragmentation_ && ssl_negotiation_started_) {
++    ResetStateForRestart();
++    enable_client_hello_fragmentation_ = false;
++    next_state_ = GetInitialState(params_->GetConnectionType());
++    return false;
++  }
++  return true;
++}
++
+ int SSLConnectJob::ConnectInternal() {
+   next_state_ = GetInitialState(params_->GetConnectionType());
+   return DoLoop(OK);
+diff --git a/net/socket/ssl_connect_job.h b/net/socket/ssl_connect_job.h
+--- a/net/socket/ssl_connect_job.h
++++ b/net/socket/ssl_connect_job.h
+@@ -168,6 +168,8 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
+   int DoSSLConnect();
+   int DoSSLConnectComplete(int result);
+ 
++  bool OnTimedOutInternal() override;
++
+   // Returns the initial state for the state machine based on the
+   // |connection_type|.
+   static State GetInitialState(SSLSocketParams::ConnectionType connection_type);
+@@ -196,6 +198,7 @@ class NET_EXPORT_PRIVATE SSLConnectJob : public ConnectJob,
+   // attempt. On error, the connection will be retried with legacy crypto
+   // enabled.
+   bool disable_legacy_crypto_with_fallback_ = true;
++  bool enable_client_hello_fragmentation_ = false;
+ 
+   scoped_refptr<SSLCertRequestInfo> ssl_cert_request_info_;
+ 
+diff --git a/net/ssl/ssl_config.h b/net/ssl/ssl_config.h
+--- a/net/ssl/ssl_config.h
++++ b/net/ssl/ssl_config.h
+@@ -151,6 +151,8 @@ struct NET_EXPORT SSLConfig {
+   // retry the connection.
+   std::vector<uint8_t> ech_config_list;
+ 
++  bool enable_client_hello_fragmentation = false;
++
+   // An additional boolean to partition the session cache by.
+   //
+   // TODO(https://crbug.com/775438, https://crbug.com/951205): This should
+diff --git a/third_party/boringssl/src/ssl/s3_both.cc b/third_party/boringssl/src/ssl/s3_both.cc
+--- a/third_party/boringssl/src/ssl/s3_both.cc
++++ b/third_party/boringssl/src/ssl/s3_both.cc
+@@ -96,8 +96,11 @@ bool tls_add_message(SSL *ssl, Array<uint8_t> msg) {
+   // implementations.
+   //
+   // TODO(crbug.com/374991962): See if we can do this uniformly.
++  bool is_max_send_fragment_changed =
++          ssl->max_send_fragment != SSL3_RT_MAX_PLAIN_LENGTH;
+   Span<const uint8_t> rest = msg;
+-  if (!SSL_is_quic(ssl) && ssl->s3->aead_write_ctx->is_null_cipher()) {
++  if (is_max_send_fragment_changed ||
++       (!SSL_is_quic(ssl) && ssl->s3->aead_write_ctx->is_null_cipher())) {
+     while (!rest.empty()) {
+       Span<const uint8_t> chunk = rest.subspan(0, ssl->max_send_fragment);
+       rest = rest.subspan(chunk.size());
+--
