@@ -27,6 +27,7 @@
 #include "mojo/public/cpp/bindings/features.h"
 #include "net/base/features.h"
 #include "services/network/public/cpp/features.h"
+#include "services/tracing/public/cpp/tracing_features.h"
 #include "storage/browser/blob/features.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
@@ -60,6 +61,11 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(
       ::features::kBlockCrossPartitionBlobUrlFetching);
 
+  // TODO(crbug.com/445202443): There are some test cases need to be
+  // fixed before enabling this feature flag for android.
+  aw_feature_overrides.DisableFeature(
+      blink::features::kAboutBlankPageRespectsDarkModeOnUserAction);
+
   // Disable enforcing `noopener` on Blob URL navigations on WebView.
   aw_feature_overrides.DisableFeature(
       blink::features::kEnforceNoopenerOnBlobURLNavigation);
@@ -84,6 +90,7 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(blink::features::kFencedFrames);
 
   // Disable FLEDGE on WebView.
+  aw_feature_overrides.DisableFeature(network::features::kInterestGroupStorage);
   aw_feature_overrides.DisableFeature(blink::features::kAdInterestGroupAPI);
   aw_feature_overrides.DisableFeature(blink::features::kFledge);
 
@@ -284,11 +291,6 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // handled correctly when WebView is drawing edge-to-edge.
   aw_feature_overrides.DisableFeature(features::kDrawCutoutEdgeToEdge);
 
-  // This is enabled for WebView to improve crbug.com/418159642.
-  // TODO(crbug.com/422161917): Revert this for the ablation study.
-  aw_feature_overrides.EnableFeature(
-      features::kServiceWorkerBackgroundUpdateForRegisteredStorageKeys);
-
   // Explicitly disable PrefetchProxy instead of relying only on passing an
   // empty URL.
   aw_feature_overrides.DisableFeature(features::kPrefetchProxy);
@@ -301,16 +303,12 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(
       features::kAAudioPerStreamDeviceSelection);
 
-  // Disable background media. This is not used in WebView, and also it
-  // side-steps an issue where JNI calls in renderer does not reliably work.
-  // Long-term fix is to plumb this info to the renderer and remove Java calls
-  // there. crbug.com/438910961
-  aw_feature_overrides.DisableFeature(
-      features::kAndroidEnableBackgroundMediaLargeFormFactors);
-
   // Local Network Access restrictions should not be enforced in WebView.
   // The LNA permission is auto-granted in WebView, but the permission
   // policy currently blocks iframes from using it. crbug.com/442879527
   aw_feature_overrides.DisableFeature(
       network::features::kLocalNetworkAccessChecks);
+
+  // SystemTracing is enabled by default only in WebView for now.
+  aw_feature_overrides.EnableFeature(features::kEnablePerfettoSystemTracing);
 }
