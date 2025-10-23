@@ -31,11 +31,11 @@
 #include "chrome/browser/ui/passwords/password_manager_navigation_throttle.h"
 #include "chrome/browser/ui/passwords/well_known_change_password_navigation_throttle.h"
 #include "chrome/browser/ui/web_applications/navigation_capturing_redirection_throttle.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/captive_portal/content/captive_portal_service.h"
 #include "components/captive_portal/core/buildflags.h"
 #include "components/dom_distiller/content/browser/distiller_page_web_contents.h"
-#include "components/embedder_support/switches.h"
 #include "components/error_page/content/browser/net_error_auto_reloader.h"
 #include "components/fingerprinting_protection_filter/browser/throttle_manager.h"
 #include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
@@ -53,6 +53,7 @@
 #include "components/security_interstitials/content/ssl_error_handler.h"
 #include "components/security_interstitials/content/ssl_error_navigation_throttle.h"
 #include "components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
 #include "content/public/browser/web_contents.h"
@@ -201,8 +202,10 @@ void HandleSSLErrorWrapper(
 // Returns whether `web_contents` is within a hosted app.
 bool IsInHostedApp(content::WebContents* web_contents) {
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  Browser* browser = chrome::FindBrowserWithTab(web_contents);
-  return web_app::AppBrowserController::IsWebApp(browser);
+  tabs::TabInterface* tab =
+      tabs::TabInterface::MaybeGetFromContents(web_contents);
+  return tab && web_app::AppBrowserController::IsWebApp(
+                    tab->GetBrowserWindowInterface());
 #else
   return false;
 #endif
@@ -214,10 +217,10 @@ bool IsErrorPageAutoReloadEnabled() {
   if (command_line.HasSwitch(switches::kEnableAutomation)) {
     return false;
   }
-  if (command_line.HasSwitch(embedder_support::kEnableAutoReload)) {
+  if (command_line.HasSwitch(switches::kEnableAutoReload)) {
     return true;
   }
-  if (command_line.HasSwitch(embedder_support::kDisableAutoReload)) {
+  if (command_line.HasSwitch(switches::kDisableAutoReload)) {
     return false;
   }
   return true;

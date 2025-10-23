@@ -172,37 +172,6 @@ bool g_created_network_context_params = false;
 // On apps targeting API level O or later, check cleartext is enforced.
 bool g_check_cleartext_permitted = false;
 
-BASE_FEATURE(WebViewOptimizeXrwNavigationFlow,
-             base::FEATURE_ENABLED_BY_DEFAULT);
-
-// A throttle which checks if the XRW origin trial is enabled for this
-// navigation, and forwards it to the proxying loader factory.
-class XrwNavigationThrottle : public content::NavigationThrottle {
- public:
-  explicit XrwNavigationThrottle(content::NavigationThrottleRegistry& registry)
-      : NavigationThrottle(registry) {}
-  ~XrwNavigationThrottle() override {
-    AwProxyingURLLoaderFactory::ClearXrwResultForNavigation(
-        navigation_handle()->GetNavigationId());
-  }
-
-  ThrottleCheckResult WillStartRequest() override {
-    auto* handle = navigation_handle();
-    content::OriginTrialsControllerDelegate* delegate =
-        handle->GetWebContents()
-            ->GetBrowserContext()
-            ->GetOriginTrialsControllerDelegate();
-    AwProxyingURLLoaderFactory::SetXrwResultForNavigation(
-        delegate, handle->GetURL(),
-        handle->IsInOutermostMainFrame()
-            ? blink::mojom::ResourceType::kMainFrame
-            : blink::mojom::ResourceType::kSubFrame,
-        handle->GetFrameTreeNodeId(), handle->GetNavigationId());
-    return content::NavigationThrottle::PROCEED;
-  }
-
-  const char* GetNameForLogging() override { return "XrwNavigationThrottle"; }
-};
 
 // Get async check tracker to make Safe Browsing v5 check asynchronous
 base::WeakPtr<AsyncCheckTracker> GetAsyncCheckTracker(
@@ -699,9 +668,6 @@ void AwContentBrowserClient::CreateThrottlesForNavigation(
       AwBrowserContext::FromWebContents(navigation_handle.GetWebContents())));
 
   AwSafeBrowsingNavigationThrottle::MaybeCreateAndAdd(registry);
-  if (base::FeatureList::IsEnabled(kWebViewOptimizeXrwNavigationFlow)) {
-    registry.AddThrottle(std::make_unique<XrwNavigationThrottle>(registry));
-  }
 
   if ((navigation_handle.GetNavigatingFrameType() ==
            FrameType::kPrimaryMainFrame ||
@@ -998,7 +964,6 @@ bool AwContentBrowserClient::HandleExternalProtocol(
                 mojo::NullRemote(),
                 /* intercept_only=*/true,
                 /* security_options=*/std::nullopt,
-                /* xrw_allowlist_matcher=*/nullptr,
                 /* origin_matched_headers=*/{},
                 std::move(browser_context_handle),
                 /* navigation_id=*/std::nullopt);
@@ -1181,9 +1146,6 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
     std::optional<WebContentsKey> web_contents_key;
     web_contents_key = GetWebContentsKey(*web_contents);
 
-    auto xrw_allowlist_matcher =
-        AwSettings::FromWebContents(web_contents)->xrw_allowlist_matcher();
-
     content::GetIOThreadTaskRunner({})->PostTask(
         FROM_HERE,
         base::BindOnce(&AwProxyingURLLoaderFactory::CreateProxy,
@@ -1191,7 +1153,6 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
                        isolation_info, web_contents_key,
                        frame->GetFrameTreeNodeId(), std::move(proxied_receiver),
                        std::move(target_factory_remote), security_options,
-                       std::move(xrw_allowlist_matcher),
                        aw_browser_context->GetOriginMatchedHeaders(),
                        std::move(browser_context_handle), navigation_id));
   } else {
@@ -1206,7 +1167,6 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
             /*web_contents_key=*/std::nullopt, content::FrameTreeNodeId(),
             std::move(proxied_receiver), std::move(target_factory_remote),
             std::nullopt /* security_options */,
-            aw_browser_context->service_worker_xrw_allowlist_matcher(),
             aw_browser_context->GetOriginMatchedHeaders(),
             std::move(browser_context_handle), navigation_id));
   }
