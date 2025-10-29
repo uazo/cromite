@@ -93,6 +93,7 @@
 #include "content/browser/media/media_web_contents_observer.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/permissions/permission_util.h"
+#include "content/browser/preloading/prefetch/prefetch_request.h"
 #include "content/browser/preloading/prefetch/prefetch_service.h"
 #include "content/browser/preloading/prefetch/prefetch_type.h"
 #include "content/browser/preloading/preloading.h"
@@ -296,7 +297,7 @@ enum class CrashRepHandlingOutcome {
 constexpr auto kUpdateLoadStatesInterval = base::Milliseconds(250);
 
 // Kill switch for inner WebContents visibility updates.
-BASE_FEATURE(UpdateInnerWebContentsVisibility,
+BASE_FEATURE(kUpdateInnerWebContentsVisibility,
              base::FEATURE_ENABLED_BY_DEFAULT);
 
 using LifecycleState = RenderFrameHost::LifecycleState;
@@ -1428,7 +1429,7 @@ WebContentsImpl::WebContentsImpl(BrowserContext* browser_context)
   slow_web_preference_cache_observation_.Observe(
       SlowWebPreferenceCache::GetInstance());
   renderer_preferences_.caret_blink_interval =
-      native_theme->GetCaretBlinkInterval();
+      native_theme->caret_blink_interval();
 #if BUILDFLAG(IS_CHROMEOS)
   renderer_preferences_.use_overlay_scrollbar =
       native_theme->use_overlay_scrollbar();
@@ -2027,10 +2028,21 @@ std::vector<RenderFrameHostImpl*> WebContentsImpl::GetOutermostMainFrames() {
 
   // In the case of inner WebContents, we still allow this method to be called,
   // but the semantics of the values being returned are "outermost
-  // within this WebContents" as opposed to truly outermost. We would not expect
-  // any other outermost pages besides the primary page in the case of inner
-  // WebContents.
-  DCHECK(!GetOuterWebContents() || (result.size() == 1));
+  // within this WebContents" as opposed to truly outermost. When this method is
+  // called for an inner WebContents in a normal browser, we would not expect
+  // any other outermost pages besides the primary page.
+  //
+  // Note that for an inner WebContents in a WebUIBrowser (detectable here when
+  // the AttachUnownedInnerWebContents feature is enabled), `result.size()` may
+  // sometimes exceed 1. For example, for WebUIBrowser, when a prerendering code
+  // path is triggered, a prerender frame tree is generated, but the path to
+  // activate or discard it does not run before this point.
+  //
+  // TODO(webium): Fix prerendering and bfcache for WebUIBrowser, which are not
+  // yet fully enabled.
+  DCHECK(
+      !GetOuterWebContents() || (result.size() == 1) ||
+      base::FeatureList::IsEnabled(features::kAttachUnownedInnerWebContents));
 
   return result;
 }
@@ -2636,6 +2648,11 @@ void WebContentsImpl::Discard(base::OnceClosure on_discarded_cb) {
   if (!base::FeatureList::IsEnabled(features::kWebContentsDiscard)) {
     NOTREACHED();
   }
+  if (WasDiscarded()) {
+    // TODO(crbug.com/441841249): Consider updating `on_discarded_cb` to return
+    // a bool to indicate whether the operation completed successfully.
+    return;
+  }
 
   AboutToBeDiscarded(this);
   notify_disconnection_ = false;
@@ -2834,6 +2851,7 @@ bool WebContentsImpl::IsCrashed() {
     case base::TERMINATION_STATUS_ABNORMAL_TERMINATION:
     case base::TERMINATION_STATUS_PROCESS_WAS_KILLED:
     case base::TERMINATION_STATUS_OOM:
+    case base::TERMINATION_STATUS_EVICTED_FOR_MEMORY:
     case base::TERMINATION_STATUS_LAUNCH_FAILED:
 #if BUILDFLAG(IS_CHROMEOS)
     case base::TERMINATION_STATUS_PROCESS_WAS_KILLED_BY_OOM:
@@ -3700,8 +3718,8 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
   prefs.prefers_reduced_motion = gfx::Animation::PrefersReducedMotion();
 
   const auto* const theme = ui::NativeTheme::GetInstanceForWeb();
-  prefers_reduced_transparency_ = theme->GetPrefersReducedTransparency();
-  inverted_colors_ = theme->GetInvertedColors();
+  prefers_reduced_transparency_ = theme->prefers_reduced_transparency();
+  inverted_colors_ = theme->inverted_colors();
   prefs.prefers_reduced_transparency = prefers_reduced_transparency_;
   prefs.inverted_colors = inverted_colors_;
 
@@ -4336,7 +4354,10 @@ void WebContentsImpl::RemoveObserver(WebContentsObserver* observer) {
 std::set<RenderWidgetHostViewBase*>
 WebContentsImpl::GetRenderWidgetHostViewsInWebContentsTree() {
   std::set<RenderWidgetHostViewBase*> result;
-  GetPrimaryMainFrame()->ForEachRenderFrameHostImpl(
+  // Views for speculative render frame host could also be frame sink id owner
+  // and should move frame sink id registration from inner WebContents to outer
+  // WebContents when WebContents is attached/detached.
+  GetPrimaryMainFrame()->ForEachRenderFrameHostImplIncludingSpeculative(
       [&result](RenderFrameHostImpl* rfh) {
         if (auto* view =
                 static_cast<RenderWidgetHostViewBase*>(rfh->GetView())) {
@@ -5320,8 +5341,7 @@ FrameTree* WebContentsImpl::CreateNewWindow(
   // TODO(crbug.com/40234240): Instead of filtering out the guest case here,
   // check it and drop prerender requests before starting prerendering.
   std::unique_ptr<WebContentsImpl> new_contents;
-  if (base::FeatureList::IsEnabled(blink::features::kPrerender2InNewTab) &&
-      !is_guest) {
+  if (!is_guest) {
     new_contents =
         GetPrerenderHostRegistry()->TakePreCreatedWebContentsForNewTabIfExists(
             params, create_params);
@@ -8003,7 +8023,7 @@ blink::ColorProviderColorMaps WebContentsImpl::GetColorProviderColorMaps()
   ui::ColorProviderKey::ForcedColors forced_colors =
       forced_colors_source->GetForcedColors();
   if (forced_colors == ui::ColorProviderKey::ForcedColors::kNone) {
-    forced_colors = ui::ColorProviderKey::ForcedColors::kActive;
+    forced_colors = ui::ColorProviderKey::ForcedColors::kSystem;
   }
 
   return blink::ColorProviderColorMaps{
@@ -9115,6 +9135,14 @@ std::vector<WebContents*> WebContentsImpl::GetInnerWebContents() {
 }
 
 WebContentsImpl* WebContentsImpl::GetResponsibleWebContents() {
+  if (delegate_) {
+    WebContentsImpl* responsible_from_delegate = static_cast<WebContentsImpl*>(
+        delegate_->GetResponsibleWebContents(this));
+    if (responsible_from_delegate) {
+      return responsible_from_delegate;
+    }
+  }
+
   return FromRenderFrameHostImpl(
       GetPrimaryMainFrame()->GetOutermostMainFrameOrEmbedder());
 }
@@ -10085,10 +10113,11 @@ void WebContentsImpl::OnFocusedElementChangedInFrame(
                                 bounds_in_screen);
 
   FocusedNodeDetails details = {frame->has_focused_editable_element(),
-                                bounds_in_screen, focus_type};
+                                bounds_in_screen, bounds_in_root_view,
+                                focus_type};
   BrowserAccessibilityStateImpl::GetInstance()->OnFocusChangedInPage(details);
   observers_.NotifyObservers(&WebContentsObserver::OnFocusChangedInPage,
-                             &details);
+                             details);
 }
 
 bool WebContentsImpl::DidAddMessageToConsole(
@@ -11604,6 +11633,24 @@ void WebContentsImpl::SetVisibilityForChildViews(bool visible) {
 }
 
 void WebContentsImpl::HandleColorRelatedStateChanges() {
+  if (const auto* const theme = ui::NativeTheme::GetInstanceForWeb();
+      prefers_reduced_transparency_ != theme->prefers_reduced_transparency() ||
+      inverted_colors_ != theme->inverted_colors() ||
+      GetContentClient()
+          ->browser()
+          ->WebPreferencesNeedUpdateForColorRelatedStateChanges(
+              *this, *GetPrimaryMainFrame()->GetSiteInstance())) {
+    NotifyPreferencesChanged();
+  }
+
+  // Update color providers after applying any pending WebPreferences changes.
+  // This is done because WebPreferences changes (e.g. `in_forced_colors`) might
+  // not trigger an invalidation in Blink, but color provider changes will
+  // always trigger invalidation. Therefore, we want to update color providers
+  // after we have the right states for the web preferences so we can use the
+  // right color providers in Blink to paint. This also handles scenarios where
+  // the forced colors state remains the same, but the `forced_colors_map` is
+  // updated due to changes in the forced colors mode theme.
   if (blink::ColorProviderColorMaps color_maps = GetColorProviderColorMaps();
       color_maps_ != color_maps) {
     color_maps_.swap(color_maps);
@@ -11613,16 +11660,6 @@ void WebContentsImpl::HandleColorRelatedStateChanges() {
       }
     });
   }
-
-  if (const auto* const theme = ui::NativeTheme::GetInstanceForWeb();
-      prefers_reduced_transparency_ != theme->GetPrefersReducedTransparency() ||
-      inverted_colors_ != theme->GetInvertedColors() ||
-      GetContentClient()
-          ->browser()
-          ->WebPreferencesNeedUpdateForColorRelatedStateChanges(
-              *this, *GetPrimaryMainFrame()->GetSiteInstance())) {
-    NotifyPreferencesChanged();
-  }
 }
 
 void WebContentsImpl::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
@@ -11631,7 +11668,7 @@ void WebContentsImpl::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
 
   HandleColorRelatedStateChanges();
 
-  const auto caret_blink_interval = observed_theme->GetCaretBlinkInterval();
+  const auto caret_blink_interval = observed_theme->caret_blink_interval();
 #if BUILDFLAG(IS_CHROMEOS)
   const auto use_overlay_scrollbar = observed_theme->use_overlay_scrollbar();
 #endif
@@ -11981,7 +12018,7 @@ std::unique_ptr<PrefetchHandle> WebContentsImpl::StartPrefetch(
     std::optional<PrefetchPriority> priority,
     scoped_refptr<PreloadPipelineInfo> preload_pipeline_info,
     base::WeakPtr<PreloadingAttempt> attempt,
-    std::optional<PreloadingHoldbackStatus> holdback_status_override,
+    PreloadingHoldbackStatus holdback_status_override,
     std::optional<base::TimeDelta> ttl) {
   PrefetchService* prefetch_service =
       BrowserContextImpl::From(GetBrowserContext())->GetPrefetchService();
@@ -11991,13 +12028,13 @@ std::unique_ptr<PrefetchHandle> WebContentsImpl::StartPrefetch(
 
   PrefetchType prefetch_type(PreloadingTriggerType::kEmbedder,
                              use_prefetch_proxy);
-  auto container = std::make_unique<PrefetchContainer>(
+  auto request = PrefetchRequest::CreateBrowserInitiated(
       *this, prefetch_url, prefetch_type, embedder_histogram_suffix, referrer,
       referring_origin, std::move(no_vary_search_hint), std::move(priority),
       std::move(preload_pipeline_info), std::move(attempt),
       holdback_status_override, std::move(ttl));
 
-  return prefetch_service->AddPrefetchContainerWithHandle(std::move(container));
+  return prefetch_service->AddPrefetchRequestWithHandle(std::move(request));
 }
 
 std::unique_ptr<PrerenderHandle> WebContentsImpl::StartPrerendering(
