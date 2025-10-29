@@ -127,6 +127,8 @@
 #include "components/variations/variations_switches.h"
 #include "components/version_info/version_info.h"
 #include "components/visitedlink/renderer/visitedlink_reader.h"
+#include "components/wallet/content/renderer/image_extractor.h"
+#include "components/wallet/core/common/wallet_features.h"
 #include "components/web_cache/renderer/web_cache_impl.h"
 #include "components/webapps/renderer/web_page_metadata_agent.h"
 #include "content/public/common/content_constants.h"
@@ -184,6 +186,12 @@
 #include "ui/base/webui/jstemplate_builder.h"
 #include "url/origin.h"
 #include "v8/include/v8-isolate.h"
+
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
+#include "components/webapps/isolated_web_apps/scheme.h"
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 
 #if BUILDFLAG(IS_ANDROID)
 #include "chrome/renderer/sandbox_status_extension_android.h"
@@ -415,8 +423,12 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   extensions_renderer_client->RenderThreadStarted();
   WebSecurityPolicy::RegisterURLSchemeAsExtension(
       WebString::FromASCII(extensions::kExtensionScheme));
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
   WebSecurityPolicy::RegisterURLSchemeAsIsolatedApp(
-      WebString::FromASCII(chrome::kIsolatedAppScheme));
+      WebString::FromASCII(webapps::kIsolatedAppScheme));
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
   WebSecurityPolicy::RegisterURLSchemeAsCodeCacheWithHashing(
       WebString::FromASCII(extensions::kExtensionScheme));
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -487,6 +499,8 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   WebString chrome_search_scheme(
       WebString::FromASCII(chrome::kChromeSearchScheme));
 
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+    BUILDFLAG(IS_CHROMEOS)
   // IWAs can be enabled by either the feature flag or by enterprise
   // policy. In either case the kEnableIsolatedWebAppsInRenderer flag is passed
   // to the renderer process.
@@ -495,7 +509,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
     // isolated-app: is the scheme used for Isolated Web Apps, which are web
     // applications packaged in Signed Web Bundles.
     WebString isolated_app_scheme(
-        WebString::FromASCII(chrome::kIsolatedAppScheme));
+        WebString::FromASCII(webapps::kIsolatedAppScheme));
     // Resources contained in Isolated Web Apps are HTTP-like and safe to expose
     // to the fetch API.
     WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
@@ -505,6 +519,8 @@ void ChromeContentRendererClient::RenderThreadStarted() {
     WebSecurityPolicy::RegisterURLSchemeAsAllowedForReferrer(
         isolated_app_scheme);
   }
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+        // BUILDFLAG(IS_CHROMEOS)
 
   // The Instant process can only display the content but not read it. Other
   // processes can't display it or read it. (see http://crbug.com/40309067 for
@@ -707,6 +723,11 @@ void ChromeContentRendererClient::RenderFrameCreated(
     subresource_filter_agent->Initialize();
   }
 
+  if (!render_frame->IsInFencedFrameTree()) {
+    content_based_fingerprinting_protection_enabled_for_metrics_ =
+        render_frame->GetBlinkPreferences()
+            .content_based_fingerprinting_protection_enabled;
+  }
   if (render_frame->IsMainFrame() && !render_frame->IsInFencedFrameTree()) {
     // This web pref applies at the level of the current browser session and may
     // change when settings are modified, so we copy the latest value every time
@@ -762,6 +783,11 @@ void ChromeContentRendererClient::RenderFrameCreated(
     new wallet::BoardingPassExtractor(render_frame, registry);
   }
 #endif
+
+  if (base::FeatureList::IsEnabled(wallet::kWalletablePassDetection) &&
+      render_frame->IsMainFrame()) {
+    wallet::ImageExtractor::Create(render_frame, registry);
+  }
 
 #if !BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(features::kWebium)) {
@@ -1654,6 +1680,11 @@ void ChromeContentRendererClient::AppendContentSecurityPolicy(
 bool ChromeContentRendererClient::
     IsContentBasedFingerprintingProtectionEnabled() {
   return content_based_fingerprinting_protection_enabled_;
+}
+
+bool ChromeContentRendererClient::
+    IsContentBasedFingerprintingProtectionEnabledForMetrics() {
+  return content_based_fingerprinting_protection_enabled_for_metrics_;
 }
 
 scoped_refptr<const subresource_filter::MemoryMappedRuleset>
