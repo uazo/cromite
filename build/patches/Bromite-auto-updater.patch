@@ -21,12 +21,13 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/endpoint_fetcher/BUILD.gn      |  32 ++
  chrome/browser/endpoint_fetcher/DEPS          |   3 +
  chrome/browser/endpoint_fetcher/OWNERS        |   1 +
- .../endpoint_fetcher_android.cc               | 149 +++++++++
- .../endpoint_fetcher/EndpointFetcher.java     | 116 +++++++
+ .../endpoint_fetcher_android.cc               | 107 +++++++
+ .../endpoint_fetcher/EndpointFetcher.java     |  63 ++++
  .../EndpointHeaderResponse.java               |  31 ++
  .../endpoint_fetcher/EndpointResponse.java    |  30 ++
  .../flags/android/chrome_feature_list.cc      |   1 +
  .../browser/flags/ChromeFeatureList.java      |   1 +
+ .../access_code_cast_discovery_interface.cc   |   2 +-
  chrome/browser/omaha/android/BUILD.gn         |   3 +
  .../chrome/browser/omaha/OmahaPrefUtils.java  |  52 +++-
  .../chrome/browser/omaha/UpdateConfigs.java   |  27 +-
@@ -34,15 +35,22 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/omaha/VersionNumberGetter.java    |   4 +-
  .../omaha/inline/InlineUpdateController.java  |  57 ++++
  .../safety_hub/SafetyHubFetchService.java     |   5 -
+ .../browser/save_to_drive/drive_uploader.cc   |   2 +-
  .../strings/android_chrome_strings.grd        |  23 +-
- .../ui/lens/lens_overlay_query_controller.cc  |   1 +
- .../endpoint_fetcher/endpoint_fetcher.cc      | 125 ++++++--
+ .../ui/lens/lens_overlay_query_controller.cc  |   2 +-
+ components/commerce/core/account_checker.cc   |   2 +-
+ .../core/compare/cluster_server_proxy.cc      |   2 +-
+ .../product_specifications_server_proxy.cc    |   2 +-
+ .../subscriptions_server_proxy.cc             |   2 +-
+ .../data_sharing_network_loader_impl.cc       |   2 +-
+ .../internal/preview_server_proxy.cc          |   2 +-
+ .../endpoint_fetcher/endpoint_fetcher.cc      | 127 ++++++--
  .../endpoint_fetcher/endpoint_fetcher.h       |  28 +-
- components/manta/base_provider.cc             |   1 +
+ components/manta/base_provider.cc             |   4 +-
  .../composebox/composebox_query_controller.cc |   2 +-
  .../Bromite-auto-updater.inc                  |   3 +
  .../Bromite-auto-updater.inc                  |   1 +
- 34 files changed, 1239 insertions(+), 94 deletions(-)
+ 42 files changed, 1154 insertions(+), 106 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/CromiteUpdateStatusProvider.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/BromiteInlineUpdateController.java
  create mode 100644 chrome/browser/endpoint_fetcher/BUILD.gn
@@ -746,7 +754,7 @@ diff --git a/chrome/browser/endpoint_fetcher/endpoint_fetcher_android.cc b/chrom
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/endpoint_fetcher/endpoint_fetcher_android.cc
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,107 @@
 +// Copyright 2019 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -800,48 +808,6 @@ new file mode 100644
 +                       std::move(endpoint_response->redirect_url))));
 +}
 +}  // namespace
-+
-+// TODO(crbug.com/1077537) Create a KeyProvider so
-+// we can have one centralized API.
-+
-+static void JNI_EndpointFetcher_NativeFetchOAuth(
-+    JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jprofile,
-+    const base::android::JavaParamRef<jstring>& joauth_consumer_name,
-+    const base::android::JavaParamRef<jstring>& jurl,
-+    const base::android::JavaParamRef<jstring>& jhttps_method,
-+    const base::android::JavaParamRef<jstring>& jcontent_type,
-+    const base::android::JavaParamRef<jobjectArray>& jscopes,
-+    const base::android::JavaParamRef<jstring>& jpost_data,
-+    jlong jtimeout,
-+    jint jannotation_hash_code,
-+    const base::android::JavaParamRef<jobject>& jcallback) {
-+  std::vector<std::string> scopes;
-+  base::android::AppendJavaStringArrayToStringVector(env, jscopes, &scopes);
-+  auto endpoint_fetcher = std::make_unique<endpoint_fetcher::EndpointFetcher>(
-+      Profile::FromJavaObject(jprofile)
-+          ->GetDefaultStoragePartition()
-+          ->GetURLLoaderFactoryForBrowserProcess(),
-+      base::android::ConvertJavaStringToUTF8(env, joauth_consumer_name),
-+      GURL(base::android::ConvertJavaStringToUTF8(env, jurl)),
-+      base::android::ConvertJavaStringToUTF8(env, jhttps_method),
-+      base::android::ConvertJavaStringToUTF8(env, jcontent_type), scopes,
-+      base::Milliseconds(jtimeout), base::android::ConvertJavaStringToUTF8(env, jpost_data),
-+      net::NetworkTrafficAnnotationTag::FromJavaAnnotation(
-+          jannotation_hash_code),
-+      IdentityManagerFactory::GetForProfile(
-+          Profile::FromJavaObject(jprofile)),
-+      // TODO(crbug.com/1466445): ConsentLevel::kSync is deprecated and should
-+      //     be removed. See ConsentLevel::kSync documentation for details.
-+      signin::ConsentLevel::kSync);
-+  auto* const endpoint_fetcher_ptr = endpoint_fetcher.get();
-+  endpoint_fetcher_ptr->Fetch(
-+      base::BindOnce(&OnEndpointFetcherComplete,
-+                     base::android::ScopedJavaGlobalRef<jobject>(jcallback),
-+                     // unique_ptr endpoint_fetcher is passed until the callback
-+                     // to ensure its lifetime across the request.
-+                     std::move(endpoint_fetcher)));
-+}
 +
 +static void JNI_EndpointFetcher_NativeFetchWithNoAuth(
 +    JNIEnv* env,
@@ -900,7 +866,7 @@ diff --git a/chrome/browser/endpoint_fetcher/java/src/org/chromium/chrome/browse
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/endpoint_fetcher/java/src/org/chromium/chrome/browser/endpoint_fetcher/EndpointFetcher.java
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,63 @@
 +// Copyright 2019 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -928,47 +894,6 @@ new file mode 100644
 +public final class EndpointFetcher {
 +    private EndpointFetcher() {}
 +
-+    /**
-+     * Calls an endpoint using OAuth and returns the response via a callback
-+     * @param callback callback function response is returned in
-+     * @param profile profile via which the endpoint is called
-+     * @param oathConsumerName consumer name for OAuth
-+     * @param url endpoint URL called
-+     * @param httpsMethod the HTTPS method used e.g. "GET" or "POST"
-+     * @param contentType the content type e.g. "application/json"
-+     * @param scopes scopes used as part of authentication
-+     * @param postData data for a "POST" request
-+     * @param timeout time after which the request will terminate in the event a response hasn't
-+     *         been received
-+     */
-+    @MainThread
-+    public static void fetchUsingOAuth(
-+            Callback<EndpointResponse> callback,
-+            Profile profile,
-+            String oathConsumerName,
-+            String url,
-+            String httpsMethod,
-+            String contentType,
-+            String[] scopes,
-+            String postData,
-+            long timeout,
-+            NetworkTrafficAnnotationTag annotation) {
-+        // EndpointFetcher currently does not support incognito mode
-+        assert !profile.isOffTheRecord();
-+        EndpointFetcherJni.get()
-+                .nativeFetchOAuth(
-+                        profile,
-+                        oathConsumerName,
-+                        url,
-+                        httpsMethod,
-+                        contentType,
-+                        scopes,
-+                        postData,
-+                        timeout,
-+                        annotation.getHashCode(),
-+                        callback);
-+    }
-+
 +    @MainThread
 +    public static void nativeHeadWithNoAuth(
 +            Callback<EndpointHeaderResponse> callback, Profile profile,
@@ -989,18 +914,6 @@ new file mode 100644
 +
 +    @NativeMethods
 +    public interface Natives {
-+        void nativeFetchOAuth(
-+                Profile profile,
-+                String oathConsumerName,
-+                String url,
-+                String httpsMethod,
-+                String contentType,
-+                String[] scopes,
-+                String postData,
-+                long timeout,
-+                int annotationHashCode,
-+                Callback<EndpointResponse> callback);
-+
 +        void nativeFetchWithNoAuth(
 +                Profile profile,
 +                String url,
@@ -1110,6 +1023,18 @@ diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/f
      public static final String INSTANCE_SWITCHER_V2 = "InstanceSwitcherV2";
      public static final String IP_PROTECTION_UX = "IpProtectionUx";
      public static final String KEYBOARD_ESC_BACK_NAVIGATION = "KeyboardEscBackNavigation";
+diff --git a/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc b/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc
+--- a/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc
++++ b/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc
+@@ -270,7 +270,7 @@ AccessCodeCastDiscoveryInterface::CreateEndpointFetcher(
+           .SetOauthScopes(discovery_scopes)
+           .SetOauthConsumerName(kDiscoveryOAuthConsumerName)
+           .SetPostData(kEmptyPostData)
+-          .Build());
++          .Build(), kTrafficAnnotation);
+ }
+ 
+ void AccessCodeCastDiscoveryInterface::ValidateDiscoveryAccessCode(
 diff --git a/chrome/browser/omaha/android/BUILD.gn b/chrome/browser/omaha/android/BUILD.gn
 --- a/chrome/browser/omaha/android/BUILD.gn
 +++ b/chrome/browser/omaha/android/BUILD.gn
@@ -1677,6 +1602,18 @@ diff --git a/chrome/browser/safety_hub/android/java/src/org/chromium/chrome/brow
      }
  
      /** See {@link ChromeActivitySessionTracker#onForegroundSessionStart()}. */
+diff --git a/chrome/browser/save_to_drive/drive_uploader.cc b/chrome/browser/save_to_drive/drive_uploader.cc
+--- a/chrome/browser/save_to_drive/drive_uploader.cc
++++ b/chrome/browser/save_to_drive/drive_uploader.cc
+@@ -288,7 +288,7 @@ DriveUploader::CreateEndpointFetcher(
+   return std::make_unique<endpoint_fetcher::EndpointFetcher>(
+       /*url_loader_factory=*/url_loader_factory_.get(),
+       /*identity_manager=*/identity_manager_,
+-      /*request_params=*/std::move(request_params));
++      /*request_params=*/std::move(request_params), kTrafficAnnotationTag);
+ }
+ 
+ DriveUploaderType DriveUploader::get_drive_uploader_type() const {
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
@@ -1727,14 +1664,87 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 diff --git a/chrome/browser/ui/lens/lens_overlay_query_controller.cc b/chrome/browser/ui/lens/lens_overlay_query_controller.cc
 --- a/chrome/browser/ui/lens/lens_overlay_query_controller.cc
 +++ b/chrome/browser/ui/lens/lens_overlay_query_controller.cc
-@@ -712,6 +712,7 @@ LensOverlayQueryController::CreateEndpointFetcher(
-       /*url_loader_factory=*/profile_
-           ? profile_->GetURLLoaderFactory().get()
-           : g_browser_process->shared_url_loader_factory(),
-+      kTrafficAnnotationTag,
-       /*identity_manager=*/nullptr,
-       EndpointFetcher::RequestParams::Builder(http_method,
-                                               kTrafficAnnotationTag)
+@@ -726,7 +726,7 @@ LensOverlayQueryController::CreateEndpointFetcher(
+           .SetTimeout(timeout)
+           .SetUrl(fetch_url)
+           .SetUploadProgressCallback(std::move(upload_progress_callback))
+-          .Build());
++          .Build(), kTrafficAnnotationTag);
+ }
+ 
+ void LensOverlayQueryController::SendLatencyGen204IfEnabled(
+diff --git a/components/commerce/core/account_checker.cc b/components/commerce/core/account_checker.cc
+--- a/components/commerce/core/account_checker.cc
++++ b/components/commerce/core/account_checker.cc
+@@ -331,7 +331,7 @@ std::unique_ptr<EndpointFetcher> AccountChecker::CreateEndpointFetcher(
+       .SetPostData(post_data);
+   MaybeUseAlternateShoppingServer(request_params);
+   return std::make_unique<EndpointFetcher>(
+-      url_loader_factory_, identity_manager_, request_params.Build());
++      url_loader_factory_, identity_manager_, request_params.Build(), annotation_tag);
+ }
+ 
+ }  // namespace commerce
+diff --git a/components/commerce/core/compare/cluster_server_proxy.cc b/components/commerce/core/compare/cluster_server_proxy.cc
+--- a/components/commerce/core/compare/cluster_server_proxy.cc
++++ b/components/commerce/core/compare/cluster_server_proxy.cc
+@@ -158,7 +158,7 @@ std::unique_ptr<EndpointFetcher> ClusterServerProxy::CreateEndpointFetcher(
+       .SetPostData(post_data);
+   commerce::MaybeUseAlternateShoppingServer(request_params);
+   return std::make_unique<EndpointFetcher>(
+-      url_loader_factory_, identity_manager_, request_params.Build());
++      url_loader_factory_, identity_manager_, request_params.Build(), kGetComparableProductsTrafficAnnotation);
+ }
+ 
+ void ClusterServerProxy::HandleCompareResponse(
+diff --git a/components/commerce/core/compare/product_specifications_server_proxy.cc b/components/commerce/core/compare/product_specifications_server_proxy.cc
+--- a/components/commerce/core/compare/product_specifications_server_proxy.cc
++++ b/components/commerce/core/compare/product_specifications_server_proxy.cc
+@@ -298,7 +298,7 @@ ProductSpecificationsServerProxy::CreateEndpointFetcher(
+       .SetPostData(post_data);
+   MaybeUseAlternateShoppingServer(request_params);
+   return std::make_unique<EndpointFetcher>(
+-      url_loader_factory_, identity_manager_, request_params.Build());
++      url_loader_factory_, identity_manager_, request_params.Build(), kShoppingListTrafficAnnotation);
+ }
+ 
+ std::optional<ProductSpecifications>
+diff --git a/components/commerce/core/subscriptions/subscriptions_server_proxy.cc b/components/commerce/core/subscriptions/subscriptions_server_proxy.cc
+--- a/components/commerce/core/subscriptions/subscriptions_server_proxy.cc
++++ b/components/commerce/core/subscriptions/subscriptions_server_proxy.cc
+@@ -304,7 +304,7 @@ SubscriptionsServerProxy::CreateEndpointFetcher(
+       .SetPostData(post_data);
+   MaybeUseAlternateShoppingServer(request_params);
+   return std::make_unique<EndpointFetcher>(
+-      url_loader_factory_, identity_manager_, request_params.Build());
++      url_loader_factory_, identity_manager_, request_params.Build(), annotation_tag);
+ }
+ 
+ void SubscriptionsServerProxy::HandleManageSubscriptionsResponses(
+diff --git a/components/data_sharing/internal/data_sharing_network_loader_impl.cc b/components/data_sharing/internal/data_sharing_network_loader_impl.cc
+--- a/components/data_sharing/internal/data_sharing_network_loader_impl.cc
++++ b/components/data_sharing/internal/data_sharing_network_loader_impl.cc
+@@ -78,7 +78,7 @@ DataSharingNetworkLoaderImpl::CreateEndpointFetcher(
+           .SetOauthScopes(scopes)
+           .SetOauthConsumerName(kOauthConsumerName)
+           .SetPostData(post_data)
+-          .Build());
++          .Build(), annotation_tag);
+ }
+ 
+ void DataSharingNetworkLoaderImpl::OnDownloadComplete(
+diff --git a/components/data_sharing/internal/preview_server_proxy.cc b/components/data_sharing/internal/preview_server_proxy.cc
+--- a/components/data_sharing/internal/preview_server_proxy.cc
++++ b/components/data_sharing/internal/preview_server_proxy.cc
+@@ -351,7 +351,7 @@ std::unique_ptr<EndpointFetcher> PreviewServerProxy::CreateEndpointFetcher(
+           .SetUrl(url)
+           .SetOauthScopes(std::vector<std::string>{kOAuthScope})
+           .SetOauthConsumerName(kOAuthName)
+-          .Build());
++          .Build(), kGetSharedDataPreviewTrafficAnnotation);
+ }
+ 
+ void PreviewServerProxy::HandleServerResponse(
 diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoint_fetcher/endpoint_fetcher.cc
 --- a/components/endpoint_fetcher/endpoint_fetcher.cc
 +++ b/components/endpoint_fetcher/endpoint_fetcher.cc
@@ -1777,8 +1787,9 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
  EndpointFetcher::EndpointFetcher(
      const scoped_refptr<network::SharedURLLoaderFactory>& url_loader_factory,
      signin::IdentityManager* identity_manager,
-+    const net::NetworkTrafficAnnotationTag& annotation_tag,
-     RequestParams request_params)
+-    RequestParams request_params)
++    RequestParams request_params,
++    const net::NetworkTrafficAnnotationTag& annotation_tag)
      : url_loader_factory_(url_loader_factory),
        identity_manager_(identity_manager),
 +      intercept_redirect_(false),
@@ -2031,14 +2042,24 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
 diff --git a/components/manta/base_provider.cc b/components/manta/base_provider.cc
 --- a/components/manta/base_provider.cc
 +++ b/components/manta/base_provider.cc
-@@ -156,6 +156,7 @@ std::unique_ptr<EndpointFetcher> BaseProvider::CreateEndpointFetcherForDemoMode(
-   return std::make_unique<EndpointFetcher>(
-       /*url_loader_factory=*/url_loader_factory_,
-       /*identity_manager=*/nullptr,
-+      annotation_tag,
-       EndpointFetcher::RequestParams::Builder(kHttpMethod, annotation_tag)
-           .SetAuthType(endpoint_fetcher::CHROME_API_KEY)
-           .SetUrl(url)
+@@ -145,7 +145,7 @@ std::unique_ptr<EndpointFetcher> BaseProvider::CreateEndpointFetcher(
+           .SetOauthScopes(scopes)
+           .SetOauthConsumerName(oauth_consumer_name)
+           .SetPostData(post_data)
+-          .Build());
++          .Build(), annotation_tag);
+ }
+ 
+ std::unique_ptr<EndpointFetcher> BaseProvider::CreateEndpointFetcherForDemoMode(
+@@ -163,7 +163,7 @@ std::unique_ptr<EndpointFetcher> BaseProvider::CreateEndpointFetcherForDemoMode(
+           .SetTimeout(timeout)
+           .SetPostData(post_data)
+           .SetChannel(version_info::Channel::STABLE)
+-          .Build());
++          .Build(), annotation_tag);
+ }
+ 
+ }  // namespace manta
 diff --git a/components/omnibox/composebox/composebox_query_controller.cc b/components/omnibox/composebox/composebox_query_controller.cc
 --- a/components/omnibox/composebox/composebox_query_controller.cc
 +++ b/components/omnibox/composebox/composebox_query_controller.cc
