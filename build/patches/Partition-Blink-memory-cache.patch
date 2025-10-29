@@ -20,9 +20,10 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../renderer/core/loader/image_loader.cc      |  3 +-
  .../platform/loader/fetch/memory_cache.cc     |  8 +--
  .../platform/loader/fetch/memory_cache.h      |  5 +-
- .../platform/loader/fetch/resource_fetcher.cc | 57 ++++++++++++++++---
- .../platform/loader/fetch/resource_fetcher.h  |  7 ++-
- 8 files changed, 64 insertions(+), 23 deletions(-)
+ .../platform/loader/fetch/resource_fetcher.cc | 62 +++++++++++++++----
+ .../platform/loader/fetch/resource_fetcher.h  | 10 ++-
+ .../platform/runtime_enabled_features.json5   |  2 +-
+ 9 files changed, 70 insertions(+), 27 deletions(-)
 
 diff --git a/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc b/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc
 --- a/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc
@@ -40,7 +41,7 @@ diff --git a/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc b
 diff --git a/third_party/blink/renderer/core/inspector/inspector_network_agent.cc b/third_party/blink/renderer/core/inspector/inspector_network_agent.cc
 --- a/third_party/blink/renderer/core/inspector/inspector_network_agent.cc
 +++ b/third_party/blink/renderer/core/inspector/inspector_network_agent.cc
-@@ -2658,7 +2658,7 @@ bool InspectorNetworkAgent::FetchResourceContent(Document* document,
+@@ -2676,7 +2676,7 @@ bool InspectorNetworkAgent::FetchResourceContent(Document* document,
    if (!cached_resource) {
      cached_resource = MemoryCache::Get()->ResourceForURL(
          url, document->Fetcher()->GetCacheIdentifier(
@@ -77,7 +78,7 @@ diff --git a/third_party/blink/renderer/core/loader/image_loader.cc b/third_part
 diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc b/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
 --- a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
 +++ b/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
-@@ -292,7 +292,7 @@ void MemoryCache::RemoveInternal(ResourceMap* resource_map,
+@@ -295,7 +295,7 @@ void MemoryCache::RemoveInternal(ResourceMap* resource_map,
  }
  
  bool MemoryCache::Contains(const Resource* resource) const {
@@ -86,7 +87,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc b/
      return false;
  
    const auto resource_maps_it =
-@@ -308,13 +308,9 @@ bool MemoryCache::Contains(const Resource* resource) const {
+@@ -311,13 +311,9 @@ bool MemoryCache::Contains(const Resource* resource) const {
    return resource == resources_it->value->GetResource();
  }
  
@@ -115,7 +116,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.h b/t
  
    void Add(Resource*);
    void Remove(Resource*);
-@@ -163,6 +160,8 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
+@@ -168,6 +165,8 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
        base::MemoryPressureListener::MemoryPressureLevel) override;
  
   private:
@@ -127,37 +128,37 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.h b/t
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.cc
-@@ -982,7 +982,8 @@ Resource* ResourceFetcher::CreateResourceForStaticData(
-   }
+@@ -1025,7 +1025,8 @@ Resource* ResourceFetcher::CreateResourceForStaticData(
  
-   const String cache_identifier = GetCacheIdentifier(
--      url, params.GetResourceRequest().GetSkipServiceWorker());
-+      url, params.GetResourceRequest().GetSkipServiceWorker(),
-+      params.GetResourceRequest());
+   const String cache_identifier =
+       GetCacheIdentifier(factory.GetType(), url,
+-                         params.GetResourceRequest().GetSkipServiceWorker());
++                         params.GetResourceRequest().GetSkipServiceWorker(),
++                         params.GetResourceRequest());
+ 
    // Most off-main-thread resource fetches use Resource::kRaw and don't reach
    // this point, but off-main-thread module fetches might.
-   if (IsMainThread()) {
-@@ -1386,7 +1387,8 @@ Resource* ResourceFetcher::RequestResource(FetchParameters& params,
-           params.Url(),
-           GetCacheIdentifier(
-               params.Url(),
--              params.GetResourceRequest().GetSkipServiceWorker()));
-+              params.GetResourceRequest().GetSkipServiceWorker(),
-+              params.GetResourceRequest()));
-       if (resource) {
-         policy = DetermineRevalidationPolicy(resource_type, params, *resource,
-                                              is_static_data);
-@@ -1699,7 +1701,8 @@ Resource* ResourceFetcher::CreateResourceForLoading(
+@@ -1459,7 +1460,8 @@ Resource* ResourceFetcher::RequestResource(FetchParameters& params,
+     } else if (IsMainThread()) {
+       const String cache_identifier = GetCacheIdentifier(
+           resource_type, params.GetResourceRequest().Url(),
+-          params.GetResourceRequest().GetSkipServiceWorker());
++          params.GetResourceRequest().GetSkipServiceWorker(),
++          params.GetResourceRequest());
+ 
+       resource =
+           MemoryCache::Get()->ResourceForURL(params.Url(), cache_identifier);
+@@ -1783,7 +1785,8 @@ Resource* ResourceFetcher::CreateResourceForLoading(
      const ResourceFactory& factory) {
    const String cache_identifier =
-       GetCacheIdentifier(params.GetResourceRequest().Url(),
+       GetCacheIdentifier(factory.GetType(), params.GetResourceRequest().Url(),
 -                         params.GetResourceRequest().GetSkipServiceWorker());
 +                         params.GetResourceRequest().GetSkipServiceWorker(),
 +                         params.GetResourceRequest());
    DCHECK(!IsMainThread() || params.IsStaleRevalidation() ||
           !MemoryCache::Get()->ResourceForURL(params.GetResourceRequest().Url(),
                                               cache_identifier));
-@@ -2825,11 +2828,47 @@ void ResourceFetcher::UpdateImagePrioritiesAndSpeculativeDecodes() {
+@@ -2923,11 +2926,47 @@ void ResourceFetcher::UpdateImagePrioritiesAndSpeculativeDecodes() {
  }
  
  String ResourceFetcher::GetCacheIdentifier(const KURL& url,
@@ -210,7 +211,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
    }
  
    // Requests that can be satisfied via `archive_` (i.e. MHTML) or
-@@ -2844,7 +2883,7 @@ String ResourceFetcher::GetCacheIdentifier(const KURL& url,
+@@ -2942,12 +2981,13 @@ String ResourceFetcher::GetCacheIdentifier(const KURL& url,
      return bundle->GetCacheIdentifier();
    }
  
@@ -218,11 +219,27 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
 +  return origin_url;
  }
  
+ String ResourceFetcher::GetCacheIdentifier(ResourceType type,
+                                            const KURL& url,
+-                                           bool skip_service_worker) const {
++                                           bool skip_service_worker,
++                                           const ResourceRequest& resource_request) const {
+   // For SVG resource documents, use the SVG-specific cache identifier when the
+   // feature is enabled and a cache identifier is available from the fetch
+   // context.
+@@ -2960,7 +3000,7 @@ String ResourceFetcher::GetCacheIdentifier(ResourceType type,
+   }
+ 
+   // Fallback to the standard cache identifier logic.
+-  return GetCacheIdentifier(url, skip_service_worker);
++  return GetCacheIdentifier(url, skip_service_worker, resource_request);
+ }
+ 
  std::optional<base::UnguessableToken>
 diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
 --- a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
 +++ b/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
-@@ -287,7 +287,12 @@ class PLATFORM_EXPORT ResourceFetcher
+@@ -287,10 +287,16 @@ class PLATFORM_EXPORT ResourceFetcher
    // `url` is used for finding a matching WebBundle.
    // If `skip_service_worker` is true, the identifier won't be a ServiceWorker's
    // identifier to keep the cache separated.
@@ -233,7 +250,24 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h
 +    scoped_refptr<const blink::SecurityOrigin> origin) const;
 +  String GetCacheIdentifier(const KURL& url, bool skip_service_worker,
 +    const String origin_url) const;
+   String GetCacheIdentifier(ResourceType type,
+                             const KURL& url,
+-                            bool skip_service_worker) const;
++                            bool skip_service_worker,
++                            const ResourceRequest& resource_request) const;
  
    // If `url` exists as a resource in a subresource bundle in this frame,
    // returns its UnguessableToken; otherwise, returns std::nullopt.
+diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+--- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
++++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+@@ -4886,7 +4886,7 @@
+     },
+     {
+       name: "SvgPartitionSVGDocumentResourcesInMemoryCache",
+-      status: "stable",
++      status: "experimental",
+     },
+     {
+       name: "SvgScriptElementAsyncAttribute",
 --

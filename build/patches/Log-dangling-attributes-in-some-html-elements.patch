@@ -13,7 +13,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../blink/renderer/core/dom/document.cc       | 18 +++++++++++++++
  .../blink/renderer/core/dom/element.cc        | 20 ++++++++++++++++-
  third_party/blink/renderer/core/dom/element.h |  3 ++-
- .../editing/serializers/markup_formatter.cc   |  9 ++++++++
+ .../editing/serializers/markup_formatter.cc   | 12 ++++++++++
  .../core/html/forms/html_form_element.cc      |  2 +-
  .../renderer/core/html/html_base_element.cc   |  6 +++++
  .../renderer/core/html/html_base_element.h    |  2 ++
@@ -22,8 +22,8 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../renderer/core/html/html_iframe_element.h  |  2 ++
  .../core/loader/frame_load_request.cc         |  9 ++++++++
  .../blink/renderer/core/page/frame_tree.cc    | 22 +++++++++++++++++++
- .../platform/runtime_enabled_features.json5   | 10 +++++++--
- 14 files changed, 132 insertions(+), 5 deletions(-)
+ .../platform/runtime_enabled_features.json5   |  6 +++++
+ 14 files changed, 133 insertions(+), 3 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Log-dangling-attributes-in-some-html-elements.inc
 
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/Log-dangling-attributes-in-some-html-elements.inc b/cromite_flags/chrome/browser/about_flags_cc/Log-dangling-attributes-in-some-html-elements.inc
@@ -42,7 +42,7 @@ new file mode 100644
 diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink/renderer/core/dom/document.cc
 --- a/third_party/blink/renderer/core/dom/document.cc
 +++ b/third_party/blink/renderer/core/dom/document.cc
-@@ -5068,6 +5068,14 @@ void Document::ProcessBaseElement() {
+@@ -5092,6 +5092,14 @@ void Document::ProcessBaseElement() {
    KURL base_element_url;
    if (href) {
      String stripped_href = StripLeadingAndTrailingHTMLSpaces(*href);
@@ -57,7 +57,7 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
      if (!stripped_href.empty())
        base_element_url = KURL(FallbackBaseURL(), stripped_href);
    }
-@@ -5085,6 +5093,14 @@ void Document::ProcessBaseElement() {
+@@ -5109,6 +5117,14 @@ void Document::ProcessBaseElement() {
          !GetExecutionContext()->GetSecurityOrigin()->CanRequest(
              base_element_url)) {
        UseCounter::Count(*this, WebFeature::kBaseWithCrossOriginHref);
@@ -72,7 +72,7 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
      }
    }
  
-@@ -5115,6 +5131,8 @@ void Document::ProcessBaseElement() {
+@@ -5139,6 +5155,8 @@ void Document::ProcessBaseElement() {
      if (target->Contains('<'))
        UseCounter::Count(*this, WebFeature::kBaseWithOpenBracketInTarget);
      base_target_ = *target;
@@ -84,7 +84,7 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@ -3673,8 +3673,26 @@ void Element::StripScriptingAttributes(
+@@ -3729,8 +3729,26 @@ void Element::StripScriptingAttributes(
    attribute_vector.Shrink(destination);
  }
  
@@ -115,7 +115,7 @@ diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/
 diff --git a/third_party/blink/renderer/core/dom/element.h b/third_party/blink/renderer/core/dom/element.h
 --- a/third_party/blink/renderer/core/dom/element.h
 +++ b/third_party/blink/renderer/core/dom/element.h
-@@ -772,7 +772,8 @@ class CORE_EXPORT Element : public ContainerNode, public Animatable {
+@@ -777,7 +777,8 @@ class CORE_EXPORT Element : public ContainerNode, public Animatable {
    virtual bool HasLegalLinkAttribute(const QualifiedName&) const;
  
    // Only called by the parser immediately after element construction.
@@ -131,26 +131,29 @@ diff --git a/third_party/blink/renderer/core/editing/serializers/markup_formatte
 @@ -28,6 +28,8 @@
  #include "third_party/blink/renderer/core/editing/serializers/markup_formatter.h"
  
- #include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-shared.h"
+ #include "third_party/blink/renderer/core/dom/cdata_section.h"
 +#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 +#include "third_party/blink/renderer/core/inspector/console_message.h"
- #include "third_party/blink/renderer/core/dom/cdata_section.h"
  #include "third_party/blink/renderer/core/dom/comment.h"
  #include "third_party/blink/renderer/core/dom/document.h"
-@@ -214,6 +216,13 @@ void MarkupFormatter::AppendAttributeValue(StringBuilder& result,
-                                            const Document& document) {
-   if (attribute.Contains('<') || attribute.Contains('>')) {
-     document.CountUse(mojom::blink::WebFeature::kAttributeValueContainsLtOrGt);
-+    if (RuntimeEnabledFeatures::LogDanglingAttributesEnabled()) {
-+      document.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
-+              mojom::ConsoleMessageSource::kSecurity,
-+              mojom::ConsoleMessageLevel::kInfo,
-+              "Bromite Dangling Markup Prevention: '" + attribute +
-+                  "' is not allowed as parameter value."));
-+    }
-   }
- 
-   EntityMask entity_mask =
+ #include "third_party/blink/renderer/core/dom/document_fragment.h"
+@@ -208,6 +210,16 @@ void MarkupFormatter::AppendEndMarkup(StringBuilder& result,
+ void MarkupFormatter::AppendAttributeValue(StringBuilder& result,
+                                            const String& attribute,
+                                            bool document_is_html) {
++  // https://chromium-review.googlesource.com/c/chromium/src/+/6905283
++  // if (RuntimeEnabledFeatures::LogDanglingAttributesEnabled()) {
++  //   if (attribute.Contains('<') || attribute.Contains('>')) {
++  //     document.AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
++  //             mojom::ConsoleMessageSource::kSecurity,
++  //             mojom::ConsoleMessageLevel::kInfo,
++  //             "Bromite Dangling Markup Prevention: '" + attribute +
++  //                 "' is not allowed as parameter value."));
++  //   }
++  // }
+   EntityMask entity_mask = document_is_html ? kEntityMaskInHTMLAttributeValue
+                                             : kEntityMaskInAttributeValue;
+   AppendCharactersReplacingEntities(result, attribute, entity_mask);
 diff --git a/third_party/blink/renderer/core/html/forms/html_form_element.cc b/third_party/blink/renderer/core/html/forms/html_form_element.cc
 --- a/third_party/blink/renderer/core/html/forms/html_form_element.cc
 +++ b/third_party/blink/renderer/core/html/forms/html_form_element.cc
@@ -331,18 +334,7 @@ diff --git a/third_party/blink/renderer/core/page/frame_tree.cc b/third_party/bl
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -2039,8 +2039,8 @@
-       // Escapes "<" and ">" in attribute values. This was launched
-       // in M139, and this flag can be removed in M141.
-       // See: crbug.com/1175016
--      name: "EscapeLtGtInAttributes",
--      status: "stable",
-+      name: "EscapeLtGtInAttributes",  // enabled by default
-+      status: "stable",  // enabled by default
-     },
-     {
-       name: "EventTimingInteractionCount",
-@@ -3024,6 +3024,12 @@
+@@ -3091,6 +3091,12 @@
        name: "MacDisableCtrlHomeEnd",
        status: "stable",
      },
