@@ -1,0 +1,1012 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Thu, 6 Nov 2025 13:22:24 +0000
+Subject: Backport-v143-android-extensions-changes
+
+Enable support for anonymous browsing.
+Backport of bugid 7089957 extensions Use BrowserWindowInterface in ExtensionViewHost
+https://chromium-review.googlesource.com/c/chromium/src/+/7089957
+---
+ .../chrome/browser/ChromeTabbedActivity.java  |  58 +-------
+ .../chrome/browser/app/ChromeActivity.java    |  76 +++++++++++
+ .../customtabs/BaseCustomTabActivity.java     |   1 +
+ .../BaseCustomTabRootUiCoordinator.java       |   5 +
+ .../tabbed_mode/TabbedRootUiCoordinator.java  |   2 +
+ .../browser/toolbar/ToolbarManager.java       |   4 +
+ .../chrome/browser/ui/RootUiCoordinator.java  |   6 +
+ chrome/android/junit/BUILD.gn                 |   1 +
+ ...aseCustomTabRootUiCoordinatorUnitTest.java |   4 +
+ .../extensions/extension_view_host_factory.cc | 127 +++++++++---------
+ .../extensions/extension_view_host_factory.h  |  17 +--
+ chrome/browser/ui/android/extensions/BUILD.gn |   1 +
+ .../extension_action_popup_contents.cc        |   9 +-
+ .../ExtensionActionPopupContents.java         |  14 +-
+ chrome/browser/ui/android/toolbar/BUILD.gn    |   2 +
+ .../ExtensionActionListCoordinator.java       |  10 +-
+ .../ExtensionActionListMediator.java          |  16 ++-
+ .../ExtensionActionListMediatorTest.java      |  11 +-
+ .../ExtensionToolbarCoordinator.java          |   5 +
+ .../ExtensionToolbarCoordinatorImpl.java      |   4 +
+ 20 files changed, 225 insertions(+), 148 deletions(-)
+
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -292,12 +292,8 @@ import org.chromium.chrome.browser.ui.IncognitoRestoreAppLaunchDrawBlockerFactor
+ import org.chromium.chrome.browser.ui.RootUiCoordinator;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
+ import org.chromium.chrome.browser.ui.browser_window.BrowserWindowType;
+-import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+-import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskTracker;
+-import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskTrackerFactory;
+ import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+-import org.chromium.chrome.browser.ui.extensions.windowing.ExtensionWindowControllerBridgeFactory;
+ import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarController;
+@@ -835,18 +831,7 @@ public class ChromeTabbedActivity extends ChromeActivity {
+             mTabModelNotificationDotManager.initWithNative(mTabModelSelector);
+             TabModel currentTabModel = mTabModelSelector.getCurrentModel();
+ 
+-            // Initialize ChromeAndroidTask.
+-            //
+-            // This needs to be done before any tab is added so that
+-            // TabModel#associateWithBrowserWindow() can be called in time for each tab to have the
+-            // same native SessionID as the native AndroidBrowserWindow managed by
+-            // ChromeAndroidTask.
+-            ChromeAndroidTask chromeAndroidTask = initializeChromeAndroidTask(currentTabModel);
+-            if (chromeAndroidTask != null) {
+-                currentTabModel.associateWithBrowserWindow(
+-                        chromeAndroidTask.getOrCreateNativeBrowserWindowPtr());
+-                initializeExtensionWindowControllerBridge(chromeAndroidTask);
+-            }
++            initializeChromeAndroidTask(BrowserWindowType.NORMAL, currentTabModel);
+ 
+             // For saving non-incognito tab closures for Recent Tabs.
+             boolean alwaysIncognito = AlwaysIncognitoLinkInterceptor.isAlwaysIncognito();
+@@ -1346,46 +1331,6 @@ public class ChromeTabbedActivity extends ChromeActivity {
+         }
+     }
+ 
+-    @Nullable
+-    private ChromeAndroidTask initializeChromeAndroidTask(TabModel currentTabModel) {
+-        try (TraceEvent e = TraceEvent.scoped("ChromeTabbedActivity.initializeChromeAndroidTask")) {
+-            var chromeAndroidTaskTracker = ChromeAndroidTaskTrackerFactory.getInstance();
+-            if (chromeAndroidTaskTracker == null) {
+-                return null;
+-            }
+-
+-            var activityWindowAndroid = getWindowAndroid();
+-            assert activityWindowAndroid != null
+-                    : "ChromeAndroidTask must be initialized after Java WindowAndroid is created.";
+-
+-            int pendingIdExtraValue =
+-                    IntentUtils.safeGetIntExtra(
+-                            getIntent(),
+-                            ChromeAndroidTaskTracker.EXTRA_PENDING_BROWSER_WINDOW_TASK_ID,
+-                            /* defaultValue= */ -1);
+-            OptionalInt pendingId =
+-                    pendingIdExtraValue == -1
+-                            ? OptionalInt.empty()
+-                            : OptionalInt.of(pendingIdExtraValue);
+-
+-            return chromeAndroidTaskTracker.obtainTask(
+-                    BrowserWindowType.NORMAL, activityWindowAndroid, currentTabModel, pendingId);
+-        }
+-    }
+-
+-    private void initializeExtensionWindowControllerBridge(
+-            @Nullable ChromeAndroidTask chromeAndroidTask) {
+-        if (chromeAndroidTask == null) {
+-            return;
+-        }
+-
+-        var extensionWindowControllerBridge =
+-                ExtensionWindowControllerBridgeFactory.create(chromeAndroidTask);
+-        if (extensionWindowControllerBridge != null) {
+-            chromeAndroidTask.addFeature(extensionWindowControllerBridge);
+-        }
+-    }
+-
+     private void maybeCreateIncognitoTabSnapshotController() {
+         try (TraceEvent e =
+                 TraceEvent.scoped(
+@@ -2976,6 +2921,7 @@ public class ChromeTabbedActivity extends ChromeActivity {
+                 mLayoutStateProviderSupplier,
+                 getBrowserControlsManager(),
+                 getWindowAndroid(),
++                getChromeAndroidTaskSupplier(),
+                 getLifecycleDispatcher(),
+                 getLayoutManagerSupplier(),
+                 /* menuOrKeyboardActionController= */ this,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
+@@ -52,6 +52,7 @@ import org.chromium.base.CommandLine;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.DeviceInfo;
+ import org.chromium.base.InputHintChecker;
++import org.chromium.base.IntentUtils;
+ import org.chromium.base.Log;
+ import org.chromium.base.PowerMonitor;
+ import org.chromium.base.TraceEvent;
+@@ -61,6 +62,7 @@ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.base.shared_preferences.SharedPreferencesManager;
+ import org.chromium.base.supplier.ObservableSupplier;
+ import org.chromium.base.supplier.ObservableSupplierImpl;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.base.supplier.OneshotSupplierImpl;
+ import org.chromium.base.supplier.UnownedUserDataSupplier;
+ import org.chromium.chrome.R;
+@@ -203,9 +205,15 @@ import org.chromium.chrome.browser.ui.RootUiCoordinator;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuBlocker;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuDelegate;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
++import org.chromium.chrome.browser.ui.browser_window.BrowserWindowType;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskFeature;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskTracker;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTaskTrackerFactory;
+ import org.chromium.chrome.browser.ui.device_lock.MissingDeviceLockLauncher;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
++import org.chromium.chrome.browser.ui.extensions.windowing.ExtensionWindowControllerBridgeFactory;
+ import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
+ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager.SnackbarManageable;
+@@ -272,6 +280,7 @@ import org.chromium.webapk.lib.client.WebApkNavigationClient;
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.function.Supplier;
++import java.util.OptionalInt;
+ 
+ /**
+  * A {@link AsyncInitializationActivity} that builds and manages a {@link CompositorViewHolder} and
+@@ -440,6 +449,9 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+ 
+     private @Nullable TabStateThemeResourceProvider mThemeResourceProvider;
+ 
++    private final OneshotSupplierImpl<ChromeAndroidTask> mChromeAndroidTaskSupplier =
++            new OneshotSupplierImpl<>();
++
+     protected ChromeActivity() {
+         mManualFillingComponentSupplier.set(ManualFillingComponentFactory.createComponent());
+         sNextActivityId++;
+@@ -1018,6 +1030,70 @@ public abstract class ChromeActivity extends AsyncInitializationActivity
+         TraceEvent.end("ChromeActivity:CompositorInitialization");
+     }
+ 
++    /**
++     * Initializes {@link ChromeAndroidTask} and adds {@link ChromeAndroidTaskFeature}s.
++     *
++     * <p>This method is for a subclass of {@link ChromeActivity} that needs windowing support on
++     * Java and/or native side(s).
++     *
++     * <p>If a subclass of {@link ChromeActivity} needs {@link ChromeAndroidTask}, it should call
++     * this method as early as possible (after the native library is loaded). For example, this
++     * method should be called before any tab is added so that {@link
++     * TabModel#associateWithBrowserWindow} can be called in time for each tab to have the same
++     * native SessionID as the native {@code AndroidBrowserWindow}.
++     *
++     * @param browserWindowType Type of the browser window (normal, popup, etc.)
++     * @param currentTabModel The current {@link TabModel} for this {@code Activity}.
++     */
++    protected final void initializeChromeAndroidTask(
++            @BrowserWindowType int browserWindowType, TabModel currentTabModel) {
++        try (TraceEvent e = TraceEvent.scoped("ChromeActivity.initializeChromeAndroidTask")) {
++            // 1. Obtain a ChromeAndroidTask that represents the Task (window) for this Activity.
++            var chromeAndroidTaskTracker = ChromeAndroidTaskTrackerFactory.getInstance();
++            if (chromeAndroidTaskTracker == null) {
++                return;
++            }
++
++            var activityWindowAndroid = getWindowAndroid();
++            assert activityWindowAndroid != null
++                    : "ChromeAndroidTask must be initialized after Java WindowAndroid is created.";
++
++            int pendingIdExtraValue =
++                    IntentUtils.safeGetIntExtra(
++                            getIntent(),
++                            ChromeAndroidTaskTracker.EXTRA_PENDING_BROWSER_WINDOW_TASK_ID,
++                            /* defaultValue= */ -1);
++            OptionalInt pendingId =
++                    pendingIdExtraValue == -1
++                            ? OptionalInt.empty()
++                            : OptionalInt.of(pendingIdExtraValue);
++
++            var chromeAndroidTask =
++                    chromeAndroidTaskTracker.obtainTask(
++                            browserWindowType, activityWindowAndroid, currentTabModel, pendingId);
++
++            // 2. Associate the current TabModel with ChromeAndroidTask's underlying native
++            // AndroidBrowserWindow object.
++            currentTabModel.associateWithBrowserWindow(
++                    chromeAndroidTask.getOrCreateNativeBrowserWindowPtr());
++
++            // 3. Add windowing features.
++            ChromeAndroidTaskFeature extensionWindowControllerBridge =
++                    ExtensionWindowControllerBridgeFactory.create(chromeAndroidTask);
++            if (extensionWindowControllerBridge != null) {
++                chromeAndroidTask.addFeature(extensionWindowControllerBridge);
++            }
++
++            // 4. Make the ChromeAndroidTask available via OneshotSupplier.
++            mChromeAndroidTaskSupplier.set(chromeAndroidTask);
++        }
++    }
++
++    /** Returns an {@link OneshotSupplier} for {@link ChromeAndroidTask}. */
++    protected final OneshotSupplier<ChromeAndroidTask> getChromeAndroidTaskSupplier() {
++        return mChromeAndroidTaskSupplier;
++    }
++
+     @Override
+     public void onStartWithNative() {
+         assert mNativeInitialized : "onStartWithNative was called before native was initialized.";
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java
+@@ -361,6 +361,7 @@ public abstract class BaseCustomTabActivity extends ChromeActivity {
+                         getTabModelSelectorSupplier(),
+                         getBrowserControlsManager(),
+                         getWindowAndroid(),
++                        getChromeAndroidTaskSupplier(),
+                         getLifecycleDispatcher(),
+                         getLayoutManagerSupplier(),
+                         /* menuOrKeyboardActionController= */ this,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinator.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinator.java
+@@ -30,6 +30,7 @@ import org.chromium.base.metrics.RecordHistogram;
+ import org.chromium.base.supplier.ObservableSupplier;
+ import org.chromium.base.supplier.ObservableSupplierImpl;
+ import org.chromium.base.supplier.OneShotCallback;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.base.supplier.OneshotSupplierImpl;
+ import org.chromium.base.supplier.SupplierUtils;
+ import org.chromium.chrome.R;
+@@ -98,6 +99,7 @@ import org.chromium.chrome.browser.ui.RootUiCoordinator;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuBlocker;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuDelegate;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeUtils;
+ import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
+@@ -164,6 +166,7 @@ public class BaseCustomTabRootUiCoordinator extends RootUiCoordinator {
+      * @param tabModelSelectorSupplier Supplies the {@link TabModelSelector}.
+      * @param browserControlsManager Manages the browser controls.
+      * @param windowAndroid The current {@link WindowAndroid}.
++     * @param chromeAndroidTaskSupplier Supplies an {@link ChromeAndroidTask}.
+      * @param activityLifecycleDispatcher Allows observation of the activity lifecycle.
+      * @param layoutManagerSupplier Supplies the {@link LayoutManager}.
+      * @param menuOrKeyboardActionController Controls the menu or keyboard action controller.
+@@ -204,6 +207,7 @@ public class BaseCustomTabRootUiCoordinator extends RootUiCoordinator {
+             @NonNull ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
+             @NonNull BrowserControlsManager browserControlsManager,
+             @NonNull ActivityWindowAndroid windowAndroid,
++            @NonNull OneshotSupplier<ChromeAndroidTask> chromeAndroidTaskSupplier,
+             @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
+             @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
+             @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+@@ -249,6 +253,7 @@ public class BaseCustomTabRootUiCoordinator extends RootUiCoordinator {
+                 new OneshotSupplierImpl<>(),
+                 browserControlsManager,
+                 windowAndroid,
++                chromeAndroidTaskSupplier,
+                 activityLifecycleDispatcher,
+                 layoutManagerSupplier,
+                 menuOrKeyboardActionController,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
+@@ -411,6 +411,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+             @NonNull OneshotSupplier<LayoutStateProvider> layoutStateProviderOneshotSupplier,
+             @NonNull BrowserControlsManager browserControlsManager,
+             @NonNull ActivityWindowAndroid windowAndroid,
++            @NonNull OneshotSupplier chromeAndroidTaskSupplier,
+             @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
+             @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
+             @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+@@ -461,6 +462,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+                 layoutStateProviderOneshotSupplier,
+                 browserControlsManager,
+                 windowAndroid,
++                chromeAndroidTaskSupplier,
+                 activityLifecycleDispatcher,
+                 layoutManagerSupplier,
+                 menuOrKeyboardActionController,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/toolbar/ToolbarManager.java
+@@ -173,6 +173,7 @@ import org.chromium.chrome.browser.toolbar.top.tab_strip.TabStripTransitionCoord
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinator;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuDelegate;
+ import org.chromium.chrome.browser.ui.appmenu.MenuButtonDelegate;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+ import org.chromium.chrome.browser.ui.native_page.NativePage;
+ import org.chromium.chrome.browser.ui.system.StatusBarColorController;
+@@ -732,6 +733,7 @@ public class ToolbarManager
+      * @param omniboxFocusStateSupplier Supplier to access the focus state of the omnibox.
+      * @param promoShownOneshotSupplier Supplier for whether a promo was shown on startup.
+      * @param windowAndroid The {@link WindowAndroid} associated with the ToolbarManager.
++     * @param chromeAndroidTaskSupplier Supplier of the {@link ChromeAndroidTask}.
+      * @param isInOverviewModeSupplier Supplies whether the app is currently in overview mode.
+      * @param modalDialogManagerSupplier Supplies the {@link ModalDialogManager}.
+      * @param statusBarColorController The {@link StatusBarColorController} for the app.
+@@ -783,6 +785,7 @@ public class ToolbarManager
+             ObservableSupplier<Boolean> omniboxFocusStateSupplier,
+             OneshotSupplier<Boolean> promoShownOneshotSupplier,
+             WindowAndroid windowAndroid,
++            OneshotSupplier<ChromeAndroidTask> chromeAndroidTaskSupplier,
+             Supplier<Boolean> isInOverviewModeSupplier,
+             Supplier<ModalDialogManager> modalDialogManagerSupplier,
+             StatusBarColorController statusBarColorController,
+@@ -1103,6 +1106,7 @@ public class ToolbarManager
+                             mActivity,
+                             extensionToolbarStub,
+                             windowAndroid,
++                            chromeAndroidTaskSupplier,
+                             profileSupplier,
+                             tabProvider,
+                             mTabCreatorManager.getTabCreator(false),
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
+@@ -151,6 +151,7 @@ import org.chromium.chrome.browser.ui.appmenu.AppMenuCoordinatorFactory;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuDelegate;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuHandler;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuObserver;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.desktop_windowing.AppHeaderUtils;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeControllerCreator;
+@@ -245,6 +246,7 @@ public class RootUiCoordinator
+     protected @Nullable AppMenuCoordinator mAppMenuCoordinator;
+     private final MenuOrKeyboardActionController mMenuOrKeyboardActionController;
+     protected final ActivityWindowAndroid mWindowAndroid;
++    private final OneshotSupplier<ChromeAndroidTask> mChromeAndroidTaskSupplier;
+ 
+     protected final ActivityTabProvider mActivityTabProvider;
+     protected ObservableSupplier<ShareDelegate> mShareDelegateSupplier;
+@@ -382,6 +384,7 @@ public class RootUiCoordinator
+      * @param layoutStateProviderOneshotSupplier Supplier of the {@link LayoutStateProvider}.
+      * @param browserControlsManager Manages the browser controls.
+      * @param windowAndroid The current {@link WindowAndroid}.
++     * @param chromeAndroidTaskSupplier Supplies an {@link ChromeAndroidTask}.
+      * @param activityLifecycleDispatcher Allows observation of the activity lifecycle.
+      * @param layoutManagerSupplier Supplies the {@link LayoutManager}.
+      * @param menuOrKeyboardActionController Controls the menu or keyboard action controller.
+@@ -427,6 +430,7 @@ public class RootUiCoordinator
+             @NonNull OneshotSupplier<LayoutStateProvider> layoutStateProviderOneshotSupplier,
+             @NonNull BrowserControlsManager browserControlsManager,
+             @NonNull ActivityWindowAndroid windowAndroid,
++            @NonNull OneshotSupplier<ChromeAndroidTask> chromeAndroidTaskSupplier,
+             @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
+             @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
+             @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+@@ -459,6 +463,7 @@ public class RootUiCoordinator
+         mCallbackController = new CallbackController();
+         mActivity = activity;
+         mWindowAndroid = windowAndroid;
++        mChromeAndroidTaskSupplier = chromeAndroidTaskSupplier;
+         setupUnownedUserDataSuppliers();
+         mOnOmniboxFocusChangedListener = onOmniboxFocusChangedListener;
+         mBrowserControlsManager = browserControlsManager;
+@@ -1642,6 +1647,7 @@ public class RootUiCoordinator
+                             mOmniboxFocusStateSupplier,
+                             mPromoShownOneshotSupplier,
+                             mWindowAndroid,
++                            mChromeAndroidTaskSupplier,
+                             mIsInOverviewModeSupplier,
+                             mModalDialogManagerSupplier,
+                             mStatusBarColorController,
+diff --git a/chrome/android/junit/BUILD.gn b/chrome/android/junit/BUILD.gn
+--- a/chrome/android/junit/BUILD.gn
++++ b/chrome/android/junit/BUILD.gn
+@@ -207,6 +207,7 @@ if (is_android) {
+       "//chrome/browser/ui/android/signin:java",
+       "//chrome/browser/ui/android/theme:java",
+       "//chrome/browser/ui/android/toolbar:java",
++      "//chrome/browser/ui/browser_window/public/android:java",
+       "//chrome/browser/ui/messages/android:java",
+       "//chrome/browser/uid/android:java",
+       "//chrome/browser/url_constants/android:java",
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinatorUnitTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinatorUnitTest.java
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinatorUnitTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/customtabs/BaseCustomTabRootUiCoordinatorUnitTest.java
+@@ -39,6 +39,7 @@ import org.chromium.base.TimeUtils;
+ import org.chromium.base.UnownedUserDataHost;
+ import org.chromium.base.supplier.ObservableSupplier;
+ import org.chromium.base.supplier.ObservableSupplierImpl;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.Batch;
+ import org.chromium.base.test.util.Features.DisableFeatures;
+@@ -74,6 +75,7 @@ import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
+ import org.chromium.chrome.browser.tabmodel.TabModelSelector;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuBlocker;
+ import org.chromium.chrome.browser.ui.appmenu.AppMenuDelegate;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.edge_to_edge.EdgeToEdgeController;
+ import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
+ import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
+@@ -123,6 +125,7 @@ public final class BaseCustomTabRootUiCoordinatorUnitTest {
+             mBrowserStateBrowserControlsVisibilityDelegate;
+ 
+     @Mock private ActivityWindowAndroid mWindowAndroid;
++    @Mock private OneshotSupplier<ChromeAndroidTask> mChromeAndroidTask;
+     @Mock private ActivityLifecycleDispatcher mActivityLifecycleDispatcher;
+     @Mock private ObservableSupplier<LayoutManagerImpl> mLayoutManagerSupplier;
+     @Mock private MenuOrKeyboardActionController mMenuOrKeyboardActionController;
+@@ -196,6 +199,7 @@ public final class BaseCustomTabRootUiCoordinatorUnitTest {
+                         mTabModelSelectorSupplier,
+                         mBrowserControlsManager,
+                         mWindowAndroid,
++                        mChromeAndroidTask,
+                         mActivityLifecycleDispatcher,
+                         mLayoutManagerSupplier,
+                         mMenuOrKeyboardActionController,
+diff --git a/chrome/browser/extensions/extension_view_host_factory.cc b/chrome/browser/extensions/extension_view_host_factory.cc
+--- a/chrome/browser/extensions/extension_view_host_factory.cc
++++ b/chrome/browser/extensions/extension_view_host_factory.cc
+@@ -12,6 +12,7 @@
+ #include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/browser_finder.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/common/url_constants.h"
+ #include "content/public/browser/keyboard_event_processing_result.h"
+ #include "content/public/browser/web_contents.h"
+@@ -21,9 +22,9 @@
+ #include "extensions/common/manifest_handlers/incognito_info.h"
+ #include "extensions/common/mojom/view_type.mojom.h"
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_EXTENSIONS)
+ #include "chrome/browser/ui/browser.h"
+-#endif  // !BUILDFLAG(IS_ANDROID)
++#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+@@ -31,51 +32,7 @@ namespace extensions {
+ 
+ namespace {
+ 
+-#if BUILDFLAG(IS_ANDROID)
+-
+-// Delegate for ExtensionViewHost on Android.
+-class ExtensionViewHostDelegateAndroid : public ExtensionViewHost::Delegate {
+- public:
+-  ExtensionViewHostDelegateAndroid() = default;
+-  ExtensionViewHostDelegateAndroid(const ExtensionViewHostDelegateAndroid&) =
+-      delete;
+-  ExtensionViewHostDelegateAndroid& operator=(
+-      const ExtensionViewHostDelegateAndroid&) = delete;
+-  ~ExtensionViewHostDelegateAndroid() override = default;
+-
+-  content::WebContents* OpenURL(
+-      const content::OpenURLParams& params,
+-      base::OnceCallback<void(content::NavigationHandle&)>
+-          navigation_handle_callback) override {
+-    // TODO(cbrug.com/385987224): Implement this method for Android.
+-    NOTIMPLEMENTED();
+-    return nullptr;
+-  }
+-
+-  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
+-      content::WebContents* source,
+-      const input::NativeWebKeyboardEvent& event) override {
+-    // TODO(cbrug.com/385987224): Implement this method for Android.
+-    NOTIMPLEMENTED();
+-    return content::KeyboardEventProcessingResult::NOT_HANDLED;
+-  }
+-
+-  std::unique_ptr<content::EyeDropper> OpenEyeDropper(
+-      content::RenderFrameHost* frame,
+-      content::EyeDropperListener* listener) override {
+-    // TODO(cbrug.com/385987224): Implement this method for Android.
+-    NOTIMPLEMENTED();
+-    return nullptr;
+-  }
+-
+-  WindowController* GetExtensionWindowController() const override {
+-    // TODO(cbrug.com/385987224): Implement this method for Android.
+-    NOTIMPLEMENTED();
+-    return nullptr;
+-  }
+-};
+-
+-#else   // BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_EXTENSIONS)
+ 
+ // Delegate for ExtensionViewHost attached to a specific browser window.
+ class ExtensionViewHostBrowserDelegate : public ExtensionViewHost::Delegate {
+@@ -175,7 +132,52 @@ class ExtensionViewHostTabDelegate : public ExtensionViewHost::Delegate {
+ 
+   raw_ptr<content::WebContents> web_contents_;
+ };
+-#endif  // BUILDFLAG(IS_ANDROID)
++
++#else  // BUILDFLAG(ENABLE_EXTENSIONS)
++
++// Delegate for ExtensionViewHost on Android.
++class ExtensionViewHostDelegateAndroid : public ExtensionViewHost::Delegate {
++ public:
++  ExtensionViewHostDelegateAndroid() = default;
++  ExtensionViewHostDelegateAndroid(const ExtensionViewHostDelegateAndroid&) =
++      delete;
++  ExtensionViewHostDelegateAndroid& operator=(
++      const ExtensionViewHostDelegateAndroid&) = delete;
++  ~ExtensionViewHostDelegateAndroid() override = default;
++
++  content::WebContents* OpenURL(
++      const content::OpenURLParams& params,
++      base::OnceCallback<void(content::NavigationHandle&)>
++          navigation_handle_callback) override {
++    // TODO(cbrug.com/385987224): Implement this method for Android.
++    NOTIMPLEMENTED();
++    return nullptr;
++  }
++
++  content::KeyboardEventProcessingResult PreHandleKeyboardEvent(
++      content::WebContents* source,
++      const input::NativeWebKeyboardEvent& event) override {
++    // TODO(cbrug.com/385987224): Implement this method for Android.
++    NOTIMPLEMENTED();
++    return content::KeyboardEventProcessingResult::NOT_HANDLED;
++  }
++
++  std::unique_ptr<content::EyeDropper> OpenEyeDropper(
++      content::RenderFrameHost* frame,
++      content::EyeDropperListener* listener) override {
++    // TODO(cbrug.com/385987224): Implement this method for Android.
++    NOTIMPLEMENTED();
++    return nullptr;
++  }
++
++  WindowController* GetExtensionWindowController() const override {
++    // TODO(cbrug.com/385987224): Implement this method for Android.
++    NOTIMPLEMENTED();
++    return nullptr;
++  }
++};
++
++#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ 
+ // Creates a new ExtensionHost with its associated view, grouping it in the
+ // appropriate SiteInstance (and therefore process) based on the URL and
+@@ -264,28 +266,23 @@ std::unique_ptr<ExtensionViewHost> CreateViewHost(
+ 
+ }  // namespace
+ 
+-#if BUILDFLAG(IS_ANDROID)
+-
+ // static
+ std::unique_ptr<ExtensionViewHost> ExtensionViewHostFactory::CreatePopupHost(
+     const GURL& url,
+-    Profile* profile) {
+-  return CreateViewHost(url, profile, mojom::ViewType::kExtensionPopup,
+-                        std::make_unique<ExtensionViewHostDelegateAndroid>());
+-}
+-
+-#else  // BUILDFLAG(IS_ANDROID)
+-
+-// static
+-std::unique_ptr<ExtensionViewHost> ExtensionViewHostFactory::CreatePopupHost(
+-    const GURL& url,
+-    Browser* browser) {
++    BrowserWindowInterface* browser) {
+   DCHECK(browser);
+-  return CreateViewHost(
+-      url, browser->profile(), mojom::ViewType::kExtensionPopup,
+-      std::make_unique<ExtensionViewHostBrowserDelegate>(browser));
++#if BUILDFLAG(ENABLE_EXTENSIONS)
++  auto delegate = std::make_unique<ExtensionViewHostBrowserDelegate>(
++      browser->GetBrowserForMigrationOnly());
++#else   // BUILDFLAG(ENABLE_EXTENSIONS)
++  auto delegate = std::make_unique<ExtensionViewHostDelegateAndroid>();
++#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
++  return CreateViewHost(url, browser->GetProfile(),
++                        mojom::ViewType::kExtensionPopup, std::move(delegate));
+ }
+ 
++#if BUILDFLAG(ENABLE_EXTENSIONS)
++
+ // static
+ std::unique_ptr<ExtensionViewHost>
+ ExtensionViewHostFactory::CreateSidePanelHost(
+@@ -311,6 +308,6 @@ ExtensionViewHostFactory::CreateSidePanelHost(
+                                  std::move(delegate));
+ }
+ 
+-#endif  // BUILDFLAG(IS_ANDROID)
++#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ 
+ }  // namespace extensions
+diff --git a/chrome/browser/extensions/extension_view_host_factory.h b/chrome/browser/extensions/extension_view_host_factory.h
+--- a/chrome/browser/extensions/extension_view_host_factory.h
++++ b/chrome/browser/extensions/extension_view_host_factory.h
+@@ -12,10 +12,8 @@
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+-class Browser;
+ class BrowserWindowInterface;
+ class GURL;
+-class Profile;
+ 
+ namespace tabs {
+ class TabInterface;
+@@ -33,19 +31,14 @@ class ExtensionViewHostFactory {
+   ExtensionViewHostFactory(const ExtensionViewHostFactory&) = delete;
+   ExtensionViewHostFactory& operator=(const ExtensionViewHostFactory&) = delete;
+ 
+-#if BUILDFLAG(IS_ANDROID)
+   // Creates a new ExtensionHost with its associated view, grouping it in the
+   // appropriate SiteInstance (and therefore process) based on the URL and
+   // profile.
+-  static std::unique_ptr<ExtensionViewHost> CreatePopupHost(const GURL& url,
+-                                                            Profile* profile);
+-#else   // BUILDFLAG(IS_ANDROID)
+-  // Creates a new ExtensionHost with its associated view, grouping it in the
+-  // appropriate SiteInstance (and therefore process) based on the URL and
+-  // profile.
+-  static std::unique_ptr<ExtensionViewHost> CreatePopupHost(const GURL& url,
+-                                                            Browser* browser);
++  static std::unique_ptr<ExtensionViewHost> CreatePopupHost(
++      const GURL& url,
++      BrowserWindowInterface* browser);
+ 
++#if BUILDFLAG(ENABLE_EXTENSIONS)
+   // Creates a new ExtensionHost with its associated view, grouping it in the
+   // appropriate SiteInstance (and therefore process) based on the URL and
+   // profile.
+@@ -54,7 +47,7 @@ class ExtensionViewHostFactory {
+       const GURL& url,
+       BrowserWindowInterface* browser,
+       tabs::TabInterface* tab_interface);
+-#endif  // BUILDFLAG(IS_ANDROID)
++#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ };
+ 
+ }  // namespace extensions
+diff --git a/chrome/browser/ui/android/extensions/BUILD.gn b/chrome/browser/ui/android/extensions/BUILD.gn
+--- a/chrome/browser/ui/android/extensions/BUILD.gn
++++ b/chrome/browser/ui/android/extensions/BUILD.gn
+@@ -24,6 +24,7 @@ android_library("java") {
+     "//chrome/browser/tab:java",
+     "//chrome/browser/tabmodel:java",
+     "//chrome/browser/ui/android/theme:java",
++    "//chrome/browser/ui/browser_window/public/android:java",
+     "//components/browser_ui/widget/android:java",
+     "//third_party/android_deps:material_design_java",
+     "//ui/android:ui_full_java",
+diff --git a/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc b/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
+--- a/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
++++ b/chrome/browser/ui/android/extensions/extension_action_popup_contents.cc
+@@ -9,6 +9,7 @@
+ #include "chrome/browser/extensions/extension_view_host.h"
+ #include "chrome/browser/extensions/extension_view_host_factory.h"
+ #include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/internal/android/android_browser_window.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_action.h"
+@@ -135,9 +136,13 @@ void ExtensionActionPopupContents::HandleCloseExtensionHost(
+ // popup.
+ static ScopedJavaLocalRef<jobject> JNI_ExtensionActionPopupContents_Create(
+     JNIEnv* env,
+-    Profile* profile,
++    jlong browser_window_interface_ptr,
+     std::string& action_id,
+     int tab_id) {
++  BrowserWindowInterface* browser =
++      reinterpret_cast<BrowserWindowInterface*>(browser_window_interface_ptr);
++  Profile* profile = browser->GetProfile();
++
+   ExtensionRegistry* registry = ExtensionRegistry::Get(profile);
+   DCHECK(registry);
+ 
+@@ -154,7 +159,7 @@ static ScopedJavaLocalRef<jobject> JNI_ExtensionActionPopupContents_Create(
+   GURL popup_url = action->GetPopupUrl(tab_id);
+ 
+   std::unique_ptr<ExtensionViewHost> host =
+-      ExtensionViewHostFactory::CreatePopupHost(popup_url, profile);
++      ExtensionViewHostFactory::CreatePopupHost(popup_url, browser);
+   DCHECK(host);
+ 
+   // The ExtensionActionPopupContents C++ object's lifetime is managed by its
+diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
+--- a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
++++ b/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/browser/ui/extensions/ExtensionActionPopupContents.java
+@@ -12,7 +12,7 @@ import org.jni_zero.NativeMethods;
+ import org.chromium.base.lifetime.Destroyable;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+-import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.content_public.browser.WebContents;
+ 
+ /**
+@@ -50,8 +50,10 @@ public class ExtensionActionPopupContents implements Destroyable {
+     }
+ 
+     /** Creates an {@link ExtensionActionPopupContents} instance. */
+-    public static ExtensionActionPopupContents create(Profile profile, String actionId, int tabId) {
+-        return ExtensionActionPopupContentsJni.get().create(profile, actionId, tabId);
++    public static ExtensionActionPopupContents create(
++            ChromeAndroidTask task, String actionId, int tabId) {
++        return ExtensionActionPopupContentsJni.get()
++                .create(task.getOrCreateNativeBrowserWindowPtr(), actionId, tabId);
+     }
+ 
+     /**
+@@ -138,15 +140,13 @@ public class ExtensionActionPopupContents implements Destroyable {
+         /**
+          * Creates the native ExtensionActionPopupContents object and returns its Java peer.
+          *
+-         * @param profile The {@link Profile} associated with the extension.
++         * @param androidBrowserWindowPtr The address of a native {@code BrowserWindowInterface}.
+          * @param actionId The ID of the extension action.
+          * @param tabId The ID of the tab context.
+          * @return The Java {@link ExtensionActionPopupContents} object, or {@code null} on failure.
+          */
+         ExtensionActionPopupContents create(
+-                @JniType("Profile*") Profile profile,
+-                @JniType("std::string") String actionId,
+-                int tabId);
++                long androidBrowserWindowPtr, @JniType("std::string") String actionId, int tabId);
+ 
+         /**
+          * Destroys the native ExtensionActionPopupContents object.
+diff --git a/chrome/browser/ui/android/toolbar/BUILD.gn b/chrome/browser/ui/android/toolbar/BUILD.gn
+--- a/chrome/browser/ui/android/toolbar/BUILD.gn
++++ b/chrome/browser/ui/android/toolbar/BUILD.gn
+@@ -188,6 +188,7 @@ android_library("java") {
+     "//chrome/browser/ui/android/omnibox:java_resources",
+     "//chrome/browser/ui/android/pdf:java",
+     "//chrome/browser/ui/android/theme:java",
++    "//chrome/browser/ui/browser_window/public/android:java",
+     "//chrome/browser/user_education:java",
+     "//chrome/browser/util:java",
+     "//components/browser_ui/bottomsheet/android:java",
+@@ -474,6 +475,7 @@ robolectric_library("junit") {
+     "//chrome/browser/ui/android/omnibox:java_resources",
+     "//chrome/browser/ui/android/theme:java",
+     "//chrome/browser/ui/android/toolbar:java_resources",
++    "//chrome/browser/ui/browser_window/public/android:java",
+     "//chrome/browser/user_education:java",
+     "//chrome/test/android:chrome_java_unit_test_support",
+     "//components/browser_ui/bottomsheet/android:java",
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
+@@ -10,11 +10,13 @@ import android.view.LayoutInflater;
+ import org.chromium.base.lifetime.Destroyable;
+ import org.chromium.base.lifetime.LifetimeAssert;
+ import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.toolbar.extensions.ExtensionActionButtonProperties.ListItemType;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.extensions.R;
+ import org.chromium.ui.base.WindowAndroid;
+ import org.chromium.ui.listmenu.ListMenuButton;
+@@ -37,6 +39,7 @@ public class ExtensionActionListCoordinator implements Destroyable {
+             Context context,
+             ExtensionActionListContainer container,
+             WindowAndroid windowAndroid,
++            OneshotSupplier<ChromeAndroidTask> taskSupplier,
+             ObservableSupplier<Profile> profileSupplier,
+             ObservableSupplier<Tab> currentTabSupplier) {
+         mContainer = container;
+@@ -44,7 +47,12 @@ public class ExtensionActionListCoordinator implements Destroyable {
+         mModels = new ModelList();
+         mMediator =
+                 new ExtensionActionListMediator(
+-                        context, windowAndroid, mModels, profileSupplier, currentTabSupplier);
++                        context,
++                        windowAndroid,
++                        mModels,
++                        taskSupplier,
++                        profileSupplier,
++                        currentTabSupplier);
+         mAdapter =
+                 new ViewGroupAdapter.Builder(mContainer, mModels)
+                         .registerType(
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediator.java
+@@ -12,6 +12,7 @@ import org.chromium.base.Log;
+ import org.chromium.base.lifetime.Destroyable;
+ import org.chromium.base.lifetime.LifetimeAssert;
+ import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.browser.extensions.ContextMenuSource;
+@@ -19,6 +20,7 @@ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.toolbar.MenuBuilderHelper;
+ import org.chromium.chrome.browser.toolbar.extensions.ExtensionActionButtonProperties.ListItemType;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionAction;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionContextMenuBridge;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionPopupContents;
+@@ -38,6 +40,7 @@ class ExtensionActionListMediator implements Destroyable {
+     private final Context mContext;
+     private final WindowAndroid mWindowAndroid;
+     private final ModelList mModels;
++    private final OneshotSupplier<ChromeAndroidTask> mTaskSupplier;
+     private final ExtensionActionsUpdateHelper mExtensionActionsUpdateHelper;
+ 
+     private final ActionsUpdateDelegate mActionsUpdateDelegate = new ActionsUpdateDelegate();
+@@ -50,11 +53,13 @@ class ExtensionActionListMediator implements Destroyable {
+             Context context,
+             WindowAndroid windowAndroid,
+             ModelList models,
++            OneshotSupplier<ChromeAndroidTask> taskSupplier,
+             ObservableSupplier<Profile> profileSupplier,
+             ObservableSupplier<Tab> currentTabSupplier) {
+         mContext = context;
+         mWindowAndroid = windowAndroid;
+         mModels = models;
++        mTaskSupplier = taskSupplier;
+ 
+         mExtensionActionsUpdateHelper =
+                 new ExtensionActionsUpdateHelper(
+@@ -103,16 +108,19 @@ class ExtensionActionListMediator implements Destroyable {
+         // button while its popup is open.
+         closePopup();
+ 
+-        Tab currentTab = mExtensionActionsUpdateHelper.getCurrentTab();
+-        Profile profile = mExtensionActionsUpdateHelper.getProfile();
++        ChromeAndroidTask task = mTaskSupplier.get();
++        if (task == null) {
++            return;
++        }
+ 
+-        if (profile == null || currentTab == null) {
++        Tab currentTab = mExtensionActionsUpdateHelper.getCurrentTab();
++        if (currentTab == null) {
+             return;
+         }
+         int tabId = currentTab.getId();
+ 
+         ExtensionActionPopupContents contents =
+-                ExtensionActionPopupContents.create(profile, actionId, tabId);
++                ExtensionActionPopupContents.create(task, actionId, tabId);
+         assert mCurrentPopup == null;
+         mCurrentPopup =
+                 new ExtensionActionPopup(mContext, mWindowAndroid, buttonView, actionId, contents);
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediatorTest.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediatorTest.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediatorTest.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListMediatorTest.java
+@@ -39,12 +39,14 @@ import org.mockito.junit.MockitoRule;
+ import org.robolectric.annotation.LooperMode;
+ 
+ import org.chromium.base.supplier.ObservableSupplierImpl;
++import org.chromium.base.supplier.OneshotSupplierImpl;
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.chrome.browser.extensions.ContextMenuSource;
+ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.MockTab;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.toolbar.extensions.ExtensionActionButtonProperties.ListItemType;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionContextMenuBridge;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionContextMenuBridgeJni;
+ import org.chromium.chrome.browser.ui.extensions.FakeExtensionActionsBridge;
+@@ -86,6 +88,7 @@ public class ExtensionActionListMediatorTest {
+     private FakeExtensionActionsBridge.ProfileModel mProfileModel;
+     private MockTab mTab1;
+     private MockTab mTab2;
++    private OneshotSupplierImpl<ChromeAndroidTask> mTaskSupplier;
+     private ObservableSupplierImpl<Profile> mProfileSupplier;
+     private ObservableSupplierImpl<Tab> mCurrentTabSupplier;
+     private ModelList mModels;
+@@ -108,12 +111,18 @@ public class ExtensionActionListMediatorTest {
+         mTab2 = new MockTab(TAB2_ID, mProfile);
+         mTab1.setWebContentsOverrideForTesting(mWebContents);
+         mTab2.setWebContentsOverrideForTesting(mWebContents);
++        mTaskSupplier = new OneshotSupplierImpl<>();
+         mProfileSupplier = new ObservableSupplierImpl<>();
+         mCurrentTabSupplier = new ObservableSupplierImpl<>();
+         mModels = new ModelList();
+         mMediator =
+                 new ExtensionActionListMediator(
+-                        context, mWindowAndroid, mModels, mProfileSupplier, mCurrentTabSupplier);
++                        context,
++                        mWindowAndroid,
++                        mModels,
++                        mTaskSupplier,
++                        mProfileSupplier,
++                        mCurrentTabSupplier);
+ 
+         // Wait for the main thread to settle.
+         shadowOf(Looper.getMainLooper()).idle();
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinator.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinator.java
+@@ -11,6 +11,7 @@ import android.view.ViewStub;
+ import org.chromium.base.ServiceLoaderUtil;
+ import org.chromium.base.lifetime.Destroyable;
+ import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.Initializer;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -18,6 +19,7 @@ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.TabCreator;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.ui.base.WindowAndroid;
+ 
+ /**
+@@ -40,6 +42,7 @@ public interface ExtensionToolbarCoordinator extends Destroyable {
+             Context context,
+             ViewStub extensionToolbarStub,
+             WindowAndroid windowAndroid,
++            OneshotSupplier<ChromeAndroidTask> taskSupplier,
+             ObservableSupplier<Profile> profileSupplier,
+             ObservableSupplier<Tab> currentTabSupplier,
+             TabCreator tabCreator,
+@@ -53,6 +56,7 @@ public interface ExtensionToolbarCoordinator extends Destroyable {
+                 context,
+                 extensionToolbarStub,
+                 windowAndroid,
++                taskSupplier,
+                 profileSupplier,
+                 currentTabSupplier,
+                 tabCreator,
+@@ -71,6 +75,7 @@ public interface ExtensionToolbarCoordinator extends Destroyable {
+             Context context,
+             ViewStub extensionToolbarStub,
+             WindowAndroid windowAndroid,
++            OneshotSupplier<ChromeAndroidTask> taskSupplier,
+             ObservableSupplier<Profile> profileSupplier,
+             ObservableSupplier<Tab> currentTabSupplier,
+             TabCreator tabCreator,
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinatorImpl.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinatorImpl.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinatorImpl.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionToolbarCoordinatorImpl.java
+@@ -13,6 +13,7 @@ import android.widget.LinearLayout;
+ import org.chromium.base.Callback;
+ import org.chromium.base.lifetime.LifetimeAssert;
+ import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.OneshotSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.build.annotations.ServiceImpl;
+@@ -20,6 +21,7 @@ import org.chromium.chrome.browser.profiles.Profile;
+ import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.chrome.browser.tabmodel.TabCreator;
+ import org.chromium.chrome.browser.theme.ThemeColorProvider;
++import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionActionsBridge;
+ import org.chromium.chrome.browser.ui.extensions.ExtensionUi;
+ import org.chromium.chrome.browser.ui.extensions.R;
+@@ -44,6 +46,7 @@ public class ExtensionToolbarCoordinatorImpl implements ExtensionToolbarCoordina
+             Context context,
+             ViewStub extensionToolbarStub,
+             WindowAndroid windowAndroid,
++            OneshotSupplier<ChromeAndroidTask> taskSupplier,
+             ObservableSupplier<Profile> profileSupplier,
+             ObservableSupplier<Tab> currentTabSupplier,
+             TabCreator tabCreator,
+@@ -63,6 +66,7 @@ public class ExtensionToolbarCoordinatorImpl implements ExtensionToolbarCoordina
+                         context,
+                         container.findViewById(R.id.extension_action_list),
+                         windowAndroid,
++                        taskSupplier,
+                         profileSupplier,
+                         currentTabSupplier);
+         mExtensionsMenuCoordinator =
+--
