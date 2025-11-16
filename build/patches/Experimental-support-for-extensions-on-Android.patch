@@ -38,6 +38,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../site_settings/ManageSpaceActivity.java    | 20 +++++++
  ...InterceptNavigationDelegateClientImpl.java |  2 +-
  .../browser/tab/RequestDesktopUtils.java      |  6 +--
+ .../tab/TabContextMenuItemDelegate.java       |  4 +-
  .../TabbedAppMenuPropertiesDelegate.java      |  2 +-
  .../tabbed_mode/TabbedRootUiCoordinator.java  |  2 +-
  .../chrome/browser/ui/RootUiCoordinator.java  |  2 +-
@@ -67,6 +68,8 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../media/webrtc/webrtc_event_log_manager.cc  |  4 +-
  .../policy_value_and_status_aggregator.cc     |  2 +-
  ...hrome_browser_main_extra_parts_profiles.cc |  2 +-
+ .../profiles/off_the_record_profile_impl.cc   |  9 +++-
+ chrome/browser/profiles/profile_destroyer.cc  |  2 +-
  chrome/browser/resources/BUILD.gn             |  2 +-
  chrome/browser/resources/discards/BUILD.gn    |  2 +-
  .../resources/extensions/detail_view.css      |  6 +++
@@ -174,7 +177,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ui/resources/ui_resources.grd                 |  2 +-
  ui/webui/resources/BUILD.gn                   |  4 +-
  .../cr_elements/cr_toolbar/cr_toolbar.css     |  6 +++
- 162 files changed, 528 insertions(+), 264 deletions(-)
+ 165 files changed, 539 insertions(+), 268 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Enable-extensions-Android.grdp
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Extensions-Android.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Extensions-Android.inc
@@ -639,6 +642,20 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/RequestDesk
              return false;
          }
  
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java
+@@ -282,7 +282,9 @@ public class TabContextMenuItemDelegate implements ContextMenuItemDelegate {
+     public void openInOtherWindow(GURL url, @Nullable Referrer referrer, boolean incognito) {
+         ChromeAsyncTabLauncher chromeAsyncTabLauncher = new ChromeAsyncTabLauncher(incognito);
+         LoadUrlParams loadUrlParams = new LoadUrlParams(url.getSpec());
+-        loadUrlParams.setReferrer(referrer);
++        if (!incognito) {
++            loadUrlParams.setReferrer(referrer);
++        }
+         Activity activity = TabUtils.getActivity(mTab);
+         assumeNonNull(activity);
+         Activity otherWindowActivity =
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
@@ -1283,6 +1300,51 @@ diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
    chrome_extensions::EnsureBrowserContextKeyedServiceFactoriesBuilt();
    // EnsureBrowserContextKeyedServiceFactoriesBuilt() is invoked before the
    // ExtensionsBrowserClient is ready on Android. This is due to Android
+diff --git a/chrome/browser/profiles/off_the_record_profile_impl.cc b/chrome/browser/profiles/off_the_record_profile_impl.cc
+--- a/chrome/browser/profiles/off_the_record_profile_impl.cc
++++ b/chrome/browser/profiles/off_the_record_profile_impl.cc
+@@ -107,6 +107,8 @@
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+ #include "chrome/browser/extensions/extension_special_storage_policy.h"
+ #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
++#include "extensions/browser/api/web_request/extension_web_request_event_router.h"
++#include "extensions/browser/process_manager.h"
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+@@ -213,7 +215,10 @@ void OffTheRecordProfileImpl::Init() {
+       this, std::make_unique<extensions::ExtensionIconSource>(profile_));
+ #endif
+ 
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++  if (extensions::ProcessManager* process_manager = extensions::ProcessManager::Get(this)) {
++    process_manager->MaybeCreateStartupBackgroundHosts();
++  }
+   extensions::WebRequestEventRouter::OnOTRBrowserContextCreated(profile_, this);
+ #endif
+ 
+@@ -272,7 +277,7 @@ OffTheRecordProfileImpl::~OffTheRecordProfileImpl() {
+ 
+   SimpleKeyMap::GetInstance()->Dissociate(this);
+ 
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   extensions::WebRequestEventRouter::OnOTRBrowserContextDestroyed(profile_,
+                                                                   this);
+ #endif
+diff --git a/chrome/browser/profiles/profile_destroyer.cc b/chrome/browser/profiles/profile_destroyer.cc
+--- a/chrome/browser/profiles/profile_destroyer.cc
++++ b/chrome/browser/profiles/profile_destroyer.cc
+@@ -28,7 +28,7 @@ namespace {
+ #if BUILDFLAG(IS_ANDROID)
+ // Set the render host waiting time to 5s on Android, that's the same
+ // as an "Application Not Responding" timeout.
+-const int64_t kTimerDelaySeconds = 5;
++const int64_t kTimerDelaySeconds = 1;
+ #elif BUILDFLAG(IS_CHROMEOS)
+ // linux-chromeos-dbg is failing to destroy the profile in under 1 second
+ const int64_t kTimerDelaySeconds = 2;
 diff --git a/chrome/browser/resources/BUILD.gn b/chrome/browser/resources/BUILD.gn
 --- a/chrome/browser/resources/BUILD.gn
 +++ b/chrome/browser/resources/BUILD.gn
@@ -1764,7 +1826,7 @@ diff --git a/chrome/browser/ui/android/tab_model/tab_model.cc b/chrome/browser/u
  // |BrowserWindowInterface| is compiled into all Android builds.
  SessionID GetInitialSessionId() {
 -#if BUILDFLAG(IS_DESKTOP_ANDROID)
-+#if BUILDFLAG(IS_DESKTOP_ANDROID_CROMITE)
++#if BUILDFLAG(IS_DESKTOP_ANDROID_FALSE)
    return SessionID::InvalidValue();
  #else
    return SessionID::NewUnique();
