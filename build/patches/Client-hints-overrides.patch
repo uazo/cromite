@@ -7,26 +7,48 @@ Use Google Chrome branding for client hints
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- components/embedder_support/user_agent_utils.cc   |  4 +---
- content/browser/client_hints/client_hints.cc      | 15 ++++++++++-----
- .../browser/loader/navigation_url_loader_impl.cc  |  5 +++++
- .../about_flags_cc/Client-hints-overrides.inc     |  9 +++++++++
- .../common/features_cc/Client-hints-overrides.inc |  1 +
- .../cpp/features_cc/Client-hints-overrides.inc    |  1 +
- net/http/http_network_transaction.cc              |  1 +
- services/network/public/cpp/client_hints.cc       |  1 +
- .../blink/common/client_hints/client_hints.cc     |  6 ++++--
- .../common/client_hints/enabled_client_hints.cc   |  6 ++++++
- .../blink/renderer/core/frame/navigator_ua.idl    |  4 +++-
- .../renderer/core/frame/navigator_ua_data.cc      |  1 +
- .../renderer/core/frame/navigator_ua_data.idl     |  5 ++++-
- .../renderer/core/loader/frame_fetch_context.cc   |  4 +++-
- .../platform/runtime_enabled_features.json5       |  8 ++++++--
- 15 files changed, 56 insertions(+), 15 deletions(-)
+ components/client_hints/browser/client_hints.cc |  5 +++--
+ components/embedder_support/user_agent_utils.cc |  5 ++---
+ content/browser/client_hints/client_hints.cc    | 17 +++++++++++++++--
+ .../about_flags_cc/Client-hints-overrides.inc   |  9 +++++++++
+ .../features_cc/Client-hints-overrides.inc      |  1 +
+ .../cpp/features_cc/Client-hints-overrides.inc  |  1 +
+ net/http/http_network_transaction.cc            |  1 +
+ services/network/public/cpp/client_hints.cc     |  2 +-
+ .../blink/common/client_hints/client_hints.cc   |  6 ++++--
+ .../common/client_hints/enabled_client_hints.cc |  8 ++++++++
+ .../blink/renderer/core/frame/navigator_ua.idl  |  4 +++-
+ .../renderer/core/frame/navigator_ua_data.cc    |  1 +
+ .../renderer/core/frame/navigator_ua_data.idl   |  5 ++++-
+ .../renderer/core/loader/frame_fetch_context.cc |  4 +++-
+ .../platform/runtime_enabled_features.json5     |  8 ++++++--
+ 15 files changed, 62 insertions(+), 15 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Client-hints-overrides.inc
  create mode 100644 cromite_flags/content/common/features_cc/Client-hints-overrides.inc
  create mode 100644 cromite_flags/services/network/public/cpp/features_cc/Client-hints-overrides.inc
 
+diff --git a/components/client_hints/browser/client_hints.cc b/components/client_hints/browser/client_hints.cc
+--- a/components/client_hints/browser/client_hints.cc
++++ b/components/client_hints/browser/client_hints.cc
+@@ -35,7 +35,7 @@ ParseInitializeClientHintsStorage() {
+   auto results =
+       base::flat_map<url::Origin,
+                      std::vector<network::mojom::WebClientHintsType>>();
+-
++  if ((true)) return results;
+   std::string raw_client_hint_json =
+       base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+           switches::kInitializeClientHintsStorage);
+@@ -200,7 +200,8 @@ void ClientHints::PersistClientHints(
+   // TODO(tbansal): crbug.com/735518. Disable updates to client hints settings
+   // when cookies are disabled for |primary_origin|.
+   content_settings::ContentSettingConstraints constraints;
+-  constraints.set_session_model(content_settings::mojom::SessionModel::DURABLE);
++  constraints.set_session_model(content_settings::mojom::SessionModel::USER_SESSION);
++  constraints.set_lifetime(base::Minutes(1));
+   settings_map_->SetWebsiteSettingDefaultScope(
+       primary_url, GURL(), ContentSettingsType::CLIENT_HINTS,
+       base::Value(std::move(client_hints_dictionary)), constraints);
 diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedder_support/user_agent_utils.cc
 --- a/components/embedder_support/user_agent_utils.cc
 +++ b/components/embedder_support/user_agent_utils.cc
@@ -41,6 +63,14 @@ diff --git a/components/embedder_support/user_agent_utils.cc b/components/embedd
  
    std::string brand_version =
        output_version_type == blink::UserAgentBrandVersionType::kFullVersion
+@@ -698,6 +696,7 @@ blink::UserAgentMetadata GetUserAgentMetadata(const PrefService* pref_service,
+   }
+ 
+   // High entropy client hints.
++  if ((true)) return metadata;
+   metadata.brand_full_version_list =
+       GetUserAgentBrandFullVersionListInternal(std::nullopt);
+   metadata.full_version = std::string(version_info::GetVersionNumber());
 diff --git a/content/browser/client_hints/client_hints.cc b/content/browser/client_hints/client_hints.cc
 --- a/content/browser/client_hints/client_hints.cc
 +++ b/content/browser/client_hints/client_hints.cc
@@ -52,56 +82,38 @@ diff --git a/content/browser/client_hints/client_hints.cc b/content/browser/clie
  #include "ui/display/display.h"
  #include "ui/display/screen.h"
  #include "url/origin.h"
-@@ -706,7 +707,8 @@ void UpdateNavigationRequestClientUaHeadersImpl(
-     // value, disable them. This overwrites previous decision from UI.
-     disable_due_to_custom_ua = !ua_metadata.has_value();
-   }
--
+@@ -602,10 +603,21 @@ bool IsClientHintEnabled(const ClientHintsExtendedData& data,
+ 
+ bool IsClientHintAllowed(const ClientHintsExtendedData& data,
+                          WebClientHintsType type) {
 +  if (!blink::RuntimeEnabledFeatures::UserAgentClientHintEnabled())
-+    disable_due_to_custom_ua = true;
-   if (!disable_due_to_custom_ua) {
-     if (!ua_metadata.has_value())
-       ua_metadata = delegate->GetUserAgentMetadata();
-@@ -898,10 +900,12 @@ void AddRequestClientHintsHeaders(
-     AddEctHeader(headers, network_quality_tracker, url);
-   }
- 
--  UpdateNavigationRequestClientUaHeadersImpl(
--      delegate, is_ua_override_on, frame_tree_node,
--      ClientUaHeaderCallType::kDuringCreation, headers, container_policy, data,
--      ftn_for_devtools_override);
-+  if (blink::RuntimeEnabledFeatures::UserAgentClientHintEnabled()) {
-+    UpdateNavigationRequestClientUaHeadersImpl(
-+        delegate, is_ua_override_on, frame_tree_node,
-+        ClientUaHeaderCallType::kDuringCreation, headers, container_policy, data,
-+        ftn_for_devtools_override);
++    return false;
++
++  bool allowed = false;
++  if (type == WebClientHintsType::kUA ||
++      type == WebClientHintsType::kUAMobile ||
++      type == WebClientHintsType::kUAPlatform ||
++      type == WebClientHintsType::kUAModel ||
++      type == WebClientHintsType::kUAPlatformVersion) {
++    allowed = true;
 +  }
- 
-   if (ShouldAddClientHint(data, WebClientHintsType::kPrefersColorScheme)) {
-     AddPrefersColorSchemeHeader(headers, frame_tree_node);
-@@ -989,6 +993,7 @@ ParseAndPersistAcceptCHForNavigation(
-     BrowserContext* context,
-     ClientHintsControllerDelegate* delegate,
-     FrameTreeNode* frame_tree_node) {
-+  if ((true)) return std::nullopt;
-   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-   DCHECK(context);
-   DCHECK(parsed_headers);
-diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
---- a/content/browser/loader/navigation_url_loader_impl.cc
-+++ b/content/browser/loader/navigation_url_loader_impl.cc
-@@ -1744,6 +1744,11 @@ void NavigationURLLoaderImpl::OnAcceptCHFrameReceived(
+   if (data.is_outermost_main_frame) {
+-    return true;
++    return allowed;
+   }
+-  return (data.permissions_policy->IsFeatureEnabledForOrigin(
++  return ((false)) && (data.permissions_policy->IsFeatureEnabledForOrigin(
+       network::GetClientHintToPolicyFeatureMap().at(type),
+       data.resource_origin));
+ }
+@@ -630,6 +642,7 @@ bool IsJavascriptEnabled(FrameTreeNode* frame_tree_node) {
+ void UpdateIFramePermissionsPolicyWithDelegationSupportForClientHints(
+     ClientHintsExtendedData& data,
+     const network::ParsedPermissionsPolicy& container_policy) {
++  if ((true)) return;
+   if (container_policy.empty()) {
      return;
    }
- 
-+  if (!base::FeatureList::IsEnabled(network::features::kAcceptCHFrame)) {
-+    std::move(callback).Run(net::OK);
-+    return;
-+  }
-+
-   LogAcceptCHFrameStatus(AcceptCHFrameRestart::kFramePresent);
- 
-   // Given that this is happening in the middle of navigation, there should
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/Client-hints-overrides.inc b/cromite_flags/chrome/browser/about_flags_cc/Client-hints-overrides.inc
 new file mode 100644
 --- /dev/null
@@ -121,13 +133,13 @@ new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/content/common/features_cc/Client-hints-overrides.inc
 @@ -0,0 +1 @@
-+SET_CROMITE_FEATURE_DISABLED(kCriticalClientHint);
++SET_CROMITE_FEATURE_ENABLED(kCriticalClientHint);
 diff --git a/cromite_flags/services/network/public/cpp/features_cc/Client-hints-overrides.inc b/cromite_flags/services/network/public/cpp/features_cc/Client-hints-overrides.inc
 new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/services/network/public/cpp/features_cc/Client-hints-overrides.inc
 @@ -0,0 +1 @@
-+SET_CROMITE_FEATURE_DISABLED(kAcceptCHFrame);
++SET_CROMITE_FEATURE_ENABLED(kAcceptCHFrame);
 diff --git a/net/http/http_network_transaction.cc b/net/http/http_network_transaction.cc
 --- a/net/http/http_network_transaction.cc
 +++ b/net/http/http_network_transaction.cc
@@ -142,11 +154,12 @@ diff --git a/net/http/http_network_transaction.cc b/net/http/http_network_transa
 diff --git a/services/network/public/cpp/client_hints.cc b/services/network/public/cpp/client_hints.cc
 --- a/services/network/public/cpp/client_hints.cc
 +++ b/services/network/public/cpp/client_hints.cc
-@@ -112,6 +112,7 @@ const DecodeMap& GetDecodeMap() {
+@@ -111,7 +111,7 @@ const DecodeMap& GetDecodeMap() {
+ }  // namespace
  
  std::optional<std::vector<network::mojom::WebClientHintsType>>
- ParseClientHintsHeader(const std::string& header) {
-+  if ((true)) return std::nullopt;
+-ParseClientHintsHeader(const std::string& header) {
++ParseClientHintsHeader(const std::string& header) { // Parse Client Hints Header
    // Accept-CH is an sh-list of tokens; see:
    // https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-header-structure-19#section-3.1
    std::optional<net::structured_headers::List> maybe_list =
@@ -179,13 +192,15 @@ diff --git a/third_party/blink/common/client_hints/client_hints.cc b/third_party
 diff --git a/third_party/blink/common/client_hints/enabled_client_hints.cc b/third_party/blink/common/client_hints/enabled_client_hints.cc
 --- a/third_party/blink/common/client_hints/enabled_client_hints.cc
 +++ b/third_party/blink/common/client_hints/enabled_client_hints.cc
-@@ -15,6 +15,12 @@ namespace {
+@@ -15,6 +15,14 @@ namespace {
  using ::network::mojom::WebClientHintsType;
  
  bool IsDisabledByFeature(const WebClientHintsType type) {
 +  if (type == WebClientHintsType::kUA ||
 +        type == WebClientHintsType::kUAMobile ||
-+        type == WebClientHintsType::kUAPlatform) {
++        type == WebClientHintsType::kUAPlatform ||
++        type == WebClientHintsType::kUAModel ||
++        type == WebClientHintsType::kUAPlatformVersion) {
 +    return false;
 +  }
 +  if ((true)) return true;
