@@ -133,6 +133,7 @@ you can activate (highly recommended) the 'RendererAppContainer' flag from the c
 ```
   --enable-features=RendererAppContainer
 ```
+In this case, it is also necessary to run icacls as indicated above.
 
 ### Auto-update setup for linux
 working in progress in https://github.com/uazo/cromite/issues/771
