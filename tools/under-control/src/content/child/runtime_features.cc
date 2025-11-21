@@ -18,6 +18,7 @@
 #include "build/build_config.h"
 #include "cc/base/features.h"
 #include "components/attribution_reporting/features.h"
+#include "components/content_settings/core/common/features.h"
 #include "content/common/content_navigation_policy.h"
 #include "content/common/content_switches_internal.h"
 #include "content/common/features.h"
@@ -220,6 +221,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kFedCmLightweightMode), kDefault},
           {wf::EnableFedCmErrorAttribute,
            raw_ref(features::kFedCmErrorAttribute), kDefault},
+          {wf::EnableFedCmNonStringToken,
+           raw_ref(features::kFedCmNonStringToken), kDefault},
           {wf::EnableGamepadMultitouch,
            raw_ref(features::kEnableGamepadMultitouch)},
           {wf::EnableSharedStorageAPI,
@@ -250,13 +253,9 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableInstalledApp, raw_ref(features::kInstalledApp)},
           {wf::EnableIntegrityPolicyScript,
            raw_ref(network::features::kIntegrityPolicyScript)},
-          {wf::EnableLazyInitializeMediaControls,
-           raw_ref(features::kLazyInitializeMediaControls)},
 #if BUILDFLAG(IS_CHROMEOS)
           {wf::EnableLockedMode, raw_ref(blink::features::kLockedMode)},
 #endif
-          {wf::EnableMediaCastOverlayButton,
-           raw_ref(media::kMediaCastOverlayButton)},
           {wf::EnableMediaEngagementBypassAutoplayPolicies,
            raw_ref(media::kMediaEngagementBypassAutoplayPolicies)},
           {wf::EnablePaymentApp, raw_ref(features::kServiceWorkerPaymentApps)},
@@ -302,20 +301,20 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableWebXR, raw_ref(features::kWebXr)},
 #if BUILDFLAG(ENABLE_VR)
           {wf::EnableWebXRFrontFacing,
-           raw_ref(device::features::kWebXrIncubations)},
+           raw_ref(device::features::kWebXRIncubations)},
           {wf::EnableWebXRFrameRate,
-           raw_ref(device::features::kWebXrIncubations)},
+           raw_ref(device::features::kWebXRIncubations)},
           {wf::EnableWebXRGPUBinding,
-           raw_ref(device::features::kWebXrWebGpuBinding)},
+           raw_ref(device::features::kWebXRWebGPUBinding)},
           {wf::EnableWebXRImageTracking,
-           raw_ref(device::features::kWebXrIncubations)},
-          {wf::EnableWebXRLayers, raw_ref(device::features::kWebXrLayers)},
+           raw_ref(device::features::kWebXRIncubations)},
+          {wf::EnableWebXRLayers, raw_ref(device::features::kWebXRLayers)},
           {wf::EnableWebXRPlaneDetection,
-           raw_ref(device::features::kWebXrIncubations)},
+           raw_ref(device::features::kWebXRIncubations)},
           {wf::EnableWebXRPoseMotionData,
-           raw_ref(device::features::kWebXrIncubations)},
+           raw_ref(device::features::kWebXRIncubations)},
           {wf::EnableWebXRSpecParity,
-           raw_ref(device::features::kWebXrIncubations)},
+           raw_ref(device::features::kWebXRIncubations)},
 #endif
           {wf::EnablePermissions, raw_ref(features::kWebPermissionsApi),
            kSetOnlyIfOverridden},
@@ -349,6 +348,9 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            kSetOnlyIfOverridden},
           {"AttributionReporting",
            raw_ref(features::kPrivacySandboxAdsAPIsM1Override)},
+          {"ApproximateGeolocationPermission",
+           raw_ref(
+               content_settings::features::kApproximateGeolocationPermission)},
           {"AndroidDownloadableFontsMatching",
            raw_ref(features::kAndroidDownloadableFontsMatching)},
 #if BUILDFLAG(IS_ANDROID)

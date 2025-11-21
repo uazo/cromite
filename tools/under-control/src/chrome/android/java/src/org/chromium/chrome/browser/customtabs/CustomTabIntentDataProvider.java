@@ -321,7 +321,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     private final @Nullable Intent mKeepAliveServiceIntent;
     private final @Nullable Bundle mAnimationBundle;
 
-    private final int mUiType;
+    private int mUiType;
     private final int mTitleVisibilityState;
     private final @Nullable String mMediaViewerUrl;
     private final boolean mEnableEmbeddedMediaExperience;
@@ -589,11 +589,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             }
         }
 
-        mOpenInBrowserState =
-                IntentUtils.safeGetIntExtra(
-                        intent,
-                        EXTRA_OPEN_IN_BROWSER_STATE,
-                        OpenInBrowserButtonState.OPEN_IN_BROWSER_STATE_DEFAULT);
         if (mUiType == CustomTabsUiType.POPUP) {
             mShareState = CustomTabsIntent.SHARE_STATE_OFF;
         } else {
@@ -611,12 +606,15 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         List<Bundle> menuItems =
                 IntentUtils.getParcelableArrayListExtra(intent, CustomTabsIntent.EXTRA_MENU_ITEMS);
 
-        addOpenInBrowserOption(intent, context);
+        mOpenInBrowserState =
+                IntentUtils.safeGetIntExtra(
+                        intent,
+                        EXTRA_OPEN_IN_BROWSER_STATE,
+                        OpenInBrowserButtonState.OPEN_IN_BROWSER_STATE_DEFAULT);
+        int oibState = adjustOpenInBrowserOption(intent);
+        maybeAddOpenInBrowserOption(context, oibState);
         updateExtraMenuItems(menuItems);
-        // Disable CCT share options for automotive. See b/300292495.
-        if (ShareUtils.enableShareForAutomotive(true)) {
-            addShareOption(intent, context);
-        }
+        maybeAddShareOption(intent, context);
 
         boolean isTwa =
                 mSession != null
@@ -639,6 +637,9 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         mTrustedWebActivityDisplayMode = resolveTwaDisplayMode();
         mTrustedWebActivityDisplayOverrideMode = resolveTwaDisplayOverrideMode();
 
+        // After TWA checks, update custom tabs ui types. Order seems to matter
+        // here.
+        mUiType = getCustomTabsUiType(requestedUiType);
         int intentVisibilityState =
                 IntentUtils.safeGetIntExtra(
                         intent,
@@ -818,12 +819,12 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     }
 
     /**
-     * Get the verified custom tabs UI type, according to the intent extras, and whether
-     * the intent is trusted.
+     * Get the verified custom tabs UI type, according to the intent extras, and whether the intent
+     * is trusted.
      *
-     * If the intent extras include a valid EXTRA_NETWORK, consider that the custom tab is
-     * used for captive portal scenarios especially and the UI hides the "Open in Chrome browser"
-     * menu item accordingly.
+     * <p>If the intent extras include a valid EXTRA_NETWORK, consider that the custom tab is used
+     * for captive portal scenarios especially and the UI hides the "Open in Chrome browser" menu
+     * item accordingly.
      *
      * @param requestedUiType requested UI type in the intent, unqualified
      * @return verified UI type
@@ -831,6 +832,9 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     @BrowserServicesIntentDataProvider.CustomTabsUiType
     private int getCustomTabsUiType(int requestedUiType) {
         if (mNetwork != null) return CustomTabsUiType.NETWORK_BOUND_TAB;
+        if (isTrustedWebActivity() && resolveDisplayMode() == DisplayMode.MINIMAL_UI) {
+            return CustomTabsUiType.TRUSTED_WEB_ACTIVITY;
+        }
         if (!isTrustedIntent()) {
             if (VersionInfo.isLocalBuild()) Log.w(TAG, FIRST_PARTY_PITFALL_MSG);
             return CustomTabsUiType.DEFAULT;
@@ -942,10 +946,12 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
      *       {@link CustomTabsIntent#EXTRA_DEFAULT_SHARE_MENU_ITEM}.
      * </ul>
      */
-    private void addShareOption(Intent intent, Context context) {
+    private void maybeAddShareOption(Intent intent, Context context) {
+        // Disable CCT share options for automotive. See crbug.com/300292495.
+        if (!ShareUtils.enableShareForAutomotive(true)) return;
+
         if (mShareState == CustomTabsIntent.SHARE_STATE_DEFAULT) {
-            if (mToolbarButtons.isEmpty()
-                    || (isCpaOnlyOpenInBrowserDefault() && canAddMoreToolbarItems())) {
+            if (canAddShareAction()) {
                 mToolbarButtons.add(
                         CustomButtonParamsImpl.createShareButton(
                                 context, getColorProvider().getToolbarColor()));
@@ -953,8 +959,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                 mShowShareItemInMenu = true;
             }
         } else if (mShareState == CustomTabsIntent.SHARE_STATE_ON) {
-            if (mToolbarButtons.isEmpty()
-                    || (isCpaOnlyOpenInBrowserDefault() && canAddMoreToolbarItems())) {
+            if (canAddShareAction()) {
                 mToolbarButtons.add(
                         CustomButtonParamsImpl.createShareButton(
                                 context, getColorProvider().getToolbarColor()));
@@ -970,7 +975,21 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         }
     }
 
-    private void addOpenInBrowserOption(Intent intent, Context context) {
+    private boolean canAddShareAction() {
+        if (!ChromeFeatureList.sCctAdaptiveButton.isEnabled()) return mToolbarButtons.isEmpty();
+
+        if (!canAddMoreToolbarItems()) return false;
+
+        if (mShareState == CustomTabsIntent.SHARE_STATE_OFF) {
+            return false;
+        } else if (mShareState == CustomTabsIntent.SHARE_STATE_ON) {
+            return true;
+        } else { // mShareState == CustomTabsIntent.SHARE_STATE_DEFAULT
+            return mToolbarButtons.isEmpty();
+        }
+    }
+
+    private int adjustOpenInBrowserOption(Intent intent) {
         boolean usingInteractiveOmnibox =
                 CustomTabsConnection.getInstance().shouldEnableOmniboxForIntent(this);
 
@@ -992,18 +1011,40 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                     && IntentUtils.safeGetBooleanExtra(
                             intent, EXTRA_OPEN_IN_BROWSER_BUTTON_ALLOWED, false)) {
                 openInBrowserState = CustomTabsButtonState.BUTTON_STATE_ON;
-            } else {
+            } else if (!isCpaOnlyOpenInBrowserDefault()) {
                 openInBrowserState = CustomTabsButtonState.BUTTON_STATE_OFF;
             }
         }
 
-        if (openInBrowserState == CustomTabsButtonState.BUTTON_STATE_ON) {
-            if (mToolbarButtons.isEmpty()
-                    || (isCpaOnlyOpenInBrowserDefault() && canAddMoreToolbarItems())) {
-                mToolbarButtons.add(
-                        CustomButtonParamsImpl.createOpenInBrowserButton(
-                                context, getColorProvider().getToolbarColor()));
-            }
+        return openInBrowserState;
+    }
+
+    private void maybeAddOpenInBrowserOption(Context context, int oibState) {
+        if (canAddOpenInBrowserAction(oibState)) {
+            mToolbarButtons.add(
+                    CustomButtonParamsImpl.createOpenInBrowserButton(
+                            context, getColorProvider().getToolbarColor()));
+        }
+    }
+
+    private boolean canAddOpenInBrowserAction(int oibState) {
+        if (!ChromeFeatureList.sCctAdaptiveButton.isEnabled()
+                && oibState == CustomTabsButtonState.BUTTON_STATE_ON) {
+            return mToolbarButtons.isEmpty();
+        }
+
+        if (!canAddMoreToolbarItems()) return false;
+
+        if (oibState == CustomTabsButtonState.BUTTON_STATE_OFF) {
+            return false;
+        } else if (oibState == CustomTabsButtonState.BUTTON_STATE_ON) {
+            return mToolbarButtons.isEmpty() || mShareState != CustomTabsIntent.SHARE_STATE_ON;
+        } else { // oibState == CustomTabsButtonState.BUTTON_STATE_DEFAULT
+            // Give SHARE a higher precedence than OIB. OIB is visible only in CPA+OIB
+            // experiment arm where SHARE is explicitly off.
+            return mToolbarButtons.isEmpty()
+                    && isCpaOnlyOpenInBrowserDefault()
+                    && mShareState == CustomTabsIntent.SHARE_STATE_OFF;
         }
     }
 
@@ -1690,10 +1731,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
     @Override
     public boolean isInteractiveOmniboxEnabled() {
-        return ChromeFeatureList.sSearchInCCT.isEnabled()
-                && isPackageNameInList(
-                        getClientPackageName(),
-                        ChromeFeatureList.sSearchinCctOmniboxAllowedPackageNames.getValue());
+        return ChromeFeatureList.sSearchInCCT.isEnabled();
     }
 
     @Override
@@ -1857,7 +1895,8 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     }
 
     private boolean isCpaOnlyOpenInBrowserDefault() {
-        return ChromeFeatureList.sCctAdaptiveButtonContextualOnly.getValue()
+        return ChromeFeatureList.sCctAdaptiveButton.isEnabled()
+                && ChromeFeatureList.sCctAdaptiveButtonContextualOnly.getValue()
                 && ChromeFeatureList.sCctAdaptiveButtonDefaultVariant.getValue()
                         == AdaptiveToolbarButtonVariant.OPEN_IN_BROWSER;
     }

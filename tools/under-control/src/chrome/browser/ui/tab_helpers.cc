@@ -17,7 +17,6 @@
 #include "chrome/browser/breadcrumbs/breadcrumb_manager_tab_helper.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/buildflags.h"
-#include "chrome/browser/captive_portal/captive_portal_service_factory.h"
 #include "chrome/browser/chained_back_navigation_tracker.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/commerce/shopping_service_factory.h"
@@ -180,7 +179,7 @@
 #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_android.h"
 #include "components/facilitated_payments/core/features/features.h"
 #include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
-#include "components/fingerprinting_protection_filter/interventions/browser/interventions_web_contents_helper.h"
+#include "components/fingerprinting_protection_filter/interventions/browser/canvas_interventions_web_contents_helper.h"
 #include "components/fingerprinting_protection_filter/interventions/common/interventions_features.h"
 #include "components/ip_protection/common/ip_protection_status.h"
 #include "components/page_load_metrics/browser/features.h"
@@ -234,6 +233,7 @@
 #endif
 
 #if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
+#include "chrome/browser/captive_portal/captive_portal_service_factory.h"
 #include "components/captive_portal/content/captive_portal_tab_helper.h"
 #endif
 
@@ -383,9 +383,15 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
 
   if (fingerprinting_protection_interventions::features::
           ShouldBlockCanvasReadbackForIncognitoState(
+              profile->IsIncognitoProfile()) ||
+      fingerprinting_protection_interventions::features::
+          IsCanvasInterventionsEnabledForIncognitoState(
               profile->IsIncognitoProfile())) {
-    fingerprinting_protection_interventions::InterventionsWebContentsHelper::
-        CreateForWebContents(web_contents, profile->IsIncognitoProfile());
+    fingerprinting_protection_interventions::
+        CanvasInterventionsWebContentsHelper::CreateForWebContents(
+            web_contents,
+            TrackingProtectionSettingsFactory::GetForProfile(profile),
+            profile->IsIncognitoProfile());
   }
 
   // Only create the IpProtectionStatus if the User Bypass feature is enabled.
