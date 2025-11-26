@@ -24,7 +24,7 @@ Require: bromite-build-utils.patch
  .../site_details_permission.html              |   8 +-
  .../site_settings/site_details_permission.ts  |  44 ++
  .../site_settings/site_settings_mixin.ts      |  20 +-
- .../site_settings/site_settings_page.ts       |  29 +-
+ .../site_settings/site_settings_page.ts       |  30 +-
  .../site_settings/site_settings_util.ts       |  55 +++
  chrome/browser/ui/BUILD.gn                    |   2 +
  .../controls/rich_controls_container_view.h   |   7 +
@@ -38,16 +38,16 @@ Require: bromite-build-utils.patch
  .../ui/webui/settings/site_settings_helper.cc |  46 +-
  .../browser_ui/settings/android/BUILD.gn      |   1 +
  .../preference_spinner_single_widget.xml      |  92 ++++
- .../settings/SpinnerPreference.java           |  24 +
+ .../settings/SpinnerPreference.java           |  25 ++
  .../browser_ui/site_settings/android/BUILD.gn |  18 +
  .../res/xml/site_settings_preferences.xml     |   7 +
  .../site_settings/AllSiteSettings.java        |   5 +-
  .../BromiteCustomContentSetting.java          | 155 +++++++
  .../BromiteCustomContentSettingImpl.java      | 415 ++++++++++++++++++
  ...tomTriStateSiteSettingsPreferenceImpl.java |  24 +
- .../ContentSettingsResources.java             |  39 +-
+ .../ContentSettingsResources.java             |  32 +-
  .../site_settings/SingleCategorySettings.java |  57 ++-
- .../site_settings/SingleWebsiteSettings.java  |  54 ++-
+ .../site_settings/SingleWebsiteSettings.java  |  50 ++-
  .../site_settings/SiteSettings.java           |  33 +-
  .../site_settings/SiteSettingsCategory.java   |  18 +-
  .../site_settings/SiteSettingsDelegate.java   |   2 +
@@ -85,7 +85,7 @@ Require: bromite-build-utils.patch
  .../platform/web_content_settings_client.h    |  13 +
  .../execution_context/execution_context.cc    |  16 +
  .../execution_context/execution_context.h     |   5 +
- 74 files changed, 1971 insertions(+), 108 deletions(-)
+ 74 files changed, 1964 insertions(+), 106 deletions(-)
  create mode 100644 components/browser_ui/settings/android/java/res/layout/preference_spinner_single_widget.xml
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSetting.java
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/BromiteCustomContentSettingImpl.java
@@ -618,7 +618,7 @@ diff --git a/chrome/browser/resources/settings/site_settings/site_settings_page.
      {
        route: routes.SITE_SETTINGS_ADS,
        id: Id.ADS,
-@@ -452,10 +452,35 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
+@@ -452,10 +452,36 @@ function getCategoryItemMap(): Map<ContentSettingsTypes, CategoryListItem> {
        icon: 'privacy:cookie',
      },
    ];
@@ -626,7 +626,7 @@ diff --git a/chrome/browser/resources/settings/site_settings/site_settings_page.
 +    let obj = JSON.parse(loadTimeData.getString("br_cs_" + index));
 +    let name = obj["name"];
 +
-+    if (!categoryList.find(x=> x.id == name)) {
++    if (!categoryList.find(x => x.id == name)) {
 +      categoryList.push({
 +        route: (routes as any)[`SITE_SETTINGS_${name.toUpperCase()}`],
 +        id: name,
@@ -646,7 +646,8 @@ diff --git a/chrome/browser/resources/settings/site_settings/site_settings_page.
 +  for (let index=0; index < loadTimeData.getInteger("br_cs_count"); index++) {
 +    let obj = JSON.parse(loadTimeData.getString("br_cs_" + index));
 +    let name = obj["name"];
-+    orderedIdList.push(name);
++    if (orderedIdList.find(x => x == name) == null)
++      orderedIdList.push(name);
 +  }
 +  return buildItemListFromIds(orderedIdList);
 +}
@@ -654,15 +655,15 @@ diff --git a/chrome/browser/resources/settings/site_settings/site_settings_page.
  function buildItemListFromIds(orderedIdList: ContentSettingsTypes[]):
      CategoryListItem[] {
    const map = getCategoryItemMap();
-@@ -510,7 +535,7 @@ export class SettingsSiteSettingsPageElement extends
-               Id.NOTIFICATIONS,
-               Id.STORAGE_ACCESS,
+@@ -540,7 +566,7 @@ export class SettingsSiteSettingsPageElement extends
+               Id.WEB_APP_INSTALLATION,
+               Id.LOCAL_NETWORK_ACCESS,
              ]),
--            permissionsAdvanced: buildItemListFromIds([
-+            permissionsAdvanced: buildBromiteItemListFromIds([
-               Id.BACKGROUND_SYNC,
-               Id.SENSORS,
-               Id.AUTOMATIC_DOWNLOADS,
+-            contentBasic: buildItemListFromIds([
++            contentBasic: buildBromiteItemListFromIds([
+               Id.COOKIES,
+               Id.JAVASCRIPT,
+               Id.IMAGES,
 diff --git a/chrome/browser/resources/settings/site_settings/site_settings_util.ts b/chrome/browser/resources/settings/site_settings/site_settings_util.ts
 --- a/chrome/browser/resources/settings/site_settings/site_settings_util.ts
 +++ b/chrome/browser/resources/settings/site_settings/site_settings_util.ts
@@ -681,7 +682,7 @@ diff --git a/chrome/browser/resources/settings/site_settings/site_settings_util.
 +}
 +
 +export function setupContentSettingsRoutes(r: Partial<SettingsRoutes>) {
-+  let iconset = document.createElement("iron-iconset-svg");
++  let iconset = document.createElement("cr-iconset");
 +  iconset.setAttribute("name", "br-settings");
 +  iconset.setAttribute("size", "24");
 +
@@ -1506,13 +1507,14 @@ diff --git a/components/browser_ui/settings/android/widget/java/src/org/chromium
  
      /** Constructor for inflating from XML. */
      public SpinnerPreference(Context context, AttributeSet attrs) {
-@@ -54,6 +55,19 @@ public class SpinnerPreference extends Preference
+@@ -54,6 +55,20 @@ public class SpinnerPreference extends Preference
          setOnPreferenceClickListener(this);
      }
  
 +    public SpinnerPreference(Context context, boolean singleLine) {
 +        super(context, null);
 +        mSingleLine = singleLine;
++        mBackgroundStyle = ContainmentItem.BackgroundStyle.STANDARD;
 +        mIsWidget = true;
 +        setLayoutResource(R.layout.preference_spinner_single_widget);
 +    }
@@ -1526,7 +1528,7 @@ diff --git a/components/browser_ui/settings/android/widget/java/src/org/chromium
      /**
       * Provides a list of arbitrary objects to be shown in the spinner. Visually, each option will
       * be presented as its toString() text. Alternative to {@link #setAdapter(ArrayAdapter, int)}.
-@@ -73,6 +87,12 @@ public class SpinnerPreference extends Preference
+@@ -73,6 +88,12 @@ public class SpinnerPreference extends Preference
          mSelectedIndex = selectedIndex;
      }
  
@@ -1539,7 +1541,7 @@ diff --git a/components/browser_ui/settings/android/widget/java/src/org/chromium
      /** Returns the Spinner instance for introspection during tests. */
      public @Nullable Spinner getSpinnerForTesting() {
          return mSpinner;
-@@ -105,6 +125,10 @@ public class SpinnerPreference extends Preference
+@@ -105,6 +126,10 @@ public class SpinnerPreference extends Preference
      public void onBindViewHolder(PreferenceViewHolder holder) {
          super.onBindViewHolder(holder);
  
@@ -2282,24 +2284,17 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          assert false; // NOTREACHED
          return assumeNonNull(null);
      }
-@@ -850,6 +873,16 @@ public class ContentSettingsResources {
-                 /* isOnlyPreciseLocationBlockedInOs= */ false);
-     }
- 
-+    public static int getCategorySummary(int contentType,
-+                                         @Nullable @ContentSetting int value,
-+                                         boolean isOneTime,
-+                                         boolean isApproximateGeolocation) {
-+        int result = BromiteCustomContentSettingImpl.getCategorySummary(contentType,
+@@ -842,6 +865,9 @@ public class ContentSettingsResources {
+             @ContentSetting int value,
+             boolean isOneTime,
+             boolean isApproximateGeolocation) {
++        int result = BromiteCustomContentSettingImpl.getCategorySummary(type,
 +                            value, isOneTime, isApproximateGeolocation);
 +        if (result != 0) return result;
-+        return getCategorySummary(value, isOneTime);
-+    }
-+
-     /**
-      * Returns the string resource id for a given ContentSetting to show with a permission category.
-      *
-@@ -1049,6 +1082,8 @@ public class ContentSettingsResources {
+         return getCategorySummary(
+                 type,
+                 value,
+@@ -1049,6 +1075,8 @@ public class ContentSettingsResources {
       */
      public static int @Nullable [] getTriStateSettingDescriptionIDs(
              int contentType, boolean isPermissionSiteSettingsRadioButtonFeatureEnabled) {
@@ -2541,15 +2536,6 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          setUpPreferenceCommon(preference, value);
          preference.setOnPreferenceChangeListener(this);
          @ContentSettingsType.EnumType
-@@ -1282,7 +1306,7 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
-         } else {
-             summary =
-                     getString(
--                            ContentSettingsResources.getCategorySummary(
-+                            ContentSettingsResources.getCategorySummary(content_type,
-                                     contentType, value, isOneTime, mHasApproximateLocationGrant));
-         }
-         preference.setSummary(summary);
 @@ -1310,10 +1334,14 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
                  oneTimePreference.setBackgroundColor(mHighlightColor);
              }
@@ -2584,15 +2570,6 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
          }
  
          if (type == ContentSettingsType.GEOLOCATION_WITH_OPTIONS) {
-@@ -1651,7 +1685,7 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
-         // info.
-         preference.setSummary(
-                 getString(
--                        ContentSettingsResources.getCategorySummary(
-+                        ContentSettingsResources.getCategorySummary(type,
-                                 type,
-                                 permission,
-                                 false,
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SiteSettings.java

@@ -22,6 +22,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../tab_management/TabGroupUiProperties.java  |   5 +
  .../tab_management/TabGroupUiToolbarView.java |  17 ++
  .../tab_management/TabGroupUiViewBinder.java  |   3 +
+ .../TabListContainerViewBinder.java           |   2 +-
  .../tab_management/TabListCoordinator.java    | 148 +++++++++++++++++-
  .../TabListEmptyCoordinator.java              |  17 +-
  .../tab_management/TabSwitcherPaneBase.java   |   9 ++
@@ -64,10 +65,10 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../flags/android/chrome_feature_list.cc      |   3 +
  .../browser/flags/ChromeFeatureList.java      |  10 ++
  chrome/browser/hub/internal/BUILD.gn          |   5 +
- .../chrome/browser/hub/HubCoordinator.java    |   8 +
+ .../chrome/browser/hub/HubCoordinator.java    |   9 ++
  .../chrome/browser/hub/HubManagerImpl.java    |  16 +-
  .../browser/hub/ReversedLinearLayout.java     |  42 +++++
- .../android/res/layout/hub_layout.xml         |   4 +-
+ .../android/res/layout/hub_layout.xml         |  24 ++-
  .../android/res/layout/hub_toolbar_layout.xml |   4 +-
  chrome/browser/prefs/browser_prefs.cc         |   2 +-
  .../chrome/browser/ui/appmenu/AppMenu.java    |  39 ++++-
@@ -103,7 +104,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../render_widget_host_view_android.cc        |   3 +
  .../Move-navigation-bar-to-bottom.inc         |  17 ++
  .../renderer/core/frame/viewport_data.cc      |   1 +
- 90 files changed, 1068 insertions(+), 88 deletions(-)
+ 91 files changed, 1084 insertions(+), 95 deletions(-)
  create mode 100644 chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/ReversedLinearLayout.java
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Move-navigation-bar-to-bottom.inc
 
@@ -401,6 +402,18 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
          } else if (IS_MAIN_CONTENT_VISIBLE == propertyKey) {
              viewHolder.toolbarView.setMainContentVisibility(model.get(IS_MAIN_CONTENT_VISIBLE));
          } else if (BACKGROUND_COLOR == propertyKey) {
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListContainerViewBinder.java
+@@ -157,7 +157,7 @@ class TabListContainerViewBinder {
+                                     .getDimensionPixelSize(R.dimen.hub_search_box_gap);
+             recyclerView.setPadding(
+                     recyclerView.getPaddingLeft(),
+-                    paddingTop,
++                    /*paddingTop*/ 0,
+                     recyclerView.getPaddingRight(),
+                     recyclerView.getPaddingBottom());
+         } else if (IS_NON_ZERO_Y_OFFSET == propertyKey) {
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabListCoordinator.java
@@ -1610,7 +1623,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/Toolbar
   * Contains logic for managing the toolbar visual component. This class manages the interactions
   * with the rest of the application to ensure the toolbar is always visually up to date.
 @@ -892,6 +895,17 @@ public class ToolbarManager
-                         /* matchTrustedCdnUrl= */ mIsCustomTab, AlwaysIncognitoLinkInterceptor.isAlwaysIncognito());
+                         /* matchTrustedCdnUrl= */ mIsCustomTab);
          mControlContainer = controlContainer;
          mToolbarHairline = mControlContainer.findViewById(R.id.toolbar_hairline);
 +        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
@@ -2008,15 +2021,16 @@ diff --git a/chrome/browser/hub/internal/android/java/src/org/chromium/chrome/br
  import org.chromium.chrome.browser.profiles.Profile;
  import org.chromium.chrome.browser.profiles.ProfileProvider;
  import org.chromium.chrome.browser.tab.Tab;
-@@ -172,6 +174,12 @@ public class HubCoordinator implements PaneHubController, BackPressHandler {
+@@ -172,6 +174,13 @@ public class HubCoordinator implements PaneHubController, BackPressHandler {
                          paneManager.getFocusedPaneSupplier(),
                          hubColorMixer,
                          defaultPaneId);
-+        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
++        if (!ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
++            LinearLayout mainContainer = mContainerView.findViewById(R.id.hub_pane_host_container);
 +            LinearLayout.LayoutParams params = (LinearLayout.LayoutParams)
-+                hubPaneHostView.getLayoutParams();
-+            params.bottomMargin = hubToolbarView.getHeight();
-+            hubPaneHostView.setLayoutParams(params);
++                mainContainer.getLayoutParams();
++            params.topMargin = 0;
++            mainContainer.setLayoutParams(params);
 +        }
  
          ObservableSupplier<@Nullable View> overlayViewSupplier =
@@ -2124,20 +2138,39 @@ new file mode 100644
 diff --git a/chrome/browser/hub/internal/android/res/layout/hub_layout.xml b/chrome/browser/hub/internal/android/res/layout/hub_layout.xml
 --- a/chrome/browser/hub/internal/android/res/layout/hub_layout.xml
 +++ b/chrome/browser/hub/internal/android/res/layout/hub_layout.xml
-@@ -8,7 +8,7 @@ found in the LICENSE file.
+@@ -8,20 +8,28 @@ found in the LICENSE file.
    android:layout_width="match_parent"
    android:layout_height="match_parent">
  
 -  <FrameLayout
 +  <org.chromium.chrome.browser.hub.ReversedLinearLayout
      android:id="@+id/hub_main_container"
++    android:orientation="vertical"
      android:layout_width="match_parent"
      android:layout_height="match_parent">
-@@ -21,7 +21,7 @@ found in the LICENSE file.
  
+-    <include
+-        layout="@layout/hub_pane_host_layout"
+-        android:layout_width="match_parent"
+-        android:layout_height="match_parent"
+-        android:layout_marginTop="@dimen/toolbar_height_no_shadow"/>
+-
      <include layout="@layout/hub_toolbar_layout" />
  
 -  </FrameLayout>
++    <LinearLayout
++      android:id="@+id/hub_pane_host_container"
++      android:layout_width="match_parent"
++      android:layout_height="match_parent"
++      android:orientation="vertical"
++      android:layout_marginTop="@dimen/toolbar_height_no_shadow">
++      <include
++          layout="@layout/hub_pane_host_layout"
++          android:layout_width="match_parent"
++          android:layout_height="0dp"
++          android:layout_weight="1" />
++    </LinearLayout>
++
 +  </org.chromium.chrome.browser.hub.ReversedLinearLayout>
  
    <!-- z-index above everything else. -->
@@ -2965,7 +2998,7 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
  /** Layout for the browser controls (omnibox, menu, tab strip, etc..). */
  @NullMarked
  public class ToolbarControlContainer extends OptimizedFrameLayout
-@@ -183,6 +187,11 @@ public class ToolbarControlContainer extends OptimizedFrameLayout
+@@ -184,6 +188,11 @@ public class ToolbarControlContainer extends OptimizedFrameLayout
                  if (view != null)
                      ((MarginLayoutParams)view.getLayoutParams()).topMargin = tab_strip_height;
              }
