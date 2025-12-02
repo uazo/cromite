@@ -6,7 +6,10 @@
 
 #include "third_party/blink/renderer/core/css/css_unparsed_declaration_value.h"
 #include "third_party/blink/renderer/core/css/media_feature_names.h"
+#include "third_party/blink/renderer/core/css/media_list.h"
+#include "third_party/blink/renderer/core/css/media_query_exp.h"
 #include "third_party/blink/renderer/core/css/parser/css_parser_context.h"
+#include "third_party/blink/renderer/core/css/parser/css_parser_token_stream.h"
 #include "third_party/blink/renderer/core/css/parser/css_tokenizer.h"
 #include "third_party/blink/renderer/core/css/parser/css_variable_parser.h"
 #include "third_party/blink/renderer/core/css/properties/css_parsing_utils.h"
@@ -35,13 +38,15 @@ bool MediaQueryParser::MediaQueryFeatureSet::IsAllowed(
       feature == media_feature_names::kStuckMediaFeature ||
       feature == media_feature_names::kSnappedMediaFeature ||
       feature == media_feature_names::kScrollableMediaFeature ||
-      (feature == media_feature_names::kDirectionMediaFeature &&
-       RuntimeEnabledFeatures::CSSScrollDirectionContainerQueriesEnabled()) ||
-      CSSVariableParser::IsValidVariableName(feature)) {
+      (feature == media_feature_names::kScrolledMediaFeature &&
+       RuntimeEnabledFeatures::CSSScrolledContainerQueriesEnabled()) ||
+      (CSSVariableParser::IsValidVariableName(feature) &&
+       !RuntimeEnabledFeatures::CSSCustomMediaEnabled())) {
     return false;
   }
   return true;
 }
+
 bool MediaQueryParser::MediaQueryFeatureSet::IsAllowedWithoutValue(
     const AtomicString& feature,
     const ExecutionContext* execution_context) const {
@@ -107,6 +112,12 @@ bool MediaQueryParser::MediaQueryFeatureSet::IsAllowedWithoutValue(
           feature == media_feature_names::kResizableMediaFeature);
 }
 
+bool MediaQueryParser::MediaQueryFeatureSet::IsAllowedWithValue(
+    const AtomicString& feature) const {
+  return (!RuntimeEnabledFeatures::CSSCustomMediaEnabled() ||
+          !CSSVariableParser::IsValidVariableName(feature));
+}
+
 MediaQuerySet* MediaQueryParser::ParseMediaQuerySet(
     StringView query_string,
     ExecutionContext* execution_context) {
@@ -117,35 +128,28 @@ MediaQuerySet* MediaQueryParser::ParseMediaQuerySet(
 MediaQuerySet* MediaQueryParser::ParseMediaQuerySet(
     CSSParserTokenStream& stream,
     ExecutionContext* execution_context) {
-  return MediaQueryParser(kMediaQuerySetParser, kHTMLStandardMode,
-                          execution_context)
-      .ParseImpl(stream);
-}
-
-MediaQuerySet* MediaQueryParser::ParseMediaQuerySetInMode(
-    CSSParserTokenStream& stream,
-    CSSParserMode mode,
-    ExecutionContext* execution_context) {
-  return MediaQueryParser(kMediaQuerySetParser, mode, execution_context)
+  return MediaQueryParser(kMediaQuerySetParser, execution_context)
       .ParseImpl(stream);
 }
 
 MediaQuerySet* MediaQueryParser::ParseMediaCondition(
     CSSParserTokenStream& stream,
     ExecutionContext* execution_context) {
-  return MediaQueryParser(kMediaConditionParser, kHTMLStandardMode,
-                          execution_context)
+  return MediaQueryParser(kMediaConditionParser, execution_context)
       .ParseImpl(stream);
 }
 
+MediaQuerySet* MediaQueryParser::ParseCustomMediaDefinition(
+    CSSParserTokenStream& stream,
+    ExecutionContext* execution_context) {
+  CSSParserTokenStream::Boundary boundary(stream, kSemicolonToken);
+  return ParseMediaQuerySet(stream, execution_context);
+}
+
 MediaQueryParser::MediaQueryParser(ParserType parser_type,
-                                   CSSParserMode mode,
-                                   ExecutionContext* execution_context,
-                                   SyntaxLevel syntax_level)
+                                   ExecutionContext* execution_context)
     : parser_type_(parser_type),
-      mode_(mode),
       execution_context_(execution_context),
-      syntax_level_(syntax_level),
       fake_context_(*MakeGarbageCollected<CSSParserContext>(
           kHTMLStandardMode,
           SecureContextMode::kInsecureContext,
@@ -308,14 +312,15 @@ AtomicString MediaQueryParser::ConsumeAllowedName(
   return name;
 }
 
-AtomicString MediaQueryParser::ConsumeUnprefixedName(
+AtomicString MediaQueryParser::ConsumeRangeContextFeatureName(
     CSSParserTokenStream& stream,
     const FeatureSet& feature_set) {
   AtomicString name = ConsumeAllowedName(stream, feature_set);
   if (name.IsNull()) {
     return name;
   }
-  if (name.StartsWith("min-") || name.StartsWith("max-")) {
+  if (name.StartsWith("min-") || name.StartsWith("max-") ||
+      name.StartsWith("--")) {
     return g_null_atom;
   }
   return name;
@@ -393,12 +398,20 @@ const MediaQueryExpNode* MediaQueryParser::ConsumeFeature(
     // <mf-boolean> = <mf-name>
     if (!feature_name.IsNull() && stream.AtEnd() &&
         feature_set.IsAllowedWithoutValue(feature_name, execution_context_)) {
+      if (RuntimeEnabledFeatures::CSSCustomMediaEnabled() &&
+          CSSVariableParser::IsValidVariableName(feature_name) &&
+          !feature_set.IsAllowedWithValue(feature_name)) {
+        // custom media query
+        return MakeGarbageCollected<MediaQueryFeatureExpNode>(
+            MediaQueryExp::Create(feature_name));
+      }
       return MakeGarbageCollected<MediaQueryFeatureExpNode>(
           MediaQueryExp::Create(feature_name, MediaQueryExpBounds()));
     }
 
     // <mf-plain> = <mf-name> : <mf-value>
-    if (!feature_name.IsNull() && stream.Peek().GetType() == kColonToken) {
+    if (!feature_name.IsNull() && stream.Peek().GetType() == kColonToken &&
+        feature_set.IsAllowedWithValue(feature_name)) {
       stream.ConsumeIncludingWhitespace();
 
       // NOTE: We do not check for stream.AtEnd() here, as an empty mf-value is
@@ -433,7 +446,8 @@ const MediaQueryExpNode* MediaQueryParser::ConsumeFeature(
 
   {
     // Try: <mf-name> <mf-comparison> <mf-value> (e.g., “width <= 10px”)
-    AtomicString feature_name = ConsumeUnprefixedName(stream, feature_set);
+    AtomicString feature_name =
+        ConsumeRangeContextFeatureName(stream, feature_set);
     if (!feature_name.IsNull() && !stream.AtEnd()) {
       MediaQueryOperator op = ConsumeComparison(stream);
       if (op != MediaQueryOperator::kNone) {
@@ -480,7 +494,8 @@ const MediaQueryExpNode* MediaQueryParser::ConsumeFeature(
     return nullptr;
   }
 
-  AtomicString feature_name = ConsumeUnprefixedName(stream, feature_set);
+  AtomicString feature_name =
+      ConsumeRangeContextFeatureName(stream, feature_set);
   if (feature_name.IsNull()) {
     return nullptr;
   }

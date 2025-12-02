@@ -120,10 +120,11 @@
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/smart_bubble_stats_store.h"
-#include "components/payments/content/browser_binding/browser_bound_keys_deleter.h"
-#include "components/payments/content/browser_binding/browser_bound_keys_deleter_factory.h"
+#include "components/payments/content/browser_binding/browser_bound_key_deleter.h"
+#include "components/payments/content/browser_binding/browser_bound_key_deleter_factory.h"
 #include "components/payments/content/web_payments_web_data_service.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
+#include "components/permissions/features.h"
 #include "components/permissions/permission_actions_history.h"
 #include "components/permissions/permission_decision_auto_blocker.h"
 #include "components/prefs/pref_service.h"
@@ -335,7 +336,7 @@ ChromeBrowsingDataRemoverDelegate::GetDomainsForDeferredCookieDeletion(
     std::string domain = GetDomainAndRegistry(
         url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
     if (domain.empty())
-      domain = url.host();
+      domain = url.GetHost();
     domains.insert(domain);
   }
   return {domains.begin(), domains.end()};
@@ -732,13 +733,11 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(IS_ANDROID)
     if (payments::BrowserBoundKeyDeleter* browser_bound_key_deleter =
             payments::BrowserBoundKeyDeleterFactory::GetForBrowserContext(
                 profile_)) {
       browser_bound_key_deleter->RemoveInvalidBBKs();
     }
-#endif  // BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
     if (base::FeatureList::IsEnabled(
@@ -940,6 +939,11 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
 
     PermissionDecisionAutoBlockerFactory::GetForProfile(profile_)
         ->RemoveEmbargoAndResetCounts(filter);
+    if (base::FeatureList::IsEnabled(
+            permissions::features::kPermissionHeuristicAutoGrant)) {
+      PermissionActionsHistoryFactory::GetForProfile(profile_)
+          ->ResetHeuristicData(filter);
+    }
   }
 
   //////////////////////////////////////////////////////////////////////////////

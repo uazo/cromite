@@ -87,6 +87,7 @@
 #include "content/browser/fenced_frame/fenced_frame.h"
 #include "content/browser/find_request_manager.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
+#include "content/browser/gpu/gpu_process_host.h"
 #include "content/browser/guest_page_holder_impl.h"
 #include "content/browser/host_zoom_map_impl.h"
 #include "content/browser/media/audio_stream_monitor.h"
@@ -98,6 +99,7 @@
 #include "content/browser/preloading/prefetch/prefetch_type.h"
 #include "content/browser/preloading/preloading.h"
 #include "content/browser/preloading/prerender/prerender_final_status.h"
+#include "content/browser/preloading/prerender/prerender_handle_impl.h"
 #include "content/browser/preloading/prerender/prerender_host_registry.h"
 #include "content/browser/preloading/prerender/prerender_metrics.h"
 #include "content/browser/preloading/prerender/prerender_new_tab_handle.h"
@@ -129,6 +131,7 @@
 #include "content/browser/tpcd_heuristics/opener_heuristic_tab_helper.h"
 #include "content/browser/tpcd_heuristics/redirect_heuristic_tab_helper.h"
 #include "content/browser/wake_lock/wake_lock_context_host.h"
+#include "content/browser/web_contents/file_chooser_impl.h"
 #include "content/browser/web_contents/java_script_dialog_commit_deferring_condition.h"
 #include "content/browser/web_contents/partitioned_popins_controller.h"
 #include "content/browser/web_contents/slow_web_preference_cache.h"
@@ -236,6 +239,7 @@
 
 #if BUILDFLAG(IS_ANDROID)
 #include "base/android/device_info.h"
+#include "base/android/scoped_service_binding_batch.h"
 #include "base/check.h"
 #include "content/browser/android/java_interfaces_impl.h"
 #include "content/browser/android/nfc_host.h"
@@ -718,7 +722,7 @@ void RecordRendererUnresponsiveMetrics(
       "Renderer.Unresponsive.PageVisible.RenderProcessHostPriority",
       rph_priority);
 
-  bool widget_visible = !render_widget_host->is_hidden();
+  bool widget_visible = !render_widget_host->IsHidden();
   base::UmaHistogramBoolean(
       "Renderer.Unresponsive.PageVisible.WidgetVisibility", widget_visible);
 
@@ -1724,20 +1728,6 @@ WebContentsImpl* WebContentsImpl::FromOuterFrameTreeNode(
       ->node_.GetInnerWebContentsInFrame(frame_tree_node);
 }
 
-bool WebContentsImpl::OnMessageReceived(RenderFrameHostImpl* render_frame_host,
-                                        const IPC::Message& message) {
-  OPTIONAL_TRACE_EVENT1("content", "WebContentsImpl::OnMessageReceived",
-                        "render_frame_host", render_frame_host);
-
-  for (auto& observer : observers_.observer_list()) {
-    if (observer.OnMessageReceived(message, render_frame_host)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 std::string WebContentsImpl::GetTitleForMediaControls() {
   OPTIONAL_TRACE_EVENT0("content", "WebContentsImpl::GetTitleForMediaControls");
 
@@ -2046,6 +2036,14 @@ std::vector<RenderFrameHostImpl*> WebContentsImpl::GetOutermostMainFrames() {
 
   return result;
 }
+
+#if BUILDFLAG(IS_MAC) && BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
+void WebContentsImpl::DecrementForbidExternalPopupMenus() {
+  DCHECK_GE(external_popup_menus_forbid_counter_, 1);
+  external_popup_menus_forbid_counter_--;
+  NotifyPreferencesChanged();
+}
+#endif  // BUILDFLAG(IS_MAC) && BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
 
 void WebContentsImpl::ExecutePageBroadcastMethod(
     PageBroadcastMethodCallback callback) {
@@ -2735,6 +2733,17 @@ bool WebContentsImpl::IsBeingVisiblyCaptured() {
   return visible_capturer_count_ > 0;
 }
 
+#if BUILDFLAG(IS_MAC) && BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
+base::ScopedClosureRunner WebContentsImpl::ForbidExternalPopupMenus() {
+  // Disable external popups when forbidden, and re-enable them after.
+  external_popup_menus_forbid_counter_++;
+  NotifyPreferencesChanged();
+  return base::ScopedClosureRunner(
+      base::BindOnce(&WebContentsImpl::DecrementForbidExternalPopupMenus,
+                     weak_factory_.GetWeakPtr()));
+}
+#endif  // BUILDFLAG(IS_MAC) && BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
+
 bool WebContentsImpl::IsAudioMuted() {
   return audio_stream_factory_ && audio_stream_factory_->IsMuted();
 }
@@ -3038,7 +3047,8 @@ base::TimeTicks WebContentsImpl::GetLastInteractionTimeTicks() {
 }
 
 WebContents::ScopedIgnoreInputEvents WebContentsImpl::IgnoreInputEvents(
-    std::optional<WebInputEventAuditCallback> audit_callback) {
+    std::optional<WebInputEventAuditCallback> audit_callback,
+    bool should_ignore_a11y_input) {
   OPTIONAL_TRACE_EVENT0("content", "WebContentsImpl::IgnoreInputEvents");
 
   uint64_t callback_id = 0;
@@ -3061,18 +3071,22 @@ WebContents::ScopedIgnoreInputEvents WebContentsImpl::IgnoreInputEvents(
     }
 #endif
     ++ignore_input_events_count_;
+    if (should_ignore_a11y_input) {
+      ++ignore_a11y_input_count_;
+    }
   }
 
   // Bind weakly, since the token might outlive us.
   return ScopedIgnoreInputEvents(base::BindOnce(
-      [](base::WeakPtr<WebContentsImpl> wc,
+      [](base::WeakPtr<WebContentsImpl> wc, bool should_ignore_a11y_input,
          std::optional<uint64_t> callback_id) {
         if (wc) {
           OPTIONAL_TRACE_EVENT0("content",
                                 "WebContentsImpl::IgnoreInputEvents.Release");
           if (callback_id.has_value()) {
-            CHECK(wc->web_input_event_audit_callbacks_.contains(*callback_id));
-            wc->web_input_event_audit_callbacks_.erase(*callback_id);
+            auto it = wc->web_input_event_audit_callbacks_.find(*callback_id);
+            CHECK(it != wc->web_input_event_audit_callbacks_.end());
+            wc->web_input_event_audit_callbacks_.erase(it);
           } else {
 #if BUILDFLAG(IS_ANDROID)
             // Reset gesture detection so that we don't continue to generate new
@@ -3091,16 +3105,23 @@ WebContents::ScopedIgnoreInputEvents WebContentsImpl::IgnoreInputEvents(
             }
 #endif
             --wc->ignore_input_events_count_;
+            if (should_ignore_a11y_input) {
+              --wc->ignore_a11y_input_count_;
+            }
           }
         }
       },
-      weak_factory_.GetWeakPtr(),
+      weak_factory_.GetWeakPtr(), should_ignore_a11y_input,
       audit_callback.has_value() ? std::make_optional<uint64_t>(callback_id)
                                  : std::nullopt));
 }
 
 bool WebContentsImpl::ShouldIgnoreInputEventsForTesting() {
   return ShouldIgnoreInputEvents();
+}
+
+bool WebContentsImpl::ShouldIgnoreA11yInputEventsForTesting() {
+  return ShouldIgnoreA11yInputEvents();
 }
 
 bool WebContentsImpl::HasActiveEffectivelyFullscreenVideo() {
@@ -3148,6 +3169,10 @@ void WebContentsImpl::SetPrimaryPageImportance(
          "support and avoid using PERCEPTIBLE if "
          "IsPerceptibleImportanceSupported() is false";
   CHECK(main_frame_importance >= subframe_importance);
+
+  // Batch service binding updates for the renderer processes of the main frame
+  // and the subframes.
+  base::android::ScopedServiceBindingBatch scoped_service_binding_batch;
 
   if (base::FeatureList::IsEnabled(features::kSubframeImportance)) {
     CHECK(
@@ -3297,6 +3322,11 @@ void WebContentsImpl::AttachInnerWebContentsImpl(
       inner_render_manager->current_frame_host();
   RenderViewHostImpl* inner_render_view_host =
       inner_main_frame->render_view_host();
+  RenderFrameHostImpl* inner_speculative_frame =
+      inner_render_manager->speculative_frame_host();
+  RenderViewHostImpl* inner_speculative_render_view_host =
+      inner_speculative_frame ? inner_speculative_frame->render_view_host()
+                              : nullptr;
   auto* outer_render_manager =
       render_frame_host_impl->frame_tree_node()->render_manager();
 
@@ -3321,6 +3351,16 @@ void WebContentsImpl::AttachInnerWebContentsImpl(
       prev_rwhv->Destroy();
     }
   }
+  // Do the same for speculative render frame host's view.
+  if (inner_speculative_frame) {
+    RenderWidgetHostViewBase* prev_speculative_rwhv =
+        static_cast<RenderWidgetHostViewBase*>(
+            inner_speculative_frame->GetView());
+    if (prev_speculative_rwhv &&
+        !prev_speculative_rwhv->IsRenderWidgetHostViewChildFrame()) {
+      prev_speculative_rwhv->Destroy();
+    }
+  }
 
   // When the WebContents being initialized has not already navigated, the
   // browser side Render{View,Frame}Host must be initialized and the
@@ -3334,6 +3374,20 @@ void WebContentsImpl::AttachInnerWebContentsImpl(
   if (!inner_render_manager->GetRenderWidgetHostView()) {
     inner_web_contents_impl->CreateRenderWidgetHostViewForRenderManager(
         inner_render_view_host);
+  }
+  // Do the same for speculative render frame host.
+  if (inner_speculative_render_view_host) {
+    inner_render_manager->InitRenderView(
+        inner_speculative_frame->GetSiteInstance()->group(),
+        inner_speculative_render_view_host,
+        /*proxy=*/nullptr, /*navigation_metrics_token=*/std::nullopt);
+    RenderWidgetHostViewBase* speculative_rwhv =
+        static_cast<RenderWidgetHostViewBase*>(
+            inner_speculative_frame->GetView());
+    if (!speculative_rwhv) {
+      inner_web_contents_impl->CreateRenderWidgetHostViewForRenderManager(
+          inner_speculative_render_view_host);
+    }
   }
 
   inner_web_contents_impl->RecursivelyUnregisterRenderWidgetHostViews();
@@ -3898,6 +3952,11 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
 
 #endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(IS_MAC) && BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
+  prefs.should_disable_external_popups =
+      external_popup_menus_forbid_counter_ != 0;
+#endif  // BUILDFLAG(IS_MAC) && BUILDFLAG(USE_EXTERNAL_POPUP_MENU)
+
   GetContentClient()->browser()->OverrideWebPreferences(
       this, *main_frame->GetSiteInstance(), &prefs);
   return prefs;
@@ -3920,13 +3979,11 @@ void WebContentsImpl::OnWebPreferencesChanged() {
       (force_enable_zoom_ != web_preferences_->force_enable_zoom);
   force_enable_zoom_ = web_preferences_->force_enable_zoom;
   if (force_enable_zoom_changed) {
-    std::vector<viz::FrameSinkId> frame_sink_ids;
     for (FrameTreeNode* node : primary_frame_tree_.Nodes()) {
       RenderFrameHostImpl* rfh = node->current_frame_host();
       if (rfh->is_local_root()) {
         if (auto* rwh = rfh->GetRenderWidgetHost()) {
           rwh->SetForceEnableZoom(force_enable_zoom_);
-          frame_sink_ids.push_back(rwh->GetFrameSinkId());
         }
       }
     }
@@ -4738,8 +4795,8 @@ void WebContentsImpl::FullscreenStateChanged(
       delegate_->FullscreenStateChangedForTab(rfh, *options);
     }
 
-    if (!base::Contains(fullscreen_frames_, rfh)) {
-      fullscreen_frames_.insert(rfh);
+    if (bool was_inserted = fullscreen_frames_.insert(rfh).second;
+        was_inserted) {
       FullscreenFrameSetUpdated();
     }
     return;
@@ -7320,13 +7377,27 @@ void WebContentsImpl::ReadyToCommitNavigation(
     NavigationHandle* navigation_handle) {
   TRACE_EVENT1("navigation", "WebContentsImpl::ReadyToCommitNavigation",
                "navigation_handle", navigation_handle);
+  CHECK(!navigation_handle->IsSameDocument());
 
   // Cross-document navigation of the top-level frame resets the capture
   // handle config. Using IsInPrimaryMainFrame is valid here since the browser
   // caches this state for the active main frame only.
-  if (!navigation_handle->IsSameDocument() &&
-      navigation_handle->IsInPrimaryMainFrame()) {
+  if (navigation_handle->IsInPrimaryMainFrame()) {
     SetCaptureHandleConfig(blink::mojom::CaptureHandleConfig::New());
+  }
+
+  // Notify the OS that the workload is about to increase for main frame
+  // navigations only. This a trade off between latency and power - we don't
+  // want to do it for every navigation.
+  if (navigation_handle->IsInMainFrame()) {
+    auto* gpu_process_host =
+        GpuProcessHost::Get(GPU_PROCESS_KIND_SANDBOXED, /*force_create=*/false);
+    if (gpu_process_host) {
+      auto* host = gpu_process_host->gpu_host();
+      if (host) {
+        host->NotifyWorkloadIncrease();
+      }
+    }
   }
 
   observers_.NotifyObservers(&WebContentsObserver::ReadyToCommitNavigation,
@@ -7350,10 +7421,6 @@ void WebContentsImpl::ReadyToCommitNavigation(
   if (!navigation_handle->IsRendererInitiated()) {
     GpuDataManagerImpl::GetInstance()->UnblockDomainFrom3DAPIs(
         navigation_handle->GetURL());
-  }
-
-  if (navigation_handle->IsSameDocument()) {
-    return;
   }
 
   // SSLInfo is not needed on subframe navigations since the main-frame
@@ -9038,11 +9105,11 @@ double WebContentsImpl::GetPendingZoomLevel(RenderWidgetHostImpl* rwh) {
   }
 #if BUILDFLAG(IS_ANDROID)
   return HostZoomMapForRenderFrameHost(rfh)
-      ->GetZoomLevelForHostAndSchemeAndroid(url.scheme(),
+      ->GetZoomLevelForHostAndSchemeAndroid(url.GetScheme(),
                                             net::GetHostOrSpecFromURL(url));
 #else
   return HostZoomMapForRenderFrameHost(rfh)->GetZoomLevelForHostAndScheme(
-      url.scheme(), net::GetHostOrSpecFromURL(url));
+      url.GetScheme(), net::GetHostOrSpecFromURL(url));
 #endif
 }
 
@@ -10200,6 +10267,17 @@ bool WebContentsImpl::ShouldIgnoreInputEvents() {
   return web_contents->ShouldIgnoreInputEvents();
 }
 
+bool WebContentsImpl::ShouldIgnoreA11yInputEvents() {
+  if (ignore_a11y_input_count_ > 0) {
+    return true;
+  }
+  WebContentsImpl* web_contents = GetOuterWebContents();
+  if (!web_contents) {
+    return false;
+  }
+  return web_contents->ShouldIgnoreA11yInputEvents();
+}
+
 void WebContentsImpl::FocusOwningWebContents(
     RenderWidgetHostImpl* render_widget_host) {
   OPTIONAL_TRACE_EVENT1("content", "WebContentsImpl::FocusOwningWebContents",
@@ -11319,8 +11397,11 @@ int WebContentsImpl::GetCurrentlyPlayingVideoCount() const {
 std::optional<gfx::Size> WebContentsImpl::GetFullscreenVideoSize() {
   std::optional<MediaPlayerId> id =
       media_web_contents_observer_->GetFullscreenVideoMediaPlayerId();
-  if (id && base::Contains(cached_video_sizes_, id.value())) {
-    return std::optional<gfx::Size>(cached_video_sizes_[id.value()]);
+  if (id) {
+    if (auto it = cached_video_sizes_.find(id.value());
+        it != cached_video_sizes_.end()) {
+      return std::optional<gfx::Size>(it->second);
+    }
   }
   return std::nullopt;
 }
@@ -11796,6 +11877,10 @@ void WebContentsImpl::NotifyPageBecamePrimary(PageImpl& page) {
     save_package_->ClearPage();
     save_package_.reset();
   }
+
+  // Sync draggable regions.
+  SetSupportsDraggableRegions(supports_draggable_regions_);
+
   observers_.NotifyObservers(&WebContentsObserver::PrimaryPageChanged, page);
 }
 
@@ -11924,6 +12009,17 @@ void WebContentsImpl::UpdateBrowserControlsState(
   // they are controlled from the renderer by the main RenderFrame(Host).
   GetPrimaryPage().UpdateBrowserControlsState(constraints, current, animate,
                                               offset_tag_modifications);
+}
+
+void WebContentsImpl::SetSupportsDraggableRegions(
+    bool supports_draggable_regions) {
+  supports_draggable_regions_ = supports_draggable_regions;
+  ExecutePageBroadcastMethod(
+      [supports_draggable_regions](RenderViewHostImpl* rvh) {
+        if (auto& broadcast = rvh->GetAssociatedPageBroadcast()) {
+          broadcast->SetSupportsDraggableRegions(supports_draggable_regions);
+        }
+      });
 }
 
 void WebContentsImpl::SetV8CompileHints(base::ReadOnlySharedMemoryRegion data) {
@@ -12061,7 +12157,7 @@ std::unique_ptr<PrerenderHandle> WebContentsImpl::StartPrerendering(
       no_vary_search_hint,
       /*initiator_render_frame_host=*/nullptr, GetWeakPtr(), page_transition,
       should_warm_up_compositor, should_prepare_paint_tree,
-      /*should_pause_javascript_execution=*/false,
+      blink::mojom::SpeculationAction::kPrerender,
       std::move(url_match_predicate),
       std::move(prerender_navigation_handle_callback),
       base::WrapRefCounted(
