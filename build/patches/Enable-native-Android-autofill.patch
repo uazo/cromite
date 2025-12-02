@@ -31,7 +31,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/android_autofill_manager.h        |  2 +
  .../autofill/AutofillManagerWrapper.java      |  5 +-
  .../components/autofill/AutofillProvider.java |  7 ++
- .../BrowserSelectionActionMenuDelegate.java   | 68 +++++++++++++++
+ .../BrowserSelectionActionMenuDelegate.java   | 27 ++++++
  .../browser/content_autofill_driver.cc        | 11 +++
  .../content/browser/content_autofill_driver.h | 10 +++
  .../content_autofill_driver_factory.cc        | 12 +++
@@ -45,7 +45,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../autofill/core/common/autofill_features.cc |  1 -
  .../autofill/core/common/autofill_prefs.cc    |  4 +-
  .../autofill/core/common/autofill_prefs.h     |  5 ++
- 30 files changed, 279 insertions(+), 121 deletions(-)
+ 30 files changed, 238 insertions(+), 121 deletions(-)
  create mode 100644 components/android_autofill/browser/java/src/org/chromium/components/autofill/BrowserSelectionActionMenuDelegate.java
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
@@ -187,7 +187,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manage
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSettings.java
-@@ -457,20 +457,8 @@ public class MainSettings extends ChromeBaseSettingsFragment
+@@ -465,20 +465,8 @@ public class MainSettings extends ChromeBaseSettingsFragment
      }
  
      private void updateAutofillPreferences() {
@@ -213,7 +213,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/MainSe
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
-@@ -117,6 +117,13 @@ import java.nio.ByteBuffer;
+@@ -120,6 +120,13 @@ import java.nio.ByteBuffer;
  import java.util.Objects;
  import java.util.function.Supplier;
  
@@ -227,7 +227,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.jav
  /**
   * Implementation of the interface {@link Tab}. Contains and manages a {@link ContentView}. This
   * class is not intended to be extended.
-@@ -1132,6 +1139,11 @@ class TabImpl implements Tab {
+@@ -1269,6 +1276,11 @@ class TabImpl implements Tab {
          for (TabObserver observer : mObservers) observer.onDestroyed(this);
          mObservers.clear();
  
@@ -239,7 +239,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.jav
          mUserDataHost.destroy();
          mTabViewManager.destroy();
          hideNativePage(false, null);
-@@ -1449,7 +1461,7 @@ class TabImpl implements Tab {
+@@ -1612,7 +1624,7 @@ class TabImpl implements Tab {
       * @return iff the AutofillProvider should provide a ViewStructure when prompted.
       */
      boolean providesAutofillStructure() {
@@ -248,7 +248,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.jav
          if (mProfile == null || !mProfile.isNativeInitialized()) {
              return false;
          }
-@@ -2253,16 +2265,21 @@ class TabImpl implements Tab {
+@@ -2378,16 +2390,21 @@ class TabImpl implements Tab {
       * @return true if the the provider is available for the given WebContents.
       */
      private boolean prepareAutofillProvider(WebContents newWebContents) {
@@ -276,7 +276,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.jav
              // TODO: crbug.com/432447902 — Provide only an activity context and push changes.
              mAutofillProvider =
                      new AutofillProvider(
-@@ -2272,7 +2289,16 @@ class TabImpl implements Tab {
+@@ -2397,7 +2414,16 @@ class TabImpl implements Tab {
                              getContext().getString(R.string.app_name));
              TabImplJni.get().initializeAutofillIfNecessary(mNativeTabAndroid);
          }
@@ -288,7 +288,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.jav
 +        BrowserSelectionActionMenuDelegate selectionActionMenuDelegate =
 +                new BrowserSelectionActionMenuDelegate();
 +        selectionActionMenuDelegate.setAutofillSelectionMenuItemHelper(
-+                new AutofillSelectionMenuItemHelper(getContext(), mAutofillProvider));
++                new AutofillSelectionMenuItemHelper(mAutofillProvider));
 +        selectionController.setSelectionActionMenuDelegate(selectionActionMenuDelegate);
 +
          return true;
@@ -297,7 +297,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.jav
 diff --git a/chrome/browser/android/tab_android.cc b/chrome/browser/android/tab_android.cc
 --- a/chrome/browser/android/tab_android.cc
 +++ b/chrome/browser/android/tab_android.cc
-@@ -36,6 +36,7 @@
+@@ -38,6 +38,7 @@
  #include "chrome/browser/resource_coordinator/tab_load_tracker.h"
  #include "chrome/browser/sync/glue/synced_tab_delegate_android.h"
  #include "chrome/browser/tab_contents/tab_util.h"
@@ -305,7 +305,7 @@ diff --git a/chrome/browser/android/tab_android.cc b/chrome/browser/android/tab_
  #include "chrome/browser/ui/android/context_menu_helper.h"
  #include "chrome/browser/ui/android/tab_model/tab_model.h"
  #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-@@ -449,8 +450,7 @@ void TabAndroid::InitializeAutofillIfNecessary(JNIEnv* env) {
+@@ -447,8 +448,7 @@ void TabAndroid::InitializeAutofillIfNecessary(JNIEnv* env) {
          ->MaybeInitKeyboardSuppressor();
      return;
    }
@@ -344,7 +344,7 @@ diff --git a/chrome/browser/autofill/android/java/src/org/chromium/chrome/browse
 diff --git a/chrome/browser/autofill/android/java/src/org/chromium/chrome/browser/autofill/AutofillThirdPartyModeContentProvider.java b/chrome/browser/autofill/android/java/src/org/chromium/chrome/browser/autofill/AutofillThirdPartyModeContentProvider.java
 --- a/chrome/browser/autofill/android/java/src/org/chromium/chrome/browser/autofill/AutofillThirdPartyModeContentProvider.java
 +++ b/chrome/browser/autofill/android/java/src/org/chromium/chrome/browser/autofill/AutofillThirdPartyModeContentProvider.java
-@@ -74,6 +74,7 @@ public final class AutofillThirdPartyModeContentProvider extends ContentProvider
+@@ -75,6 +75,7 @@ public final class AutofillThirdPartyModeContentProvider extends ContentProvider
              @Nullable String selection,
              String @Nullable [] selectionArgs,
              @Nullable String sortOrder) {
@@ -355,7 +355,7 @@ diff --git a/chrome/browser/autofill/android/java/src/org/chromium/chrome/browse
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -314,6 +314,12 @@ CHAR_LIMIT guidelines:
+@@ -317,6 +317,12 @@ CHAR_LIMIT guidelines:
        <message name="IDS_PREFS_SECTION_ACCOUNT_AND_GOOGLE_SERVICES" desc="Title for the group of account-related entries and google services in Settings. [CHAR_LIMIT=32]">
          You and Google
        </message>
@@ -495,7 +495,7 @@ diff --git a/chrome/browser/ui/autofill/autofill_client_provider.h b/chrome/brow
 diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 --- a/chrome/browser/ui/tab_helpers.cc
 +++ b/chrome/browser/ui/tab_helpers.cc
-@@ -400,9 +400,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+@@ -406,9 +406,7 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
        web_contents);
    ChainedBackNavigationTracker::CreateForWebContents(web_contents);
    chrome_browser_net::NetErrorTabHelper::CreateForWebContents(web_contents);
@@ -509,7 +509,7 @@ diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 diff --git a/components/android_autofill/browser/BUILD.gn b/components/android_autofill/browser/BUILD.gn
 --- a/components/android_autofill/browser/BUILD.gn
 +++ b/components/android_autofill/browser/BUILD.gn
-@@ -41,6 +41,7 @@ android_library("java") {
+@@ -42,6 +42,7 @@ android_library("java") {
      "java/src/org/chromium/components/autofill/AutofillRequest.java",
      "java/src/org/chromium/components/autofill/AutofillSelectionActionMenuDelegate.java",
      "java/src/org/chromium/components/autofill/AutofillSelectionMenuItemHelper.java",
@@ -618,7 +618,7 @@ diff --git a/components/android_autofill/browser/java/src/org/chromium/component
 new file mode 100644
 --- /dev/null
 +++ b/components/android_autofill/browser/java/src/org/chromium/components/autofill/BrowserSelectionActionMenuDelegate.java
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,27 @@
 +// Copyright 2023 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -631,7 +631,7 @@ new file mode 100644
 +import androidx.annotation.NonNull;
 +
 +import org.chromium.base.metrics.RecordHistogram;
-+import org.chromium.components.autofill.AutofillSelectionMenuItemHelper;
++import org.chromium.components.autofill.AutofillSelectionActionMenuDelegate;
 +import org.chromium.content_public.browser.SelectionMenuItem;
 +import org.chromium.content_public.browser.SelectionPopupController;
 +import org.chromium.content_public.browser.selection.SelectionActionMenuDelegate;
@@ -644,48 +644,7 @@ new file mode 100644
 +import org.chromium.base.Log;
 +
 +/** Interface for customizing text selection menu items in {@link SelectionPopupController} */
-+public class BrowserSelectionActionMenuDelegate implements SelectionActionMenuDelegate {
-+    private AutofillSelectionMenuItemHelper mAutofillSelectionMenuItemHelper;
-+
-+    public BrowserSelectionActionMenuDelegate() {
-+    }
-+
-+    @Override
-+    public void modifyDefaultMenuItems(
-+            List<SelectionMenuItem.Builder> menuItemBuilders,
-+            boolean isSelectionPassword,
-+            boolean isSelectionReadOnly,
-+            @NonNull String selectedText) {
-+    }
-+
-+    @Override
-+    public List<ResolveInfo> filterTextProcessingActivities(List<ResolveInfo> activities) {
-+        return activities;
-+    }
-+
-+    @NonNull
-+    @Override
-+    public List<SelectionMenuItem> getAdditionalNonSelectionItems() {
-+        if (mAutofillSelectionMenuItemHelper != null) {
-+            return mAutofillSelectionMenuItemHelper.getAdditionalItems();
-+        }
-+        return new ArrayList<>();
-+    }
-+
-+    @NonNull
-+    @Override
-+    public List<SelectionMenuItem> getAdditionalTextProcessingItems() {
-+        return new ArrayList<>();
-+    }
-+
-+    @Override
-+    public boolean canReuseCachedSelectionMenu() {
-+        return true;
-+    }
-+
-+    public void setAutofillSelectionMenuItemHelper(AutofillSelectionMenuItemHelper provider) {
-+        mAutofillSelectionMenuItemHelper = provider;
-+    }
++public class BrowserSelectionActionMenuDelegate extends AutofillSelectionActionMenuDelegate {
 +}
 diff --git a/components/autofill/content/browser/content_autofill_driver.cc b/components/autofill/content/browser/content_autofill_driver.cc
 --- a/components/autofill/content/browser/content_autofill_driver.cc
@@ -745,7 +704,7 @@ diff --git a/components/autofill/content/browser/content_autofill_driver.h b/com
 diff --git a/components/autofill/content/browser/content_autofill_driver_factory.cc b/components/autofill/content/browser/content_autofill_driver_factory.cc
 --- a/components/autofill/content/browser/content_autofill_driver_factory.cc
 +++ b/components/autofill/content/browser/content_autofill_driver_factory.cc
-@@ -24,6 +24,12 @@
+@@ -25,6 +25,12 @@
  #include "content/public/browser/web_contents.h"
  #include "third_party/blink/public/common/features.h"
  
@@ -758,7 +717,7 @@ diff --git a/components/autofill/content/browser/content_autofill_driver_factory
  namespace autofill {
  
  class ScopedAutofillManagersObservation;
-@@ -128,6 +134,12 @@ ContentAutofillDriver* ContentAutofillDriverFactory::DriverForFrame(
+@@ -134,6 +140,12 @@ ContentAutofillDriver* ContentAutofillDriverFactory::DriverForFrame(
        return nullptr;
      }
      driver = std::make_unique<ContentAutofillDriver>(render_frame_host, this);
@@ -774,7 +733,7 @@ diff --git a/components/autofill/content/browser/content_autofill_driver_factory
 diff --git a/components/autofill/content/renderer/autofill_agent.cc b/components/autofill/content/renderer/autofill_agent.cc
 --- a/components/autofill/content/renderer/autofill_agent.cc
 +++ b/components/autofill/content/renderer/autofill_agent.cc
-@@ -1545,14 +1545,19 @@ void AutofillAgent::ShowSuggestions(
+@@ -1547,14 +1547,19 @@ void AutofillAgent::ShowSuggestions(
          password_generation_agent_->ShowPasswordGenerationSuggestions(
              input_element, form_cache)) {
        is_popup_possibly_visible_ = true;
@@ -797,7 +756,7 @@ diff --git a/components/autofill/content/renderer/autofill_agent.cc b/components
 diff --git a/components/autofill/content/renderer/password_autofill_agent.cc b/components/autofill/content/renderer/password_autofill_agent.cc
 --- a/components/autofill/content/renderer/password_autofill_agent.cc
 +++ b/components/autofill/content/renderer/password_autofill_agent.cc
-@@ -858,7 +858,10 @@ void PasswordAutofillAgent::UpdatePasswordStateForTextChange(
+@@ -851,7 +851,10 @@ void PasswordAutofillAgent::UpdatePasswordStateForTextChange(
  
  void PasswordAutofillAgent::TrackAutofilledElement(
      const WebFormControlElement& element) {
@@ -838,7 +797,7 @@ diff --git a/components/autofill/core/browser/foundations/autofill_driver_factor
 diff --git a/components/autofill/core/browser/foundations/autofill_manager.h b/components/autofill/core/browser/foundations/autofill_manager.h
 --- a/components/autofill/core/browser/foundations/autofill_manager.h
 +++ b/components/autofill/core/browser/foundations/autofill_manager.h
-@@ -236,6 +236,8 @@ class AutofillManager
+@@ -238,6 +238,8 @@ class AutofillManager
        LifecycleState new_state,
        base::PassKey<AutofillDriverFactory> pass_key);
  
@@ -850,7 +809,7 @@ diff --git a/components/autofill/core/browser/foundations/autofill_manager.h b/c
 diff --git a/components/autofill/core/browser/foundations/browser_autofill_manager.cc b/components/autofill/core/browser/foundations/browser_autofill_manager.cc
 --- a/components/autofill/core/browser/foundations/browser_autofill_manager.cc
 +++ b/components/autofill/core/browser/foundations/browser_autofill_manager.cc
-@@ -827,6 +827,8 @@ base::WeakPtr<AutofillManager> BrowserAutofillManager::GetWeakPtr() {
+@@ -828,6 +828,8 @@ base::WeakPtr<AutofillManager> BrowserAutofillManager::GetWeakPtr() {
    return weak_ptr_factory_.GetWeakPtr();
  }
  
@@ -862,7 +821,7 @@ diff --git a/components/autofill/core/browser/foundations/browser_autofill_manag
 diff --git a/components/autofill/core/browser/foundations/browser_autofill_manager.h b/components/autofill/core/browser/foundations/browser_autofill_manager.h
 --- a/components/autofill/core/browser/foundations/browser_autofill_manager.h
 +++ b/components/autofill/core/browser/foundations/browser_autofill_manager.h
-@@ -458,6 +458,8 @@ class BrowserAutofillManager : public AutofillManager {
+@@ -460,6 +460,8 @@ class BrowserAutofillManager : public AutofillManager {
    // latter check is needed because IPC messages can arrive out of order.
    void UpdateInitialInteractionTimestamp(base::TimeTicks interaction_timestamp);
  
@@ -874,7 +833,7 @@ diff --git a/components/autofill/core/browser/foundations/browser_autofill_manag
 diff --git a/components/autofill/core/common/autofill_features.cc b/components/autofill/core/common/autofill_features.cc
 --- a/components/autofill/core/common/autofill_features.cc
 +++ b/components/autofill/core/common/autofill_features.cc
-@@ -797,7 +797,6 @@ BASE_FEATURE(kAutofillEnableSecurityTouchEventFilteringAndroid,
+@@ -871,7 +871,6 @@ BASE_FEATURE(kAutofillEnableSecurityTouchEventFilteringAndroid,
  // virtual view structures to third party providers.
  BASE_FEATURE(kAutofillThirdPartyModeContentProvider,
               base::FEATURE_ENABLED_BY_DEFAULT);
@@ -885,7 +844,7 @@ diff --git a/components/autofill/core/common/autofill_features.cc b/components/a
 diff --git a/components/autofill/core/common/autofill_prefs.cc b/components/autofill/core/common/autofill_prefs.cc
 --- a/components/autofill/core/common/autofill_prefs.cc
 +++ b/components/autofill/core/common/autofill_prefs.cc
-@@ -69,6 +69,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+@@ -75,6 +75,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterBooleanPref(kAutofillCreditCardFidoAuthOfferCheckboxState,
                                  true);
  #endif
@@ -894,7 +853,7 @@ diff --git a/components/autofill/core/common/autofill_prefs.cc b/components/auto
    registry->RegisterIntegerPref(kAutocompleteLastVersionRetentionPolicy, 0);
    registry->RegisterStringPref(kAutofillUploadEncodingSeed, "");
    registry->RegisterDictionaryPref(kAutofillVoteUploadEvents);
-@@ -108,7 +110,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+@@ -114,7 +116,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
  #endif  // BUILDFLAG(IS_ANDROID)
  
  #if BUILDFLAG(IS_ANDROID)
@@ -906,7 +865,7 @@ diff --git a/components/autofill/core/common/autofill_prefs.cc b/components/auto
 diff --git a/components/autofill/core/common/autofill_prefs.h b/components/autofill/core/common/autofill_prefs.h
 --- a/components/autofill/core/common/autofill_prefs.h
 +++ b/components/autofill/core/common/autofill_prefs.h
-@@ -128,6 +128,11 @@ inline constexpr char kAutofillWasNameAndEmailProfileUsed[] =
+@@ -140,6 +140,11 @@ inline constexpr char kAutofillWasNameAndEmailProfileUsed[] =
  // retention policy was run.
  inline constexpr char kAutocompleteLastVersionRetentionPolicy[] =
      "autocomplete.retention_policy_last_version";

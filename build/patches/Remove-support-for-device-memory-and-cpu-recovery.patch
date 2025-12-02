@@ -10,11 +10,11 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../browser/blob/blob_memory_controller.cc    | 20 ++++++++++---------
  .../browser/quota/quota_device_info_helper.cc | 17 ++++++++++++++--
  .../approximated_device_memory.cc             |  7 ++++++-
- .../frame/navigator_concurrent_hardware.cc    | 20 ++++++-------------
+ .../frame/navigator_concurrent_hardware.cc    |  8 ++++++--
  .../measure_memory_controller.cc              |  5 +++++
  .../blink/renderer/core/timing/memory_info.cc | 14 ++++++++++---
  .../core/timing/window_performance.cc         |  2 +-
- 10 files changed, 66 insertions(+), 30 deletions(-)
+ 10 files changed, 66 insertions(+), 18 deletions(-)
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Remove-support-for-device-memory-and-cpu-recovery.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_h/Remove-support-for-device-memory-and-cpu-recovery.inc
 
@@ -82,7 +82,7 @@ diff --git a/storage/browser/blob/blob_memory_controller.cc b/storage/browser/bl
 -          : base::SysInfo::AmountOfPhysicalMemory().InBytesUnsigned();
 +          : approximated_device_memory_gb_.InBytesUnsigned();
    if (disk_enabled && CreateBlobDirectory(storage_dir) == base::File::FILE_OK)
--    disk_size = base::SysInfo::AmountOfTotalDiskSpace(storage_dir);
+-    disk_size = base::SysInfo::AmountOfTotalDiskSpace(storage_dir).value_or(-1);
 +    disk_size = approximated_device_disk_size;
  
    BlobStorageLimits limits;
@@ -124,7 +124,7 @@ diff --git a/storage/browser/quota/quota_device_info_helper.cc b/storage/browser
  
  int64_t QuotaDeviceInfoHelper::AmountOfTotalDiskSpace(
      const base::FilePath& path) const {
--  int64_t disk_space = base::SysInfo::AmountOfTotalDiskSpace(path);
+-  int64_t disk_space = base::SysInfo::AmountOfTotalDiskSpace(path).value_or(-1);
 +  int64_t disk_space = approximated_device_disk_size;
    UMA_HISTOGRAM_BOOLEAN("Quota.TotalDiskSpaceIsZero", disk_space <= 0);
    return disk_space;
@@ -162,30 +162,17 @@ diff --git a/third_party/blink/common/device_memory/approximated_device_memory.c
 diff --git a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
 --- a/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
 +++ b/third_party/blink/renderer/core/frame/navigator_concurrent_hardware.cc
-@@ -3,26 +3,18 @@
+@@ -3,13 +3,17 @@
  // found in the LICENSE file.
  
  #include "third_party/blink/renderer/core/frame/navigator_concurrent_hardware.h"
 -
 +#include "build/build_config.h"
  #include "base/system/sys_info.h"
- #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
  
  namespace blink {
  
--namespace {
--
--// TODO(435582603): Hard-coding this to a common value is a reasonable start,
--// but it likely makes sense to vary the hard-coded number by platform and
--// form-factor in order to maintain plausibility over time.
--constexpr unsigned kReducedHardwareConcurrencyValue = 8u;
--
--}  // namespace
--
  unsigned NavigatorConcurrentHardware::hardwareConcurrency() const {
--  if (RuntimeEnabledFeatures::ReduceHardwareConcurrencyEnabled()) {
--    return kReducedHardwareConcurrencyValue;
--  }
 -  return static_cast<unsigned>(base::SysInfo::NumberOfProcessors());
 +#if BUILDFLAG(IS_ANDROID)
 +  return static_cast<unsigned>(4);
