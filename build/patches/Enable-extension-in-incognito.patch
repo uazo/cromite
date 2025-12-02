@@ -6,14 +6,16 @@ Full activation of incognito mode in experimental extension
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- .../chrome/browser/ChromeTabbedActivity.java  | 33 ++++++-
+ .../chrome/browser/ChromeTabbedActivity.java  | 40 +++++++-
  .../chrome/browser/app/ChromeActivity.java    | 24 ++++-
  .../customtabs/BaseCustomTabActivity.java     |  2 +-
  .../BaseCustomTabRootUiCoordinator.java       |  4 +-
+ .../CustomTabIntentDataProvider.java          |  3 +
  .../tabbed_mode/TabbedRootUiCoordinator.java  |  3 +-
  .../tabmodel/TabModelSelectorBase.java        |  7 ++
  .../browser/toolbar/ToolbarManager.java       |  4 +-
  .../chrome/browser/ui/RootUiCoordinator.java  |  6 +-
+ .../browser/extensions/extension_tab_util.cc  |  2 +-
  .../tabmodel/IncognitoTabModelImpl.java       |  5 +
  .../tabmodel/IncognitoTabModelObserver.java   |  2 +
  .../extensions/extension_actions_bridge.cc    | 12 +++
@@ -25,12 +27,20 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../ExtensionToolbarCoordinatorImpl.java      |  5 +-
  .../ChromeAndroidTaskTrackerImpl.java         | 93 ++++++++++++++-----
  .../ChromeAndroidTaskTracker.java             |  6 +-
- 19 files changed, 191 insertions(+), 49 deletions(-)
+ 21 files changed, 201 insertions(+), 51 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -284,12 +284,14 @@ import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherPaneBase;
+@@ -109,6 +109,7 @@ import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperMa
+ import org.chromium.chrome.browser.compositor.overlays.strip.StripLayoutHelperManager.TabModelStartupInfo;
+ import org.chromium.chrome.browser.cookies.CookiesFetcher;
+ import org.chromium.chrome.browser.crypto.CipherFactory;
++import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+ import org.chromium.chrome.browser.data_sharing.DataSharingIntentUtils;
+ import org.chromium.chrome.browser.data_sharing.DataSharingTabGroupUtils;
+ import org.chromium.chrome.browser.data_sharing.DataSharingTabManager;
+@@ -284,12 +285,14 @@ import org.chromium.chrome.browser.tasks.tab_management.TabSwitcherPaneBase;
  import org.chromium.chrome.browser.tasks.tab_management.TabUiUtils;
  import org.chromium.chrome.browser.tasks.tab_management.TabsSettings;
  import org.chromium.chrome.browser.tasks.tab_management.archived_tabs_auto_delete_promo.ArchivedTabsAutoDeletePromoManager;
@@ -45,10 +55,13 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
  import org.chromium.chrome.browser.ui.IncognitoRestoreAppLaunchDrawBlockerFactory;
  import org.chromium.chrome.browser.ui.RootUiCoordinator;
  import org.chromium.chrome.browser.ui.appmenu.AppMenuPropertiesDelegate;
-@@ -836,6 +838,35 @@ public class ChromeTabbedActivity extends ChromeActivity {
+@@ -834,7 +837,36 @@ public class ChromeTabbedActivity extends ChromeActivity {
+             mTabModelNotificationDotManager.initWithNative(mTabModelSelector);
+             TabModel currentTabModel = mTabModelSelector.getCurrentModel();
              initializeChromeAndroidTask(
-                     BrowserWindowType.NORMAL, currentTabModel, mMultiInstanceManager);
- 
+-                    BrowserWindowType.NORMAL, currentTabModel, mMultiInstanceManager);
++                    BrowserWindowType.NORMAL, mTabModelSelector.getModel(false), mMultiInstanceManager);
++
 +            ProfileManager.addObserver(
 +                new ProfileManager.Observer() {
 +                    @Override
@@ -77,11 +90,10 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
 +                            mTabModelSelector.getModel(true));
 +                    }
 +                });
-+
+ 
              // For saving non-incognito tab closures for Recent Tabs.
              boolean alwaysIncognito = AlwaysIncognitoLinkInterceptor.isAlwaysIncognito();
-             PrefService prefService = UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
-@@ -2937,7 +2968,7 @@ public class ChromeTabbedActivity extends ChromeActivity {
+@@ -2937,7 +2969,7 @@ public class ChromeTabbedActivity extends ChromeActivity {
                  mLayoutStateProviderSupplier,
                  getBrowserControlsManager(),
                  getWindowAndroid(),
@@ -90,6 +102,17 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
                  getLifecycleDispatcher(),
                  getLayoutManagerSupplier(),
                  /* menuOrKeyboardActionController= */ this,
+@@ -3877,6 +3909,10 @@ public class ChromeTabbedActivity extends ChromeActivity {
+             }
+             RecordUserAction.record("MobileMenuRecentTabs");
+         } else if (id == R.id.extensions_menu_id) {
++            if (getCurrentTabModel().isIncognito()) {
++                CustomTabActivity.showInfoPage(this, UrlConstants.CHROME_EXTENSIONS_URL);
++                return true;
++            }
+             LoadUrlParams params =
+                     new LoadUrlParams(
+                             UrlConstants.CHROME_EXTENSIONS_URL, PageTransition.AUTO_TOPLEVEL);
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/ChromeActivity.java
@@ -175,6 +198,33 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/Base
              @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
              @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
              @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabIntentDataProvider.java b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabIntentDataProvider.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabIntentDataProvider.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/customtabs/CustomTabIntentDataProvider.java
+@@ -340,6 +340,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
+ 
+     private final boolean mEnableUrlBarHiding;
+     private boolean mInteractWithBackground;
++    private boolean mIsExtension = false;
+     private List<CustomButtonParams> mCustomButtonParams;
+     private @Nullable Drawable mCloseButtonIcon;
+     private final boolean mIsCloseButtonEnabled;
+@@ -717,6 +718,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
+         mSideSheetRoundedCornersPosition =
+                 getActivitySideSheetRoundedCornersPositionFromIntent(intent);
+ 
++        mIsExtension = getUrlToLoad().startsWith(UrlConstants.CHROME_EXTENSIONS_URL);
+         logCustomTabFeatures(intent, colorScheme);
+         String packageName = getClientPackageNameFromSessionOrCallingActivity(mIntent, mSession);
+         RecordHistogram.recordBooleanHistogram(
+@@ -1333,6 +1335,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
+ 
+     @Override
+     public @CustomTabProfileType int getCustomTabMode() {
++        if (mIsExtension) return CustomTabProfileType.REGULAR;
+         return AlwaysIncognitoLinkInterceptor.isAlwaysIncognito()
+                 ? CustomTabProfileType.INCOGNITO
+                 : (ChromeFeatureList.sMayLaunchurlUsesSeparateStoragePartition.isEnabled()
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
@@ -277,6 +327,18 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordi
              @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
              @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
              @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
+--- a/chrome/browser/extensions/extension_tab_util.cc
++++ b/chrome/browser/extensions/extension_tab_util.cc
+@@ -1426,7 +1426,7 @@ bool ExtensionTabUtil::OpenOptionsPageFromWebContents(
+   if (!url) {
+     return false;
+   }
+-  const bool open_in_tab = ShouldOpenInTab(extension);
++  const bool open_in_tab = false; //ShouldOpenInTab(extension);
+ // Opens the url as instructed by `open_in_tab`. On android we take a different
+ // path because the `Browser` object is not available.
+ // TODO(crbug.com/441209530): Unify the path on android after browser
 diff --git a/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java b/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java
 --- a/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java
 +++ b/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java
