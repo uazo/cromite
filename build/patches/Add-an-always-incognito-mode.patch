@@ -55,6 +55,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../remote_suggestions_service_factory.cc     |   5 +
  .../bookmarks/android/bookmark_bridge.cc      |   7 +
  .../host_content_settings_map_factory.cc      |  22 ++-
+ .../webstore_private/webstore_private_api.cc  |  26 ++-
  chrome/browser/history/history_tab_helper.cc  |  20 ++
  chrome/browser/history/history_tab_helper.h   |  10 +-
  .../android/offline_page_bridge.cc            |  11 +-
@@ -87,7 +88,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../add-an-always-incognito-mode.inc          |   1 +
  .../add-an-always-incognito-mode.inc          |   3 +
  .../add-an-always-incognito-mode.inc          |   1 +
- 68 files changed, 785 insertions(+), 101 deletions(-)
+ 69 files changed, 806 insertions(+), 106 deletions(-)
  create mode 100644 chrome/android/java/res/xml/incognito_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/AlwaysIncognitoLinkInterceptor.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoSettings.java
@@ -1352,6 +1353,84 @@ diff --git a/chrome/browser/content_settings/host_content_settings_map_factory.c
  #if BUILDFLAG(ENABLE_EXTENSIONS)
    // These must be registered before before the HostSettings are passed over to
    // the IOThread.  Simplest to do this on construction.
+diff --git a/chrome/browser/extensions/api/webstore_private/webstore_private_api.cc b/chrome/browser/extensions/api/webstore_private/webstore_private_api.cc
+--- a/chrome/browser/extensions/api/webstore_private/webstore_private_api.cc
++++ b/chrome/browser/extensions/api/webstore_private/webstore_private_api.cc
+@@ -83,6 +83,12 @@
+ #include "chrome/browser/safe_browsing/safe_browsing_service.h"
+ #endif
+ 
++#if BUILDFLAG(IS_ANDROID)
++#include "chrome/common/pref_names.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#endif
++
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+ using safe_browsing::SafeBrowsingNavigationObserverManager;
+@@ -223,6 +229,16 @@ const int kExtensionReferrerUserGestureLimit = 2;
+ 
+ WebstorePrivateApi::Delegate* test_delegate = nullptr;
+ 
++Profile* GetProfileInIncognito(Profile* profile) {
++#if BUILDFLAG(IS_ANDROID)
++  if (profile->GetOriginalProfile()
++             ->GetPrefs()->GetBoolean(prefs::kAlwaysIncognitoEnabled)) {
++    return profile->GetOriginalProfile();
++  }
++#endif
++  return profile;
++}
++
+ // We allow the web store to set a string containing login information when a
+ // purchase is made, so that when a user logs into sync with a different
+ // account we can recognize the situation. The Get function returns the login if
+@@ -429,7 +445,7 @@ WebstorePrivateBeginInstallWithManifest3Function::Run() {
+   params_ = Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params_);
+ 
+-  profile_ = Profile::FromBrowserContext(browser_context());
++  profile_ = GetProfileInIncognito(Profile::FromBrowserContext(browser_context()));
+ 
+   if (!crx_file::id_util::IdIsValid(details().id)) {
+     return RespondNow(BuildResponse(api::webstore_private::Result::kInvalidId,
+@@ -965,7 +981,7 @@ void WebstorePrivateBeginInstallWithManifest3Function::
+   DCHECK(extension);
+   DCHECK(contents);
+ 
+-  Profile* profile = Profile::FromBrowserContext(contents->GetBrowserContext());
++  Profile* profile = GetProfileInIncognito(Profile::FromBrowserContext(contents->GetBrowserContext()));
+ 
+   std::string message_from_admin =
+       ExtensionManagementFactory::GetForBrowserContext(profile)
+@@ -1001,7 +1017,7 @@ WebstorePrivateCompleteInstallFunction::Run() {
+   std::optional<CompleteInstall::Params> params =
+       CompleteInstall::Params::Create(args());
+   EXTENSION_FUNCTION_VALIDATE(params);
+-  Profile* const profile = Profile::FromBrowserContext(browser_context());
++  Profile* const profile = GetProfileInIncognito(Profile::FromBrowserContext(browser_context()));
+   if (profile->IsGuestSession() || profile->IsOffTheRecord()) {
+     return RespondNow(Error(kIncognitoError));
+   }
+@@ -1319,7 +1335,7 @@ ExtensionFunction::ResponseValue
+ WebstorePrivateGetExtensionStatusFunction::BuildResponseWithoutManifest(
+     const ExtensionId& extension_id) {
+   ExtensionInstallStatus status = GetWebstoreExtensionInstallStatus(
+-      extension_id, Profile::FromBrowserContext(browser_context()));
++      extension_id, GetProfileInIncognito(Profile::FromBrowserContext(browser_context())));
+   api::webstore_private::ExtensionInstallStatus api_status =
+       ConvertExtensionInstallStatusForAPI(status);
+   return ArgumentList(GetExtensionStatus::Results::Create(api_status));
+@@ -1333,7 +1349,7 @@ void WebstorePrivateGetExtensionStatusFunction::OnManifestParsed(
+     return;
+   }
+ 
+-  Profile* const profile = Profile::FromBrowserContext(browser_context());
++  Profile* const profile = GetProfileInIncognito(Profile::FromBrowserContext(browser_context()));
+   if (!ExtensionsBrowserClient::Get()->IsValidContext(profile)) {
+     Respond(Error(kWebstoreUserCancelledError));
+     return;
 diff --git a/chrome/browser/history/history_tab_helper.cc b/chrome/browser/history/history_tab_helper.cc
 --- a/chrome/browser/history/history_tab_helper.cc
 +++ b/chrome/browser/history/history_tab_helper.cc
