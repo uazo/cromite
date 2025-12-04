@@ -1,0 +1,215 @@
+name: Build SFL Browser (Cromite-based)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      cromite_version:
+        description: 'Cromite version to build'
+        required: false
+        default: '141.0.7390.55'
+      build_target:
+        description: 'Build target'
+        required: false
+        default: 'chrome_public_apk'
+        type: choice
+        options:
+          - chrome_public_apk
+          - system_webview_apk
+          - chrome_modern_public_bundle
+
+env:
+  CROMITE_VERSION: ${{ github.event.inputs.cromite_version || '141.0.7390.55' }}
+  BUILD_TARGET: ${{ github.event.inputs.build_target || 'chrome_public_apk' }}
+  WORKSPACE_ROOT: ${{ github.workspace }}/cromite-build
+
+jobs:
+  build-cromite:
+    runs-on: self-hosted
+    timeout-minutes: 480  # 8 hours max
+    
+    steps:
+    - name: Checkout SFL Browser repository
+      uses: actions/checkout@v4
+      with:
+        path: sfl-browser-repo
+    
+    - name: Set up build environment
+      run: |
+        echo "=== Build Environment Info ==="
+        echo "Build started: $(date)"
+        echo "Runner: $(hostname)"
+        echo "Cromite version: ${CROMITE_VERSION}"
+        echo "Build target: ${BUILD_TARGET}"
+        echo "Workspace: ${WORKSPACE_ROOT}"
+        echo ""
+        echo "=== Installed Tools ==="
+        echo "Java: $(java -version 2>&1 | head -1)"
+        echo "Python: $(python3 --version)"
+        echo "Git: $(git --version)"
+        echo "Docker: $(docker --version)"
+        echo "Depot tools available: $(which gclient || echo 'Not in PATH')"
+        
+    - name: Cache Chromium source
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.WORKSPACE_ROOT }}/chromium
+        key: chromium-${{ env.CROMITE_VERSION }}-${{ runner.os }}
+        restore-keys: |
+          chromium-${{ env.CROMITE_VERSION }}-
+          chromium-
+    
+    - name: Cache build output
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.WORKSPACE_ROOT }}/chromium/src/out/Default
+          ~/.ccache
+        key: build-cache-${{ env.CROMITE_VERSION }}-${{ github.sha }}
+        restore-keys: |
+          build-cache-${{ env.CROMITE_VERSION }}-
+          build-cache-
+    
+    - name: Setup depot_tools
+      run: |
+        export PATH="$HOME/depot_tools:$PATH"
+        echo "$HOME/depot_tools" >> $GITHUB_PATH
+        which gclient && echo "depot_tools ready" || echo "depot_tools not found"
+    
+    - name: Clone/Update Cromite repository
+      run: |
+        if [ -d "${WORKSPACE_ROOT}/cromite" ]; then
+          echo "Updating existing Cromite repository"
+          cd ${WORKSPACE_ROOT}/cromite
+          git fetch origin
+        else
+          echo "Cloning Cromite repository"
+          mkdir -p ${WORKSPACE_ROOT}
+          git clone https://github.com/uazo/cromite.git ${WORKSPACE_ROOT}/cromite
+        fi
+        cd ${WORKSPACE_ROOT}/cromite
+        # Try to checkout the version, fallback to finding commit
+        git checkout ${CROMITE_VERSION} || echo "Using current branch"
+        echo "Cromite repository at: $(git rev-parse HEAD)"
+    
+    - name: Fetch Chromium source
+      run: |
+        cd ${WORKSPACE_ROOT}
+        if [ ! -d "chromium/src" ]; then
+          echo "Fetching Chromium source (this may take hours)..."
+          fetch --nohooks android
+        else
+          echo "Chromium source already exists"
+        fi
+        cd chromium/src
+        git checkout ${CROMITE_VERSION}
+        echo "Running gclient sync..."
+        gclient sync -D --nohooks
+    
+    - name: Prepare Chromium for patching
+      run: |
+        cd ${WORKSPACE_ROOT}/chromium/src
+        # Remove submodules as per Cromite's script
+        for submodule in "v8" "third_party/devtools-frontend" "third_party/skia" "third_party/perfetto"; do
+          if [ -d "${submodule}/.git" ]; then
+            echo "Removing ${submodule} submodule"
+            rm -rf ${submodule}/.git
+            cp -r ${submodule} ${submodule}-bis
+            git rm -rf ${submodule} || true
+            git submodule deinit -f ${submodule} || true
+            rm -rf ${submodule}
+            mv ${submodule}-bis ${submodule}
+            git add -f ${submodule} || true
+            git commit -m ":NOEXPORT: ${submodule} repo" || true
+          fi
+        done
+        git prune || true
+    
+    - name: Apply Cromite patches
+      run: |
+        cd ${WORKSPACE_ROOT}/chromium/src
+        PATCH_LIST="${WORKSPACE_ROOT}/cromite/build/cromite_patches_list.txt"
+        
+        if [ ! -f "${PATCH_LIST}" ]; then
+          echo "ERROR: Patch list not found"
+          exit 1
+        fi
+        
+        echo "Applying Cromite patches..."
+        while IFS= read -r patch_file; do
+          if [[ "$patch_file" == *".patch" ]]; then
+            PATCH_PATH="${WORKSPACE_ROOT}/cromite/build/patches/${patch_file}"
+            if [ -f "${PATCH_PATH}" ]; then
+              echo "Applying: ${patch_file}"
+              REPL="0,/^---/s//FILE:$(basename $patch_file)\n---/"
+              cat "${PATCH_PATH}" | sed "${REPL}" | git am || {
+                echo "ERROR: Failed to apply ${patch_file}"
+                exit 1
+              }
+            fi
+          fi
+        done < "${PATCH_LIST}"
+        echo "All patches applied successfully!"
+    
+    - name: Apply SFL customizations
+      run: |
+        echo "Applying SFL Browser customizations..."
+        # TODO: Copy SFL Java components, resources, icons
+        # This will be implemented after initial build succeeds
+    
+    - name: Configure build with GN
+      run: |
+        cd ${WORKSPACE_ROOT}/chromium/src
+        mkdir -p out/Default
+        cp ${WORKSPACE_ROOT}/cromite/build/cromite.gn_args out/Default/args.gn
+        
+        # Add SFL-specific args
+        echo '' >> out/Default/args.gn
+        echo '# SFL Browser customizations' >> out/Default/args.gn
+        echo 'target_os = "android"' >> out/Default/args.gn
+        echo 'target_cpu = "arm64"' >> out/Default/args.gn
+        
+        echo "Running gn gen..."
+        gn gen out/Default
+    
+    - name: Build Cromite APK
+      run: |
+        cd ${WORKSPACE_ROOT}/chromium/src
+        echo "Building ${BUILD_TARGET}..."
+        autoninja -C out/Default ${BUILD_TARGET}
+    
+    - name: Prepare build artifacts
+      if: always()
+      run: |
+        mkdir -p build-artifacts
+        if [ -d "${WORKSPACE_ROOT}/chromium/src/out/Default/apks" ]; then
+          cp ${WORKSPACE_ROOT}/chromium/src/out/Default/apks/*.apk build-artifacts/ || true
+        fi
+        ls -lh build-artifacts/
+    
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: sfl-browser-build-${{ github.run_number }}
+        path: build-artifacts/
+        retention-days: 30
+    
+    - name: Upload to Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v1
+      with:
+        files: build-artifacts/*
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Build Status
+      if: always()
+      run: |
+        echo "Build completed!"
+        echo "Run: ${{ github.run_number }}"
+        echo "Commit: ${{ github.sha }}"
+        echo "Branch: ${{ github.ref }}"
