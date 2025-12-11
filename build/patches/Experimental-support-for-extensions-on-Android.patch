@@ -81,12 +81,13 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  chrome/browser/startup_data.h                 |  6 +-
  .../common/task_manager_features.cc           |  2 +-
  chrome/browser/ui/BUILD.gn                    |  6 +-
- .../browser/ui/android/context_menu_helper.cc |  6 +-
+ .../browser/ui/android/context_menu_helper.cc | 12 +++-
  .../browser/ui/android/context_menu_helper.h  |  4 +-
  chrome/browser/ui/android/extensions/BUILD.gn |  4 +-
  .../extensions/extension_actions_bridge.cc    | 23 ++++++
  .../extensions/extension_actions_bridge.h     |  1 +
- .../res/layout/extensions_menu_footer.xml     |  3 +-
+ .../java/res/layout/extensions_menu.xml       |  1 +
+ .../res/layout/extensions_menu_footer.xml     |  4 +-
  .../extensions/java/res/values/dimens.xml     |  1 +
  .../ui/extensions/ExtensionActionsBridge.java |  6 ++
  .../extensions/windowing/internal/BUILD.gn    |  2 +-
@@ -123,6 +124,8 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  chrome/common/extensions/api/api_sources.gni  |  7 ++
  chrome/common/webui_url_constants.cc          |  2 +-
  chrome/common/webui_url_constants.h           |  2 +-
+ .../sandbox_status_extension_android.cc       |  3 +-
+ .../sandbox_status_extension_android.h        |  1 +
  chrome/test/BUILD.gn                          | 14 ++--
  chrome/version.gni                            |  4 +-
  .../core/browser/host_content_settings_map.cc |  6 ++
@@ -183,7 +186,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ui/webui/resources/cr_elements/BUILD.gn       |  2 +-
  .../cr_elements/cr_toolbar/cr_toolbar.css     |  6 ++
  ui/webui/resources/css/BUILD.gn               |  2 +-
- 171 files changed, 561 insertions(+), 288 deletions(-)
+ 174 files changed, 572 insertions(+), 289 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Enable-extensions-Android.grdp
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Extensions-Android.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Extensions-Android.inc
@@ -1671,6 +1674,24 @@ diff --git a/chrome/browser/ui/android/context_menu_helper.cc b/chrome/browser/u
    // Reset any previous menu model, in case a new menu is shown
    // before the old one was gracefully closed.
    extension_menu_model_.reset();
+@@ -82,11 +82,17 @@ void ContextMenuHelper::ShowContextMenu(
+ }
+ 
+ void ContextMenuHelper::DismissContextMenu() {
++#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS_CROMITE)
++  extension_menu_model_.reset();
++#endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+   JNIEnv* env = base::android::AttachCurrentThread();
+   Java_ContextMenuHelper_dismissContextMenu(env, java_obj_);
+ }
+ 
+ void ContextMenuHelper::OnContextMenuClosed(JNIEnv* env) {
++#if BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS_CROMITE)
++  extension_menu_model_.reset();
++#endif  // BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+   GetWebContents().NotifyContextMenuClosed(context_menu_params_.link_followed,
+                                            context_menu_params_.impression);
+ }
 diff --git a/chrome/browser/ui/android/context_menu_helper.h b/chrome/browser/ui/android/context_menu_helper.h
 --- a/chrome/browser/ui/android/context_menu_helper.h
 +++ b/chrome/browser/ui/android/context_menu_helper.h
@@ -1762,6 +1783,17 @@ diff --git a/chrome/browser/ui/android/extensions/extension_actions_bridge.h b/c
    jni_zero::ScopedJavaLocalRef<jobject> HandleKeyDownEvent(
        JNIEnv* env,
        const ui::KeyEventAndroid& key_event);
+diff --git a/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu.xml b/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu.xml
+--- a/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu.xml
++++ b/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu.xml
+@@ -49,6 +49,7 @@ found in the LICENSE file.
+ 
+     <View
+         android:id="@+id/extensions_menu_footer_divider"
++        android:visibility="gone"
+         android:layout_width="0dp"
+         android:layout_height="1dp"
+         app:layout_constraintTop_toBottomOf="@+id/extensions_menu_items"
 diff --git a/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_footer.xml b/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_footer.xml
 --- a/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_footer.xml
 +++ b/chrome/browser/ui/android/extensions/java/res/layout/extensions_menu_footer.xml
@@ -1773,7 +1805,15 @@ diff --git a/chrome/browser/ui/android/extensions/java/res/layout/extensions_men
          style="?android:attr/borderlessButtonStyle"
          android:layout_width="match_parent"
          android:layout_height="wrap_content"
-@@ -43,4 +44,4 @@ found in the LICENSE file.
+@@ -29,6 +30,7 @@ found in the LICENSE file.
+ 
+     <androidx.appcompat.widget.AppCompatButton
+         android:id="@+id/extensions_menu_manage_extensions_button"
++        android:visibility="gone"
+         style="?android:attr/borderlessButtonStyle"
+         android:layout_width="match_parent"
+         android:layout_height="wrap_content"
+@@ -43,4 +45,4 @@ found in the LICENSE file.
          android:drawableTint="?android:attr/textColorPrimary"
          android:gravity="start|center_vertical"/>
  
@@ -2512,6 +2552,37 @@ diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_const
  inline constexpr char kChromeUIDiscardsHost[] = "discards";
  inline constexpr char kChromeUIDiscardsURL[] = "chrome://discards/";
  #endif
+diff --git a/chrome/renderer/sandbox_status_extension_android.cc b/chrome/renderer/sandbox_status_extension_android.cc
+--- a/chrome/renderer/sandbox_status_extension_android.cc
++++ b/chrome/renderer/sandbox_status_extension_android.cc
+@@ -34,7 +34,7 @@ SandboxStatusExtension::SandboxStatusExtension(content::RenderFrame* frame)
+   frame->GetAssociatedInterfaceRegistry()
+       ->AddInterface<chrome::mojom::SandboxStatusExtension>(base::BindRepeating(
+           &SandboxStatusExtension::OnSandboxStatusExtensionRequest,
+-          base::RetainedRef(this)));
++          weak_ptr_factory_.GetWeakPtr()));
+ }
+ 
+ SandboxStatusExtension::~SandboxStatusExtension() = default;
+@@ -46,6 +46,7 @@ void SandboxStatusExtension::Create(content::RenderFrame* frame) {
+ }
+ 
+ void SandboxStatusExtension::OnDestruct() {
++  weak_ptr_factory_.InvalidateWeakPtrs();
+   // This object is ref-counted, since a callback could still be in-flight.
+   Release();
+ }
+diff --git a/chrome/renderer/sandbox_status_extension_android.h b/chrome/renderer/sandbox_status_extension_android.h
+--- a/chrome/renderer/sandbox_status_extension_android.h
++++ b/chrome/renderer/sandbox_status_extension_android.h
+@@ -73,6 +73,7 @@ class SandboxStatusExtension
+ 
+   mojo::AssociatedReceiver<chrome::mojom::SandboxStatusExtension> receiver_{
+       this};
++  base::WeakPtrFactory<SandboxStatusExtension> weak_ptr_factory_{this};
+ };
+ 
+ #endif  // CHROME_RENDERER_SANDBOX_STATUS_EXTENSION_ANDROID_H_
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn

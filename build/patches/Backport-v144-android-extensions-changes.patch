@@ -3,8 +3,12 @@ Date: Thu, 6 Nov 2025 13:22:24 +0000
 Subject: Backport-v144-android-extensions-changes
 
 Enable support for anonymous browsing.
-Backport of bugid 7089957 extensions Use BrowserWindowInterface in ExtensionViewHost
+Backport of bugid
+7089957: extensions Use BrowserWindowInterface in ExtensionViewHost
 https://chromium-review.googlesource.com/c/chromium/src/+/7089957
+
+7126008: Destroy ExtensionWindowControllerBridge when its Profile is destroyed
+https://chromium-review.googlesource.com/c/chromium/src/+/7126008
 ---
  .../chrome/browser/ChromeTabbedActivity.java  |   1 +
  .../chrome/browser/app/ChromeActivity.java    |  12 ++
@@ -20,13 +24,15 @@ https://chromium-review.googlesource.com/c/chromium/src/+/7089957
  chrome/browser/ui/android/extensions/BUILD.gn |   1 +
  .../extension_action_popup_contents.cc        |   9 +-
  .../ExtensionActionPopupContents.java         |  14 +-
+ .../extensions/windowing/internal/BUILD.gn    |   1 +
+ .../ExtensionWindowControllerBridgeImpl.java  |  45 ++++++-
  chrome/browser/ui/android/toolbar/BUILD.gn    |   2 +
  .../ExtensionActionListCoordinator.java       |  10 +-
  .../ExtensionActionListMediator.java          |  16 ++-
  .../ExtensionActionListMediatorTest.java      |  11 +-
  .../ExtensionToolbarCoordinator.java          |   5 +
  .../ExtensionToolbarCoordinatorImpl.java      |   4 +
- 20 files changed, 160 insertions(+), 92 deletions(-)
+ 22 files changed, 201 insertions(+), 97 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -597,6 +603,107 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
  
          /**
           * Destroys the native ExtensionActionPopupContents object.
+diff --git a/chrome/browser/ui/android/extensions/windowing/internal/BUILD.gn b/chrome/browser/ui/android/extensions/windowing/internal/BUILD.gn
+--- a/chrome/browser/ui/android/extensions/windowing/internal/BUILD.gn
++++ b/chrome/browser/ui/android/extensions/windowing/internal/BUILD.gn
+@@ -38,6 +38,7 @@ android_library("java") {
+   ]
+   deps = [
+     "//build/android:build_java",
++    "//chrome/browser/profiles/android:java",
+     "//chrome/browser/ui/android/extensions/windowing:java",
+     "//chrome/browser/ui/browser_window/public/android:java",
+     "//third_party/androidx:androidx_annotation_annotation_java",
+diff --git a/chrome/browser/ui/android/extensions/windowing/internal/java/src/org/chromium/chrome/browser/ui/extensions/windowing/ExtensionWindowControllerBridgeImpl.java b/chrome/browser/ui/android/extensions/windowing/internal/java/src/org/chromium/chrome/browser/ui/extensions/windowing/ExtensionWindowControllerBridgeImpl.java
+--- a/chrome/browser/ui/android/extensions/windowing/internal/java/src/org/chromium/chrome/browser/ui/extensions/windowing/ExtensionWindowControllerBridgeImpl.java
++++ b/chrome/browser/ui/android/extensions/windowing/internal/java/src/org/chromium/chrome/browser/ui/extensions/windowing/ExtensionWindowControllerBridgeImpl.java
+@@ -11,6 +11,8 @@ import org.jni_zero.CalledByNative;
+ import org.jni_zero.NativeMethods;
+ 
+ import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.profiles.ProfileManager;
+ import org.chromium.chrome.browser.ui.browser_window.ChromeAndroidTask;
+ 
+ import java.util.ArrayList;
+@@ -19,7 +21,8 @@ import java.util.Map;
+ 
+ /** Implements {@link ExtensionWindowControllerBridge}. */
+ @NullMarked
+-final class ExtensionWindowControllerBridgeImpl implements ExtensionWindowControllerBridge {
++final class ExtensionWindowControllerBridgeImpl
++        implements ExtensionWindowControllerBridge, ProfileManager.Observer {
+ 
+     /**
+      * Events received by the native singleton {@code WindowControllerListObserverForTesting}.
+@@ -82,6 +85,7 @@ final class ExtensionWindowControllerBridgeImpl implements ExtensionWindowContro
+         assert mNativeExtensionWindowControllerBridge == 0
+                 : "ExtensionWindowControllerBridge is already added to a task.";
+ 
++        ProfileManager.addObserver(this);
+         mNativeExtensionWindowControllerBridge =
+                 ExtensionWindowControllerBridgeImplJni.get()
+                         .create(
+@@ -91,10 +95,8 @@ final class ExtensionWindowControllerBridgeImpl implements ExtensionWindowContro
+ 
+     @Override
+     public void onTaskRemoved() {
+-        if (mNativeExtensionWindowControllerBridge != 0) {
+-            ExtensionWindowControllerBridgeImplJni.get()
+-                    .destroy(mNativeExtensionWindowControllerBridge);
+-        }
++        destroyNativeExtensionWindowControllerBridge();
++        ProfileManager.removeObserver(this);
+     }
+ 
+     @Override
+@@ -113,6 +115,32 @@ final class ExtensionWindowControllerBridgeImpl implements ExtensionWindowContro
+         }
+     }
+ 
++    @Override
++    public void onProfileAdded(Profile profile) {}
++
++    @Override
++    public void onProfileDestroyed(Profile profile) {
++        // This is a short-term fix for http://crbug.com/450234852.
++        //
++        // The native extension code is cross-platform and depends on BrowserWindowInterface. Per
++        // documentation of BrowserWindowInterface::GetProfile(), cross-platform code assumes
++        // BrowserWindowInterface will always be destroyed *before* its Profile.
++        //
++        // See:
++        // https://source.chromium.org/chromium/chromium/src/+/main:chrome/browser/ui/browser_window/public/browser_window_interface.h;l=108;drc=c8dc70b538f1bb0862f1be58237d6e945ee81819
++        //
++        // However, on Android, http://crbug.com/450234852 reveals a case where the Profile is
++        // destroyed before its BrowserWindowInterface, which caused native extension code to
++        // dereference an invalid Profile pointer.
++        //
++        // To avoid this issue, we destroy the native objects for extensions as soon as the native
++        // Profile is about to be destroyed. The long-term fix should be to correct the object
++        // destruction order for the case described in http://crbug.com/450234852.
++        if (profile == mChromeAndroidTask.getProfile()) {
++            destroyNativeExtensionWindowControllerBridge();
++        }
++    }
++
+     long getNativePtrForTesting() {
+         return mNativeExtensionWindowControllerBridge;
+     }
+@@ -123,6 +151,13 @@ final class ExtensionWindowControllerBridgeImpl implements ExtensionWindowContro
+                 .getExtensionWindowIdForTesting(mNativeExtensionWindowControllerBridge); // IN-TEST
+     }
+ 
++    private void destroyNativeExtensionWindowControllerBridge() {
++        if (mNativeExtensionWindowControllerBridge != 0) {
++            ExtensionWindowControllerBridgeImplJni.get()
++                    .destroy(mNativeExtensionWindowControllerBridge);
++        }
++    }
++
+     @CalledByNative
+     private void clearNativePtr() {
+         mNativeExtensionWindowControllerBridge = 0;
 diff --git a/chrome/browser/ui/android/toolbar/BUILD.gn b/chrome/browser/ui/android/toolbar/BUILD.gn
 --- a/chrome/browser/ui/android/toolbar/BUILD.gn
 +++ b/chrome/browser/ui/android/toolbar/BUILD.gn

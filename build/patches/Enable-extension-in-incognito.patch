@@ -12,22 +12,25 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../BaseCustomTabRootUiCoordinator.java       |  4 +-
  .../CustomTabIntentDataProvider.java          |  3 +
  .../tabbed_mode/TabbedRootUiCoordinator.java  |  3 +-
+ .../browser/tabmodel/TabModelJniBridge.java   |  4 +-
  .../tabmodel/TabModelSelectorBase.java        |  7 ++
  .../browser/toolbar/ToolbarManager.java       |  4 +-
  .../chrome/browser/ui/RootUiCoordinator.java  |  6 +-
+ .../developer_private_functions_shared.cc     |  4 +-
  .../browser/extensions/extension_tab_util.cc  |  2 +-
- .../tabmodel/IncognitoTabModelImpl.java       |  5 +
+ .../tabmodel/IncognitoTabModelImpl.java       | 10 +-
  .../tabmodel/IncognitoTabModelObserver.java   |  2 +
  .../extensions/extension_actions_bridge.cc    | 12 +++
  .../extensions/extension_actions_bridge.h     |  1 +
  .../ui/extensions/ExtensionActionsBridge.java |  6 ++
+ .../android/tab_model/tab_model_jni_bridge.cc |  4 +
  .../ExtensionActionListCoordinator.java       |  4 +-
  .../ExtensionActionListMediator.java          | 16 ++--
  .../ExtensionToolbarCoordinator.java          |  7 +-
  .../ExtensionToolbarCoordinatorImpl.java      |  5 +-
  .../ChromeAndroidTaskTrackerImpl.java         | 93 ++++++++++++++-----
  .../ChromeAndroidTaskTracker.java             |  6 +-
- 21 files changed, 201 insertions(+), 51 deletions(-)
+ 24 files changed, 213 insertions(+), 56 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -245,6 +248,22 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
              @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
              @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
              @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelJniBridge.java b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelJniBridge.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelJniBridge.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelJniBridge.java
+@@ -129,10 +129,10 @@ public abstract class TabModelJniBridge implements TabModelInternal {
+     @Override
+     public void associateWithBrowserWindow(long nativeAndroidBrowserWindow) {
+         // Ensure this isn't set multiple times.
+-        assert mNativeAndroidBrowserWindow == 0;
++        if (nativeAndroidBrowserWindow != 0) assert mNativeAndroidBrowserWindow == 0;
+         mNativeAndroidBrowserWindow = nativeAndroidBrowserWindow;
+ 
+-        assert nativeAndroidBrowserWindow != 0;
++        // assert nativeAndroidBrowserWindow != 0;
+         TabModelJniBridgeJni.get()
+                 .associateWithBrowserWindow(mNativeTabModelJniBridge, nativeAndroidBrowserWindow);
+     }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelSelectorBase.java b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelSelectorBase.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelSelectorBase.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabmodel/TabModelSelectorBase.java
@@ -327,6 +346,20 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordi
              @NonNull ActivityLifecycleDispatcher activityLifecycleDispatcher,
              @NonNull ObservableSupplier<LayoutManagerImpl> layoutManagerSupplier,
              @NonNull MenuOrKeyboardActionController menuOrKeyboardActionController,
+diff --git a/chrome/browser/extensions/api/developer_private/developer_private_functions_shared.cc b/chrome/browser/extensions/api/developer_private/developer_private_functions_shared.cc
+--- a/chrome/browser/extensions/api/developer_private/developer_private_functions_shared.cc
++++ b/chrome/browser/extensions/api/developer_private/developer_private_functions_shared.cc
+@@ -1676,8 +1676,8 @@ DeveloperPrivateDismissSafetyHubExtensionsMenuNotificationFunction::Run() {
+   }
+ 
+   Profile* profile = Profile::FromBrowserContext(browser_context());
+-  SafetyHubMenuNotificationServiceFactory::GetForProfile(profile)
+-      ->DismissActiveNotificationOfModule(
++  if (auto* menu_notification_service_factory = SafetyHubMenuNotificationServiceFactory::GetForProfile(profile))
++      menu_notification_service_factory->DismissActiveNotificationOfModule(
+           safety_hub::SafetyHubModuleType::EXTENSIONS);
+   return RespondNow(NoArguments());
+ }
 diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/extensions/extension_tab_util.cc
 --- a/chrome/browser/extensions/extension_tab_util.cc
 +++ b/chrome/browser/extensions/extension_tab_util.cc
@@ -342,18 +375,31 @@ diff --git a/chrome/browser/extensions/extension_tab_util.cc b/chrome/browser/ex
 diff --git a/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java b/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java
 --- a/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java
 +++ b/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelImpl.java
-@@ -151,6 +151,11 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
-         mDelegateModel.destroy();
-         mCurrentTabSupplier.set(null);
-         mTabCountSupplier.set(0);
+@@ -140,8 +140,12 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
+             return;
+         }
+ 
++        // Disassociate
++        mDelegateModel.associateWithBrowserWindow(/*nativeAndroidBrowserWindow=*/ 0);
 +        mNativeAndroidBrowserWindow = 0;
 +
-+        for (IncognitoTabModelObserver observer : mIncognitoObservers) {
+         for (IncognitoTabModelObserver observer : mIncognitoObservers) {
+-            observer.didBecomeEmpty();
 +            observer.didDestroyed();
-+        }
+         }
  
+         mDelegateModel
+@@ -152,6 +156,10 @@ class IncognitoTabModelImpl implements IncognitoTabModelInternal {
+         mCurrentTabSupplier.set(null);
+         mTabCountSupplier.set(0);
+ 
++        for (IncognitoTabModelObserver observer : mIncognitoObservers) {
++            observer.didBecomeEmpty();
++        }
++
          mDelegateModel = EmptyTabModel.getInstance(true);
          for (Callback<TabModelInternal> delegateModelObserver : mDelegateModelObservers) {
+             delegateModelObserver.onResult(mDelegateModel);
 diff --git a/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelObserver.java b/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelObserver.java
 --- a/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelObserver.java
 +++ b/chrome/browser/tabmodel/android/java/src/org/chromium/chrome/browser/tabmodel/IncognitoTabModelObserver.java
@@ -427,6 +473,20 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
          HandleKeyEventResult handleKeyDownEvent(
                  long nativeExtensionActionsBridge,
                  @JniType("ui::KeyEventAndroid") KeyEvent keyEvent);
+diff --git a/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc b/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc
+--- a/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc
++++ b/chrome/browser/ui/android/tab_model/tab_model_jni_bridge.cc
+@@ -116,6 +116,10 @@ void TabModelJniBridge::AssociateWithBrowserWindow(
+ // BrowserWindowInterface is available on desktop Android, but not other Android
+ // builds. For non-desktop Android, this function should be a no-op.
+ #if BUILDFLAG(IS_DESKTOP_ANDROID_CROMITE)
++  if (native_android_browser_window == 0) {
++    scoped_unowned_user_data_.reset();
++    return;
++  }
+   BrowserWindowInterface* android_browser_window =
+       reinterpret_cast<BrowserWindowInterface*>(native_android_browser_window);
+   CHECK(android_browser_window != nullptr);
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
