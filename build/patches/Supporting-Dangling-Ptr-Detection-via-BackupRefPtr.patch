@@ -1,0 +1,191 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Thu, 11 Dec 2025 09:53:13 +0000
+Subject: Supporting Dangling Ptr Detection via BackupRefPtr
+
+Enable Dangling Ptr Detection (DPD) via BackupRefPtr (BRP) (disabled by default)
+and additional safety checks that are too expensive to have on by default.
+Enable checking raw_ptr do not become dangling during their lifetime.
+Write a fixed cookie pattern at the end of each allocation to ensure there is no OOB write.
+Enable MTE activation in Android for enabled devices (flag disabled by default)
+
+BRP and MTE activate additional checks related to memory usage at the expense of
+performance and increased memory usage, but guarantee the user that the browser
+will not suffer from development errors related to memory management.
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ base/allocator/partition_alloc_features.cc    |  3 ++
+ base/allocator/partition_alloc_support.cc     | 30 ++++++++++++++-----
+ .../partition_allocator/partition_alloc.gni   |  6 ++--
+ build_overrides/partition_alloc.gni           |  3 +-
+ .../Enable-Partition-Alloc-BRP-Checks.inc     | 11 +++++++
+ .../platform/wtf/allocator/partitions.cc      | 10 +------
+ 6 files changed, 43 insertions(+), 20 deletions(-)
+ create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc
+
+diff --git a/base/allocator/partition_alloc_features.cc b/base/allocator/partition_alloc_features.cc
+--- a/base/allocator/partition_alloc_features.cc
++++ b/base/allocator/partition_alloc_features.cc
+@@ -95,6 +95,7 @@ BASE_FEATURE(kPartitionAllocLargeEmptySlotSpanRing,
+ #endif
+ 
+ BASE_FEATURE(kPartitionAllocWithAdvancedChecks, FEATURE_DISABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_ENABLED(kPartitionAllocWithAdvancedChecks);
+ constexpr FeatureParam<PartitionAllocWithAdvancedChecksEnabledProcesses>::Option
+     kPartitionAllocWithAdvancedChecksEnabledProcessesOptions[] = {
+         {PartitionAllocWithAdvancedChecksEnabledProcesses::kBrowserOnly,
+@@ -161,6 +162,7 @@ BASE_FEATURE(kPartitionAllocBackupRefPtr,
+              FEATURE_DISABLED_BY_DEFAULT
+ #endif
+ );
++SET_CROMITE_FEATURE_DISABLED(kPartitionAllocBackupRefPtr);
+ 
+ constexpr FeatureParam<BackupRefPtrEnabledProcesses>::Option
+     kBackupRefPtrEnabledProcessesOptions[] = {
+@@ -215,6 +217,7 @@ BASE_FEATURE(kPartitionAllocMemoryTagging,
+              FEATURE_DISABLED_BY_DEFAULT
+ #endif
+ );
++SET_CROMITE_FEATURE_DISABLED(kPartitionAllocMemoryTagging);
+ 
+ constexpr FeatureParam<MemtagMode>::Option kMemtagModeOptions[] = {
+     {MemtagMode::kSync, "sync"},
+diff --git a/base/allocator/partition_alloc_support.cc b/base/allocator/partition_alloc_support.cc
+--- a/base/allocator/partition_alloc_support.cc
++++ b/base/allocator/partition_alloc_support.cc
+@@ -280,6 +280,20 @@ void StartMemoryReclaimer(scoped_refptr<SequencedTaskRunner> task_runner) {
+ std::map<std::string, std::string> ProposeSyntheticFinchTrials() {
+   std::map<std::string, std::string> trials;
+ 
++#if PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
++  trials.emplace("BackupRefPtrSupport", "Enabled");
++  if (base::FeatureList::IsEnabled(base::features::kPartitionAllocBackupRefPtr)) {
++    trials.emplace("BackupRefPtrFlag", "Enabled");
++  } else {
++    trials.emplace("BackupRefPtrFlag", "Disabled");
++  }
++  if (base::FeatureList::IsEnabled(base::features::kPartitionAllocWithAdvancedChecks)) {
++    trials.emplace("PAAdvancedChecks", "Enabled");
++  } else {
++    trials.emplace("PAAdvancedChecks", "Disabled");
++  }
++#endif
++
+ #if PA_BUILDFLAG(ENABLE_DANGLING_RAW_PTR_CHECKS)
+   trials.emplace("DanglingPointerDetector", "Enabled");
+ #else
+@@ -291,13 +305,18 @@ std::map<std::string, std::string> ProposeSyntheticFinchTrials() {
+   trials.emplace("VectorRawPtrExperiment", "Disabled");
+ 
+ #if PA_BUILDFLAG(HAS_MEMORY_TAGGING)
++  bool has_mte = base::CPU::GetInstanceNoAllocation().has_mte();
++    if (has_mte) {
++      trials.emplace("MteOnDevice", "Supported");
++    } else {
++      trials.emplace("MteOnDevice", "Not Supported");
++    }
+   if (base::FeatureList::IsEnabled(
+           base::features::kPartitionAllocMemoryTagging)) {
+-    bool has_mte = base::CPU::GetInstanceNoAllocation().has_mte();
+     if (has_mte) {
+-      trials.emplace("MemoryTaggingDogfood", "Enabled");
++      trials.emplace("MemoryTagging", "Enabled");
+     } else {
+-      trials.emplace("MemoryTaggingDogfood", "Disabled");
++      trials.emplace("MemoryTagging", "Mte unsupported on device");
+     }
+ #if BUILDFLAG(IS_ANDROID)
+     BootloaderOverride bootloader_override = GetBootloaderOverride();
+@@ -895,10 +914,7 @@ bool PartitionAllocSupport::ShouldEnablePartitionAllocWithAdvancedChecks(
+           base::features::kPartitionAllocWithAdvancedChecks)) {
+     return false;
+   }
+-  return ShouldEnableFeatureOnProcess(
+-      base::features::kPartitionAllocWithAdvancedChecksEnabledProcessesParam
+-          .Get(),
+-      process_type);
++  return true;
+ #endif  // !PA_BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
+ }
+ 
+diff --git a/base/allocator/partition_allocator/partition_alloc.gni b/base/allocator/partition_allocator/partition_alloc.gni
+--- a/base/allocator/partition_allocator/partition_alloc.gni
++++ b/base/allocator/partition_allocator/partition_alloc.gni
+@@ -210,8 +210,8 @@ declare_args() {
+   # This will write a fixed cookie pattern at the end of each allocation, and
+   # later verify the pattern remain unchanged to ensure there is no OOB write.
+   # It comes with performance and memory cost, hence enabled only in debug.
+-  use_partition_cookie =
+-      partition_alloc_is_debug || partition_alloc_dcheck_always_on
++  use_partition_cookie = true
++      #partition_alloc_is_debug || partition_alloc_dcheck_always_on
+ 
+   # This will change partition cookie size to 4B or 8B, whichever equivalent to
+   # size of InSlotMetadata. This option is useful for InSlotMetadata corruption
+@@ -353,7 +353,7 @@ declare_args() {
+   # This is meant to be used primarily on bots. It is much easier to override
+   # the feature flags using a binary flag instead of updating multiple bots's
+   # scripts to pass command line arguments.
+-  use_full_mte = false
++  use_full_mte = true
+ }
+ 
+ stack_scan_supported = current_cpu == "x64" || current_cpu == "x86" ||
+diff --git a/build_overrides/partition_alloc.gni b/build_overrides/partition_alloc.gni
+--- a/build_overrides/partition_alloc.gni
++++ b/build_overrides/partition_alloc.gni
+@@ -114,7 +114,7 @@ use_partition_alloc_as_malloc_default =
+ 
+ enable_backup_ref_ptr_support_default = use_partition_alloc_as_malloc_default
+ 
+-enable_backup_ref_ptr_slow_checks_default = false
++enable_backup_ref_ptr_slow_checks_default = true
+ 
+ enable_dangling_raw_ptr_checks_default =
+     # The DanglingPointerDetector relies on BackupRefPtr:
+@@ -141,6 +141,7 @@ enable_dangling_raw_ptr_checks_default =
+     # Only the `android-rel` CQ bot has enforced DanglingPointerDetector checks
+     # at the moment. The other Android bots are not ready for it yet.
+     !is_android
++enable_dangling_raw_ptr_checks_default = true
+ 
+ raw_ptr_zero_on_construct_default = true
+ raw_ptr_zero_on_move_default = true
+diff --git a/cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc b/cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc
+@@ -0,0 +1,11 @@
++#ifdef FLAG_SECTION
++
++    {"enable-dangling-pointer-detector",
++     "Enable Dangling Pointer Detector",
++     "Enable Dangling Ptr Detection (DPD) via BackupRefPtr (BRP). "
++     "Enable additional safety checks that are too expensive to have on by default. "
++     "Enable checking raw_ptr do not become dangling during their lifetime. "
++     "Write a fixed cookie pattern at the end of each allocation to ensure there is no OOB write.", kOsAll,
++     FEATURE_VALUE_TYPE(base::features::kPartitionAllocBackupRefPtr)},
++
++#endif
+diff --git a/third_party/blink/renderer/platform/wtf/allocator/partitions.cc b/third_party/blink/renderer/platform/wtf/allocator/partitions.cc
+--- a/third_party/blink/renderer/platform/wtf/allocator/partitions.cc
++++ b/third_party/blink/renderer/platform/wtf/allocator/partitions.cc
+@@ -78,16 +78,8 @@ partition_alloc::PartitionOptions PartitionOptionsFromFeatures() {
+   using partition_alloc::PartitionOptions;
+ 
+ #if PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
+-  const auto brp_mode = base::features::kBackupRefPtrModeParam.Get();
+-  const bool process_affected_by_brp_flag =
+-      base::features::kBackupRefPtrEnabledProcessesParam.Get() ==
+-          BackupRefPtrEnabledProcesses::kAllProcesses ||
+-      base::features::kBackupRefPtrEnabledProcessesParam.Get() ==
+-          BackupRefPtrEnabledProcesses::kBrowserAndRenderer;
+   const bool enable_brp = base::FeatureList::IsEnabled(
+-                              base::features::kPartitionAllocBackupRefPtr) &&
+-                          (brp_mode == BackupRefPtrMode::kEnabled) &&
+-                          process_affected_by_brp_flag;
++                              base::features::kPartitionAllocBackupRefPtr);
+ #else  // PA_BUILDFLAG(ENABLE_BACKUP_REF_PTR_SUPPORT)
+   const bool enable_brp = false;
+ #endif
+--
