@@ -10,7 +10,6 @@
 #include "base/allocator/partition_alloc_features.h"
 #include "base/base_paths_android.h"
 #include "base/check.h"
-#include "base/metrics/field_trial_params.h"
 #include "base/metrics/persistent_histogram_allocator.h"
 #include "base/path_service.h"
 #include "components/history/core/browser/features.h"
@@ -32,6 +31,7 @@
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/android/ui_android_features.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gl/gl_features.h"
 #include "ui/gl/gl_switches.h"
 
@@ -112,6 +112,11 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // Disable scrollbar-width on WebView.
   aw_feature_overrides.DisableFeature(blink::features::kScrollbarWidth);
+
+  // TODO(crbug.com/402144902): Remove this once webview experiment has
+  // concluded.
+  aw_feature_overrides.DisableFeature(
+      ::features::kSendEmptyGestureScrollUpdate);
 
   // Disable Populating the VisitedLinkDatabase on WebView.
   aw_feature_overrides.DisableFeature(history::kPopulateVisitedLinkDatabase);
@@ -232,24 +237,8 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   // function and the webview permission manager cannot support it.
   aw_feature_overrides.DisableFeature(blink::features::kPermissionElement);
   aw_feature_overrides.DisableFeature(blink::features::kGeolocationElement);
-
-  // |kBtmTtl| in the testing config json.
-  {
-    const char kDipsWebViewExperiment[] = "DipsWebViewExperiment";
-    const char kDipsWebViewGroup[] = "DipsWebViewGroup";
-    base::FieldTrial* dips_field_trial = base::FieldTrialList::CreateFieldTrial(
-        kDipsWebViewExperiment, kDipsWebViewGroup);
-    CHECK(dips_field_trial) << "Unexpected name conflict.";
-    base::FieldTrialParams params;
-    const std::string ttl_time_delta_30_days = "30d";
-    params.emplace(features::kBtmInteractionTtl.name, ttl_time_delta_30_days);
-    base::AssociateFieldTrialParams(kDipsWebViewExperiment, kDipsWebViewGroup,
-                                    params);
-    aw_feature_overrides.OverrideFeatureWithFieldTrial(
-        features::kBtmTtl,
-        base::FeatureList::OverrideState::OVERRIDE_ENABLE_FEATURE,
-        dips_field_trial);
-  }
+  aw_feature_overrides.DisableFeature(blink::features::kUserMediaElement);
+  aw_feature_overrides.DisableFeature(blink::features::kInstallElement);
 
   // Delete Incidental Party State (DIPS) feature is not yet supported on
   // WebView.
@@ -287,10 +276,6 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
   aw_feature_overrides.DisableFeature(
       blink::features::kPartitionVisitedLinkDatabaseWithSelfLinks);
 
-  // Disable draw cutout edge-to-edge on WebView. Safe area insets are not
-  // handled correctly when WebView is drawing edge-to-edge.
-  aw_feature_overrides.DisableFeature(features::kDrawCutoutEdgeToEdge);
-
   // Explicitly disable PrefetchProxy instead of relying only on passing an
   // empty URL.
   aw_feature_overrides.DisableFeature(features::kPrefetchProxy);
@@ -321,4 +306,8 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // SystemTracing is enabled by default only in WebView for now.
   aw_feature_overrides.EnableFeature(features::kEnablePerfettoSystemTracing);
+
+  // Deemed that performance benefit is not worth the stability cost.
+  // See crbug.com/1309151.
+  aw_feature_overrides.DisableFeature(::features::kGpuShaderDiskCache);
 }

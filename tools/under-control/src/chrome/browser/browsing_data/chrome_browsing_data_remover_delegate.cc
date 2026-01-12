@@ -60,6 +60,8 @@
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
 #include "chrome/browser/password_manager/account_password_store_factory.h"
 #include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service.h"
+#include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service_factory.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
 #include "chrome/browser/permissions/permission_decision_auto_blocker_factory.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/no_state_prefetch_manager_factory.h"
@@ -120,8 +122,6 @@
 #include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/smart_bubble_stats_store.h"
-#include "components/payments/content/browser_binding/browser_bound_key_deleter.h"
-#include "components/payments/content/browser_binding/browser_bound_key_deleter_factory.h"
 #include "components/payments/content/web_payments_web_data_service.h"
 #include "components/performance_manager/public/user_tuning/prefs.h"
 #include "components/permissions/features.h"
@@ -132,6 +132,7 @@
 #include "components/reading_list/core/reading_list_model.h"
 #include "components/safe_browsing/core/browser/verdict_cache_manager.h"
 #include "components/search_engines/search_engine_choice/search_engine_choice_service.h"
+#include "components/search_engines/search_engine_choice/search_engine_choice_utils.h"
 #include "components/search_engines/template_url_service.h"
 #include "components/signin/public/base/consent_level.h"
 #include "components/signin/public/base/gaia_id_hash.h"
@@ -733,10 +734,11 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
-    if (payments::BrowserBoundKeyDeleter* browser_bound_key_deleter =
-            payments::BrowserBoundKeyDeleterFactory::GetForBrowserContext(
-                profile_)) {
-      browser_bound_key_deleter->RemoveInvalidBBKs();
+    if (payments::
+            BrowserBoundKeyDeleterService* browser_bound_key_deleter_service =
+                payments::BrowserBoundKeyDeleterServiceFactory::GetForProfile(
+                    profile_)) {
+      browser_bound_key_deleter_service->RemoveInvalidBBKs();
     }
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -1436,7 +1438,9 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
             ->registrar_unsafe();
     for (const web_app::WebApp& web_app :
          web_app_registrar.GetAppsIncludingStubs()) {
-      if (!web_app_registrar.IsIsolated(web_app.app_id()) ||
+      if (!web_app_registrar.AppMatches(
+              web_app.app_id(),
+              web_app::WebAppFilter::IsIsolatedWebAppIncludingUninstalling()) ||
           !filter.Run(web_app.scope())) {
         continue;
       }
@@ -1770,3 +1774,7 @@ void ChromeBrowsingDataRemoverDelegate::DisablePasswordsAutoSignin(
             TracingDataType::kDisableAutoSigninForAccountPasswords));
   }
 }
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(PackageHash)
+#endif
