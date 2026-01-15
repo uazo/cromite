@@ -71,6 +71,7 @@
 #include "chrome/browser/chrome_content_browser_client_navigation_throttles.h"
 #include "chrome/browser/chrome_content_browser_client_parts.h"
 #include "chrome/browser/content_settings/cookie_settings_factory.h"
+#include "chrome/browser/content_settings/generated_javascript_optimizer_pref.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/data_saver/data_saver.h"
@@ -133,7 +134,6 @@
 #include "chrome/browser/preloading/preloading_prefs.h"
 #include "chrome/browser/preloading/prerender/prerender_web_contents_delegate.h"
 #include "chrome/browser/preloading/search_preload/search_preload_features.h"
-#include "chrome/browser/privacy_budget/identifiability_study_state.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/privacy_sandbox/tracking_protection_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -152,6 +152,9 @@
 #include "chrome/browser/signin/chrome_signin_proxying_url_loader_factory.h"
 #include "chrome/browser/signin/chrome_signin_url_loader_throttle.h"
 #include "chrome/browser/signin/header_modification_delegate_impl.h"
+#include "chrome/browser/site_protection/site_familiarity_process_selection_deferring_condition.h"
+#include "chrome/browser/site_protection/site_familiarity_process_selection_user_data.h"
+#include "chrome/browser/site_protection/site_familiarity_utils.h"
 #include "chrome/browser/speech/chrome_speech_recognition_manager_delegate.h"
 #include "chrome/browser/speech/on_device_speech_recognition_util.h"
 #include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
@@ -237,8 +240,6 @@
 #include "components/error_page/common/error.h"
 #include "components/error_page/common/error_page_switches.h"
 #include "components/error_page/common/localized_error.h"
-#include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
-#include "components/fingerprinting_protection_filter/interventions/common/interventions_features.h"
 #include "components/google/core/common/google_switches.h"
 #include "components/heap_profiling/in_process/heap_profiler_controller.h"
 #include "components/keep_alive_registry/keep_alive_types.h"
@@ -261,13 +262,14 @@
 #include "components/no_state_prefetch/common/no_state_prefetch_url_loader_throttle.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
 #include "components/password_manager/core/browser/features/password_features.h"
+#include "components/password_manager/core/browser/password_manager_metrics_util.h"
 #include "components/payments/content/payment_request_display_manager.h"
 #include "components/payments/content/secure_payment_confirmation_service_factory.h"
 #include "components/pdf/common/pdf_util.h"
 #include "components/performance_manager/public/graph/frame_node.h"
 #include "components/performance_manager/public/performance_manager.h"
 #include "components/permissions/content_setting_permission_context_base.h"
-#include "components/policy/content/policy_blocklist_service.h"
+#include "components/policy/core/browser/url_list/policy_blocklist_service.h"
 #include "components/policy/core/common/management/management_service.h"
 #include "components/policy/core/common/policy_pref_names.h"
 #include "components/pref_registry/pref_registry_syncable.h"
@@ -426,6 +428,8 @@
 #include "sandbox/win/src/sandbox_policy.h"
 #elif BUILDFLAG(IS_MAC)
 #include "chrome/browser/browser_process_platform_part_mac.h"
+#include "chrome/browser/enterprise/platform_auth/platform_auth_features.h"
+#include "chrome/browser/enterprise/platform_auth/platform_auth_proxying_url_loader_factory.h"
 #include "chrome/common/chrome_version.h"
 #include "components/soda/constants.h"
 #include "sandbox/mac/sandbox_serializer.h"
@@ -727,6 +731,7 @@ using content::ChildProcessSecurityPolicy;
 using content::RenderFrameHost;
 using content::SiteInstance;
 using content::WebContents;
+using content_settings::JavascriptOptimizerSetting;
 
 #if BUILDFLAG(IS_POSIX)
 using content::PosixFileDescriptorInfo;
@@ -1735,13 +1740,6 @@ void ChromeContentBrowserClient::RenderProcessWillLaunch(
       std::make_unique<CrashMemoryMetricsCollector>(host));
 #endif
 
-  IdentifiabilityStudyState* identifiability_study_state =
-      g_browser_process->GetMetricsServicesManager()
-          ->GetIdentifiabilityStudyState();
-  if (identifiability_study_state) {
-    identifiability_study_state->InitializeRenderer(host);
-  }
-
   // The RendereUpdater might be null for some irregular profiles, e.g. the
   // System Profile.
   if (RendererUpdater* service =
@@ -2568,8 +2566,8 @@ bool ChromeContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
 }
 
 #if !BUILDFLAG(IS_ANDROID)
-bool ChromeContentBrowserClient::IsInitialWebUIScheme(const GURL& url) {
-  return IsForInitialWebUI(url);
+bool ChromeContentBrowserClient::IsInitialWebUIURL(const GURL& url) {
+  return waap::IsForInitialWebUI(url);
 }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -2828,17 +2826,6 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
           !prefs->GetBoolean(prefs::kAllowDinosaurEasterEgg)) {
         command_line->AppendSwitch(
             error_page::switches::kDisableDinosaurEasterEgg);
-      }
-
-      auto* management_service_factory =
-          policy::ManagementServiceFactory::GetInstance();
-      auto* browser_managment_service =
-          management_service_factory->GetForProfile(profile);
-      if ((browser_managment_service &&
-           browser_managment_service->IsManaged()) ||
-          management_service_factory->GetForPlatform()->IsManaged()) {
-        command_line->AppendSwitch(
-            error_page::switches::kEnableDinosaurEasterEggAltGameImages);
       }
 
       MaybeAppendSecureOriginsAllowlistSwitch(command_line);
@@ -4337,12 +4324,17 @@ bool ChromeContentBrowserClient::CanCreateWindow(
   contextual_tasks::ContextualTasksUiService* contextual_tasks_ui_service =
       contextual_tasks::ContextualTasksUiServiceFactory::GetForBrowserContext(
           profile);
-  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks) &&
-      contextual_tasks_ui_service &&
-      contextual_tasks_ui_service->HandleNavigation(
-          target_url, web_contents->GetLastCommittedURL(), web_contents,
-          /*is_to_new_tab=*/true)) {
-    return false;
+  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks)) {
+    content::OpenURLParams url_params(
+        target_url, referrer, disposition,
+        ui::PageTransition::PAGE_TRANSITION_AUTO_TOPLEVEL, true);
+    if (contextual_tasks_ui_service &&
+        contextual_tasks_ui_service->HandleNavigation(
+            std::move(url_params), web_contents,
+            /*is_from_embedded_page=*/false,
+            /*is_to_new_tab=*/true)) {
+      return false;
+    }
   }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -4554,6 +4546,8 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
       prefs->GetBoolean(prefs::kAccessibilityForceEnableZoom);
   web_prefs->font_weight_adjustment =
       prefs->GetInteger(prefs::kAccessibilityFontWeightAdjustment);
+  web_prefs->enable_touchpad_overscroll_history_navigation = prefs->GetBoolean(
+      prefs::kAccessibilityTouchpadOverscrollHistoryNavigation);
 #endif
   web_prefs->force_dark_mode_enabled =
       prefs->GetBoolean(prefs::kWebKitForceDarkModeEnabled);
@@ -4567,10 +4561,13 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
-  web_prefs->password_echo_enabled =
-      prefs->GetBoolean(prefs::kWebKitPasswordEchoEnabled);
+  web_prefs->password_echo_enabled_physical =
+      prefs->GetBoolean(prefs::kWebKitPasswordEchoEnabledPhysical);
+  web_prefs->password_echo_enabled_touch =
+      prefs->GetBoolean(prefs::kWebKitPasswordEchoEnabledTouch);
 #else
-  web_prefs->password_echo_enabled = false;
+  web_prefs->password_echo_enabled_physical = false;
+  web_prefs->password_echo_enabled_touch = false;
 #endif
 
   web_prefs->text_areas_are_resizable =
@@ -4660,7 +4657,8 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
           web_prefs->web_app_scope = registrar.GetAppScope(app_id);
         }
 
-        // IWA can close windows with window management permission.
+        // IWA with window management permission can close windows and
+        // focus windows without user gesture.
         if (browser->app_controller()->IsIsolatedWebApp() &&
             profile->GetPermissionController()
                     ->GetPermissionStatusForCurrentDocument(
@@ -4670,6 +4668,7 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
                         web_contents->GetPrimaryMainFrame()) ==
                 blink::mojom::PermissionStatus::GRANTED) {
           web_prefs->allow_scripts_to_close_windows = true;
+          web_prefs->allow_window_focus_without_user_gesture = true;
         }
 #if BUILDFLAG(IS_CHROMEOS)
         auto* system_app = browser->app_controller()->system_app();
@@ -4781,12 +4780,6 @@ void ChromeContentBrowserClient::OverrideWebPreferences(
   web_prefs->always_show_context_menu_on_touch =
       base::FeatureList::IsEnabled(::features::kContextMenuEmptySpace);
 #endif
-
-  web_prefs->content_based_fingerprinting_protection_enabled =
-      fingerprinting_protection_filter::features::
-          IsFingerprintingProtectionEnabledForIncognitoState(
-              Profile::FromBrowserContext(web_contents->GetBrowserContext())
-                  ->IsIncognitoProfile());
 
   if (base::FeatureList::IsEnabled(::features::kDevToolsAiPromptApi) &&
       web_contents->GetVisibleURL().SchemeIs(content::kChromeDevToolsScheme)) {
@@ -5132,7 +5125,7 @@ std::wstring ChromeContentBrowserClient::GetAppContainerSidForSandboxType(
     case sandbox::mojom::Sandbox::kServiceWithJit:
     case sandbox::mojom::Sandbox::kIconReader:
     case sandbox::mojom::Sandbox::kMediaFoundationCdm:
-    case sandbox::mojom::Sandbox::kWindowsSystemProxyResolver:
+    case sandbox::mojom::Sandbox::kProxyResolver:
       // Should never reach here.
       NOTREACHED();
   }
@@ -5229,7 +5222,7 @@ bool ChromeContentBrowserClient::PreSpawnChild(
     case sandbox::mojom::Sandbox::kService:
     case sandbox::mojom::Sandbox::kIconReader:
     case sandbox::mojom::Sandbox::kMediaFoundationCdm:
-    case sandbox::mojom::Sandbox::kWindowsSystemProxyResolver:
+    case sandbox::mojom::Sandbox::kProxyResolver:
       break;
   }
 
@@ -5413,6 +5406,24 @@ ChromeContentBrowserClient::CreateCommitDeferringConditionsForNavigation(
       &conditions);
 #endif
 
+  return conditions;
+}
+
+std::vector<std::unique_ptr<content::ProcessSelectionDeferringCondition>>
+ChromeContentBrowserClient::
+    CreateProcessSelectionDeferringConditionsForNavigation(
+        content::NavigationHandle& navigation_handle) {
+  std::vector<std::unique_ptr<content::ProcessSelectionDeferringCondition>>
+      conditions;
+  Profile* profile = Profile::FromBrowserContext(
+      navigation_handle.GetWebContents()->GetBrowserContext());
+  if (site_protection::AreV8OptimizationsDisabledOnUnfamiliarSites(profile)) {
+    auto condition = std::unique_ptr<
+        content::ProcessSelectionDeferringCondition>(
+        new site_protection::SiteFamiliarityProcessSelectionDeferringCondition(
+            navigation_handle));
+    conditions.push_back(std::move(condition));
+  }
   return conditions;
 }
 
@@ -6380,6 +6391,13 @@ void ChromeContentBrowserClient::WillCreateURLLoaderFactory(
   }
 #endif
 
+#if BUILDFLAG(IS_MAC)
+  if (base::FeatureList::IsEnabled(enterprise_auth::kOktaSSO)) {
+    enterprise_auth::ProxyingURLLoaderFactory::MaybeProxyRequest(
+        request_initiator, factory_builder);
+  }
+#endif
+
   // WARNING: This must be the last interceptor in the chain as the proxying
   // URLLoaderFactory installed by this needs to be the one actually sending
   // packets over the network (to effectively target `bound_network`).
@@ -6957,10 +6975,12 @@ bool ChromeContentBrowserClient::HandleWebUI(
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
 
-  // Rewrite chrome://settings/autofill to chrome://settings/yourSavedInfo.
+  // Rewrite chrome://settings/autofill and chrome://settings/enhancedAutofill
+  // to chrome://settings/yourSavedInfo.
   if (url->SchemeIs(content::kChromeUIScheme) &&
       url->GetHost() == chrome::kChromeUISettingsHost &&
-      url->GetPath() == chrome::kChromeUIAutofillPath &&
+      (url->GetPath() == chrome::kChromeUIAutofillPath ||
+       url->GetPath() == chrome::kChromeUIAutofillAiPath) &&
       base::FeatureList::IsEnabled(
           autofill::features::kYourSavedInfoSettingsPage)) {
     GURL::Replacements replacements;
@@ -6968,6 +6988,16 @@ bool ChromeContentBrowserClient::HandleWebUI(
     *url = url->ReplaceComponents(replacements);
   }
 
+  // Rewrite chrome://settings/addresses to chrome://settings/contactInfo.
+  if (url->SchemeIs(content::kChromeUIScheme) &&
+      url->GetHost() == chrome::kChromeUISettingsHost &&
+      (url->GetPath() == chrome::kChromeUIAddressesPath) &&
+      base::FeatureList::IsEnabled(
+          autofill::features::kYourSavedInfoSettingsPage)) {
+    GURL::Replacements replacements;
+    replacements.SetPathStr(chrome::kChromeUIContactInfoPath);
+    *url = url->ReplaceComponents(replacements);
+  }
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
 
@@ -7741,29 +7771,101 @@ bool ChromeContentBrowserClient::IsJitDisabledForSite(
                      CONTENT_SETTING_BLOCK);
 }
 
-bool ChromeContentBrowserClient::AreV8OptimizationsDisabledForSite(
+bool ChromeContentBrowserClient::AreV8OptimizationsEnabledForSite(
     content::BrowserContext* browser_context,
+    const std::optional<base::SafeRef<content::ProcessSelectionUserData>>&
+        process_selection_user_data,
     const GURL& site_url) {
   // Only disable optimizations for schemes that might actually load web
-  // content.
+  // content. This check enables v8-optimization for schemes such as chrome://
+  // and chrome-untrusted://.
   auto* policy = ChildProcessSecurityPolicy::GetInstance();
   if (!site_url.is_empty() && !policy->IsWebSafeScheme(site_url.GetScheme())) {
-    return false;
+    return true;
   }
 
   Profile* profile = Profile::FromBrowserContext(browser_context);
   auto* map = HostContentSettingsMapFactory::GetForProfile(profile);
-  // Special case to determine if any policy is set.
-  if (map && site_url.is_empty()) {
+  if (!map) {
+    return true;
+  }
+
+  if (site_url.is_empty()) {
+    // An empty `site_url` is provided when creating unlocked
+    // processes without site isolation (example: Android). In that case, allow
+    // V8 optimizations according to the default content setting. Site
+    // familiarity or site-specific settings cannot be considered here, because
+    // the process will be shared among many sites.
     return map->GetDefaultContentSetting(
-               ContentSettingsType::JAVASCRIPT_OPTIMIZER, nullptr) ==
+               ContentSettingsType::JAVASCRIPT_OPTIMIZER, nullptr) !=
            CONTENT_SETTING_BLOCK;
   }
 
-  return (map &&
-          map->GetContentSetting(site_url, site_url,
-                                 ContentSettingsType::JAVASCRIPT_OPTIMIZER) ==
-              CONTENT_SETTING_BLOCK);
+  content_settings::SettingInfo content_setting_info;
+  ContentSetting site_content_setting = map->GetContentSetting(
+      site_url, site_url, ContentSettingsType::JAVASCRIPT_OPTIMIZER,
+      &content_setting_info);
+
+  // `default_javascript_optimizer_setting` is determined based on the user's
+  // selection in chrome://settings, whether the site-familiarity-feature is
+  // enabled, and enterprise policy. `default_javascript_optimizer_setting`
+  // ignores content setting exceptions. "Disable v8 optimizers for unfamiliar
+  // sites" cannot be applied via content-setting exceptions or enterprise
+  // policy; it can only be enabled globally via
+  // `default_javascript_optimizer_setting`.
+  JavascriptOptimizerSetting default_javascript_optimizer_setting =
+      site_protection::ComputeDefaultJavascriptOptimizerSetting(profile);
+  // Invariant guaranteed by ComputeDefaultJavascriptOptimizerSetting().
+  CHECK(default_javascript_optimizer_setting !=
+            JavascriptOptimizerSetting::kBlockedForUnfamiliarSites ||
+        content_setting_info.source == content_settings::SettingSource::kUser);
+
+  if (default_javascript_optimizer_setting !=
+      JavascriptOptimizerSetting::kBlockedForUnfamiliarSites) {
+    // If site familiarity is turned off, use content settings to set v8
+    // optimization. Use `site_content_setting` to honor exceptions for specific
+    // sites over a default policy that applies to all sites.
+    return site_content_setting == CONTENT_SETTING_ALLOW;
+  }
+
+  if (content_setting_info.primary_pattern !=
+          ContentSettingsPattern::Wildcard() ||
+      content_setting_info.secondary_pattern !=
+          ContentSettingsPattern::Wildcard()) {
+    // There is a site-specific rule. The rule has precedence over
+    // kBlockedForUnfamiliarSites.
+    return site_content_setting == CONTENT_SETTING_ALLOW;
+  }
+
+  // At this point, "block for unfamiliar sites" is turned on, and site-specific
+  // exceptions have been handled by the Wildcard() check above, so
+  // `site_content_setting` must reflect the default content setting. Enforce
+  // that "block for unfamiliar sites" can only be turned on when that default
+  // content setting is set to "Allow". If it was set to "Blocked",
+  // default_javascript_optimizer_setting would have also been "Blocked" rather
+  // than "Blocked for unfamiliar sites".
+  CHECK_EQ(site_content_setting, CONTENT_SETTING_ALLOW);
+
+  const site_protection::SiteFamiliarityProcessSelectionUserData*
+      site_familiarity_user_data = nullptr;
+  if (process_selection_user_data) {
+    site_familiarity_user_data =
+        site_protection::SiteFamiliarityProcessSelectionUserData::
+            FromProcessSelectionUserData(*process_selection_user_data);
+  }
+
+  // Lookup site-familiarity previously computed for this navigation by
+  // SiteFamiliarityProcessSelectionDeferringCondition.
+  // For now, enable v8 optimizations if there is no site_familiarity_user_data.
+  // This might be called when creating a SiteInstance and process for a new
+  // speculative RenderFrameHost, when the navigation is just starting and site
+  // familiarity hasn't been computed yet. When the navigation receives a
+  // response, this will be called a second time to determine the final
+  // SiteInstance and process, and site familiarity should be available then.
+  // TODO(https://issues.chromium.org/452130797): Determine desired behavior
+  // for speculative RenderFrameHosts.
+  return !site_familiarity_user_data ||
+         site_familiarity_user_data->is_site_familiar();
 }
 
 bool ChromeContentBrowserClient::DisallowV8FeatureFlagOverridesForSite(
@@ -8430,12 +8532,6 @@ void ChromeContentBrowserClient::PreferenceRankVideoDeviceInfos(
   media_prefs::PreferenceRankVideoDeviceInfos(*prefs, infos);
 }
 
-network::mojom::IpProtectionProxyBypassPolicy
-ChromeContentBrowserClient::GetIpProtectionProxyBypassPolicy() {
-  return network::mojom::IpProtectionProxyBypassPolicy::
-      kFirstPartyToTopLevelFrame;
-}
-
 void ChromeContentBrowserClient::MaybePrewarmHttpDiskCache(
     content::BrowserContext& browser_context,
     const std::optional<url::Origin>& initiator_origin,
@@ -8767,25 +8863,6 @@ ChromeContentBrowserClient::GetClipboardTypesIfPolicyApplied(
   return std::nullopt;
 }
 
-bool ChromeContentBrowserClient::ShouldEnableCanvasNoise(
-    content::BrowserContext* browser_context,
-    const GURL& url) {
-  Profile* profile = Profile::FromBrowserContext(browser_context);
-  bool feature_enable = fingerprinting_protection_interventions::features::
-      IsCanvasInterventionsEnabledForIncognitoState(
-          profile->IsIncognitoProfile());
-  // System profiles are considered incognito, but will not query from
-  // ProfileKeyedServices and will return nullptr. We should only check user
-  // bypass if the profile returns TrackingProtectionSettings.
-  privacy_sandbox::TrackingProtectionSettings* tracking_protections_settings =
-      TrackingProtectionSettingsFactory::GetForProfile(profile);
-  if (tracking_protections_settings) {
-    return feature_enable &&
-           !tracking_protections_settings->HasTrackingProtectionException(url);
-  }
-  return feature_enable;
-}
-
 bool ChromeContentBrowserClient::UsePrefetchPrerenderIntegration() {
   return base::FeatureList::IsEnabled(features::kBookmarkTriggerForPrefetch) ||
          base::FeatureList::IsEnabled(features::kNewTabPageTriggerForPrefetch);
@@ -8834,4 +8911,51 @@ bool ChromeContentBrowserClient::ShouldSkipBeforeUnloadDialog(
 #else
   return false;
 #endif
+}
+
+void ChromeContentBrowserClient::RecordAssistedLogin(
+    content::ContentBrowserClient::AssistedLoginType login_type) {
+  using AssistedLoginType = content::ContentBrowserClient::AssistedLoginType;
+  using BrowserAssistedLoginType =
+      password_manager::metrics_util::BrowserAssistedLoginType;
+  BrowserAssistedLoginType pwm_login_type = BrowserAssistedLoginType::kUnknown;
+  switch (login_type) {
+    case AssistedLoginType::kFedCmPassive:
+      pwm_login_type = BrowserAssistedLoginType::kFedCmPassive;
+      break;
+    case AssistedLoginType::kFedCmActive:
+      pwm_login_type = BrowserAssistedLoginType::kFedCmActive;
+      break;
+    case AssistedLoginType::kPasskeyStoredInGPM:
+      pwm_login_type = BrowserAssistedLoginType::kPasskeyStoredInGPM;
+      break;
+    case AssistedLoginType::kPasskeyStoredInWindowsHello:
+      pwm_login_type = BrowserAssistedLoginType::kPasskeyStoredInWindowsHello;
+      break;
+    case AssistedLoginType::kPasskeyStoredInICloudKeychain:
+      pwm_login_type = BrowserAssistedLoginType::kPasskeyStoredInICloudKeychain;
+      break;
+    case AssistedLoginType::kPasskeyStoredInChromeProfile:
+      pwm_login_type = BrowserAssistedLoginType::kPasskeyStoredInChromeProfile;
+      break;
+    case AssistedLoginType::kPasskeyHybrid:
+      pwm_login_type = BrowserAssistedLoginType::kPasskeyHybrid;
+      break;
+    case AssistedLoginType::kPasskeySecurityKey:
+      pwm_login_type = BrowserAssistedLoginType::kPasskeySecurityKey;
+      break;
+  }
+  password_manager::metrics_util::RecordBrowserAssistedLogin(pwm_login_type);
+}
+
+std::optional<bool>
+ChromeContentBrowserClient::GetOverrideValueForStaticStorageQuota(
+    content::BrowserContext* browser_context) {
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+
+  if (profile->GetPrefs()->HasPrefPath(prefs::kStaticStorageQuotaEnabled)) {
+    return profile->GetPrefs()->GetBoolean(prefs::kStaticStorageQuotaEnabled);
+  } else {
+    return std::nullopt;
+  }
 }
