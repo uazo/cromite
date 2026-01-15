@@ -61,6 +61,7 @@
 #include "mojo/public/cpp/bindings/binder_map.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+#include "pdf/buildflags.h"
 #include "services/image_annotation/public/mojom/image_annotation.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/features_generated.h"
@@ -139,6 +140,11 @@
 #include "chrome/browser/speech/speech_recognition_service_factory.h"
 #include "media/mojo/mojom/speech_recognition_service.mojom.h"
 #endif  // BUILDFLAG(ENABLE_BROWSER_SPEECH_SERVICE)
+
+#if BUILDFLAG(ENABLE_PDF)
+#include "chrome/browser/pdf/pdf_help_bubble_handler_factory.h"
+#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
+#endif
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
 #include "chrome/browser/printing/web_api/web_printing_service_binder.h"
@@ -507,7 +513,8 @@ void PopulateChromeFrameBinders(
   if (base::FeatureList::IsEnabled(features::kWebPayments)) {
     map->Add<payments::mojom::PaymentRequest>(&payments::CreatePaymentRequest);
   }
-  if (base::FeatureList::IsEnabled(blink::features::kWebAppInstallation) &&
+  if ((base::FeatureList::IsEnabled(blink::features::kWebAppInstallation) ||
+       base::FeatureList::IsEnabled(blink::features::kInstallElement)) &&
       !render_frame_host->GetParentOrOuterDocument()) {
     map->Add<blink::mojom::WebInstallService>(
         &web_app::WebInstallServiceImpl::CreateIfAllowed);
@@ -564,6 +571,11 @@ void PopulateChromeFrameBinders(
 #if BUILDFLAG(IS_WIN)
   map->Add<media::mojom::MediaFoundationPreferences>(
       &BindMediaFoundationPreferences);
+#endif
+
+#if BUILDFLAG(ENABLE_PDF)
+  map->Add<help_bubble::mojom::PdfHelpBubbleHandlerFactory>(
+      &pdf::PdfHelpBubbleHandlerFactory::Create);
 #endif
 
 #if BUILDFLAG(ENABLE_PRINT_PREVIEW)

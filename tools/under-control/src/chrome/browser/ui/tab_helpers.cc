@@ -40,6 +40,7 @@
 #include "chrome/browser/media/media_engagement_service.h"
 #include "chrome/browser/metrics/desktop_session_duration/desktop_session_duration_observer.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor_preconnect_client.h"
+#include "chrome/browser/net/http_auth_cache_status.h"
 #include "chrome/browser/net/net_error_tab_helper.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
@@ -78,7 +79,6 @@
 #include "chrome/browser/tpcd/heuristics/opener_heuristic_service.h"
 #include "chrome/browser/tpcd/http_error_observer/http_error_tab_helper.h"
 #include "chrome/browser/tpcd/metadata/devtools_observer.h"
-#include "chrome/browser/tpcd/support/validity_service.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/trusted_vault/trusted_vault_encryption_keys_tab_helper.h"
 #include "chrome/browser/ui/autofill/autofill_client_provider.h"
@@ -156,7 +156,6 @@
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "rlz/buildflags/buildflags.h"
-#include "third_party/blink/public/common/features.h"
 #include "ui/accessibility/accessibility_features.h"
 
 #if BUILDFLAG(IS_ANDROID)
@@ -164,24 +163,20 @@
 #include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
 #include "chrome/browser/android/oom_intervention/oom_intervention_tab_helper.h"
+#include "chrome/browser/android/persisted_tab_data/language_persisted_tab_data_android.h"
 #include "chrome/browser/android/persisted_tab_data/sensitivity_persisted_tab_data_android.h"
 #include "chrome/browser/android/policy/policy_auditor_bridge.h"
 #include "chrome/browser/banners/android/chrome_app_banner_manager_android.h"
 #include "chrome/browser/content_settings/request_desktop_site_web_contents_observer_android.h"
 #include "chrome/browser/facilitated_payments/ui/chrome_facilitated_payments_client.h"
 #include "chrome/browser/fast_checkout/fast_checkout_tab_helper.h"
-#include "chrome/browser/fingerprinting_protection/chrome_fingerprinting_protection_web_contents_helper_factory.h"
 #include "chrome/browser/flags/android/chrome_feature_list.h"
 #include "chrome/browser/loader/from_gws_navigation_and_keep_alive_request_tab_helper.h"
 #include "chrome/browser/plugins/plugin_observer_android.h"
-#include "chrome/browser/privacy_sandbox/tracking_protection_settings_factory.h"
 #include "chrome/browser/ui/android/context_menu_helper.h"
 #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_android.h"
+#include "components/content_capture/common/content_capture_features.h"
 #include "components/facilitated_payments/core/features/features.h"
-#include "components/fingerprinting_protection_filter/common/fingerprinting_protection_filter_features.h"
-#include "components/fingerprinting_protection_filter/interventions/browser/canvas_interventions_web_contents_helper.h"
-#include "components/fingerprinting_protection_filter/interventions/common/interventions_features.h"
-#include "components/ip_protection/common/ip_protection_status.h"
 #include "components/page_load_metrics/browser/features.h"
 #include "components/sensitive_content/android/android_sensitive_content_client.h"
 #include "components/sensitive_content/features.h"
@@ -194,6 +189,7 @@
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper.h"
 #include "chrome/browser/ui/intent_picker_tab_helper.h"
 #include "chrome/browser/ui/javascript_dialogs/javascript_tab_modal_dialog_manager_delegate_desktop.h"
+#include "chrome/browser/ui/read_anything/read_anything_side_panel_controller.h"
 #include "chrome/browser/ui/sad_tab_helper.h"
 #include "chrome/browser/ui/search/search_tab_helper.h"
 #include "chrome/browser/ui/search_engine_choice/search_engine_choice_tab_helper.h"
@@ -201,7 +197,6 @@
 #include "chrome/browser/ui/ui_features.h"
 #include "chrome/browser/ui/uma_browsing_activity_observer.h"
 #include "chrome/browser/ui/views/side_panel/history_clusters/history_clusters_tab_helper.h"
-#include "chrome/browser/ui/views/side_panel/read_anything/read_anything_side_panel_controller.h"
 #include "components/image_fetcher/core/image_fetcher_service.h"
 #include "components/omnibox/browser/omnibox_field_trial.h"
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
@@ -349,16 +344,14 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       autofill::AutofillClientProviderFactory::GetForProfile(profile);
   autofill_client_provider.CreateClientForWebContents(web_contents);
 
-  if (base::FeatureList::IsEnabled(
-          blink::features::kMediaSessionEnterPictureInPicture)) {
 #if BUILDFLAG(IS_ANDROID)
-    if (base::FeatureList::IsEnabled(media::kAutoPictureInPictureAndroid)) {
-      AutoPictureInPictureTabHelper::CreateForWebContents(web_contents);
-    }
-#else
+  if (base::FeatureList::IsEnabled(media::kAutoPictureInPictureAndroid)) {
     AutoPictureInPictureTabHelper::CreateForWebContents(web_contents);
-#endif
   }
+#else
+  AutoPictureInPictureTabHelper::CreateForWebContents(web_contents);
+#endif
+
 #if BUILDFLAG(IS_ANDROID)
   // The sensitive content client has to be instantiated after the autofill
   // client, because the sensitive content client starts a flow which uses
@@ -371,33 +364,9 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
         web_contents, "SensitiveContent.Chrome.");
   }
 
-  if (fingerprinting_protection_filter::features::
-          IsFingerprintingProtectionEnabledForIncognitoState(
-              profile->IsIncognitoProfile())) {
-    CreateFingerprintingProtectionWebContentsHelper(
-        web_contents, profile->GetPrefs(),
-        HostContentSettingsMapFactory::GetForProfile(profile),
-        TrackingProtectionSettingsFactory::GetForProfile(profile),
-        profile->IsIncognitoProfile());
-  }
-
-  if (fingerprinting_protection_interventions::features::
-          ShouldBlockCanvasReadbackForIncognitoState(
-              profile->IsIncognitoProfile()) ||
-      fingerprinting_protection_interventions::features::
-          IsCanvasInterventionsEnabledForIncognitoState(
-              profile->IsIncognitoProfile())) {
-    fingerprinting_protection_interventions::
-        CanvasInterventionsWebContentsHelper::CreateForWebContents(
-            web_contents,
-            TrackingProtectionSettingsFactory::GetForProfile(profile),
-            profile->IsIncognitoProfile());
-  }
-
-  // Only create the IpProtectionStatus if the User Bypass feature is enabled.
-  if (net::features::kIpPrivacyEnableUserBypass.Get()) {
-    ip_protection::IpProtectionStatus::CreateForWebContents(web_contents);
-  }
+  // Create the HttpAuthCacheStatus to start observing resource load
+  // completions.
+  HttpAuthCacheStatus::HttpAuthCacheStatus::CreateForWebContents(web_contents);
 #endif  // BUILDFLAG(IS_ANDROID)
   if (breadcrumbs::IsEnabled(g_browser_process->local_state())) {
     BreadcrumbManagerTabHelper::CreateForWebContents(web_contents);
@@ -419,6 +388,37 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
 #endif
   ChromeSecurityStateTabHelper::CreateForWebContents(web_contents);
   ChromeTranslateClient::CreateForWebContents(web_contents);
+#if BUILDFLAG(IS_ANDROID)
+  // Register LanguagePersistedTabDataAndroid for non-incognito tabs to
+  // persist language details.
+  if (!profile->IsOffTheRecord() &&
+      content_capture::features::ShouldSendMetadataForDataShare()) {
+    if (auto* tab = TabAndroid::FromWebContents(web_contents); tab) {
+      LanguagePersistedTabDataAndroid::From(
+          tab,
+          base::BindOnce(
+              [](base::WeakPtr<content::WebContents> web_contents,
+                 PersistedTabDataAndroid* persisted_tab_data) {
+                if (!web_contents) {
+                  return;
+                }
+                ChromeTranslateClient* chrome_translate_client =
+                    ChromeTranslateClient::FromWebContents(web_contents.get());
+
+                if (!chrome_translate_client) {
+                  return;
+                }
+
+                auto* language_persisted_tab_data_android =
+                    static_cast<LanguagePersistedTabDataAndroid*>(
+                        persisted_tab_data);
+                language_persisted_tab_data_android->RegisterTranslateDriver(
+                    chrome_translate_client->translate_driver());
+              },
+              web_contents->GetWeakPtr()));
+    }
+  }
+#endif  // BUILDFLAG(IS_ANDROID)
   client_hints::ClientHintsWebContentsObserver::CreateForWebContents(
       web_contents);
   commerce::CommerceTabHelper::CreateForWebContents(
@@ -599,7 +599,6 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
   tasks::TaskTabHelper::CreateForWebContents(web_contents);
   tpcd::metadata::TpcdMetadataDevtoolsObserver::CreateForWebContents(
       web_contents);
-  tpcd::trial::ValidityService::MaybeCreateForWebContents(web_contents);
 #if !BUILDFLAG(IS_ANDROID)
   TabCaptureContentsBorderHelper::CreateForWebContents(web_contents);
 #endif  // BUILDFLAG(IS_ANDROID)
