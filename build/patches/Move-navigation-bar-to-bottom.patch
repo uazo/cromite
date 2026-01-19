@@ -37,7 +37,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../layouts/LayoutManagerChromeTablet.java    |   7 +-
  .../layouts/ToolbarSwipeLayout.java           |  14 +-
  .../overlays/strip/ScrollDelegate.java        |   2 +-
- .../strip/StripLayoutHelperManager.java       |  37 ++++-
+ .../strip/StripLayoutHelperManager.java       |  39 ++++-
  .../scene_layer/StaticTabSceneLayer.java      |   7 +-
  .../scene_layer/TabListSceneLayer.java        |   8 +
  .../scene_layer/TabStripSceneLayer.java       |  20 ++-
@@ -71,7 +71,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../android/res/layout/hub_layout.xml         |   9 +-
  .../android/res/layout/hub_toolbar_layout.xml |   4 +-
  chrome/browser/prefs/browser_prefs.cc         |   2 +-
- .../chrome/browser/ui/appmenu/AppMenu.java    |  38 ++++-
+ .../chrome/browser/ui/appmenu/AppMenu.java    |  39 ++++-
  .../ui/appmenu/AppMenuHandlerImpl.java        |  10 ++
  .../EdgeToEdgeControllerImpl.java             |   1 +
  .../ui/edge_to_edge/EdgeToEdgeUtils.java      |   2 +
@@ -104,7 +104,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../render_widget_host_view_android.cc        |   3 +
  .../Move-navigation-bar-to-bottom.inc         |  17 ++
  .../renderer/core/frame/viewport_data.cc      |   1 +
- 91 files changed, 1060 insertions(+), 88 deletions(-)
+ 91 files changed, 1063 insertions(+), 88 deletions(-)
  create mode 100644 chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/ReversedLinearLayout.java
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Move-navigation-bar-to-bottom.inc
 
@@ -1035,12 +1035,13 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
  
  import java.util.ArrayList;
  import java.util.List;
-@@ -276,12 +278,16 @@ public class StripLayoutHelperManager
+@@ -276,12 +278,17 @@ public class StripLayoutHelperManager
      // Drag-Drop
      private @Nullable TabStripDragHandler mTabStripDragHandler;
  
 +    private final Supplier<BrowserControlsManager> mBrowserControlsManagerSupplier;
 +    private final float mDpToPx;
++    private RectF mCachedViewport;
 +
      private class TabStripEventHandler implements AreaMotionEventHandler {
          @Override
@@ -1052,7 +1053,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
              if (mModelSelectorButton != null && mModelSelectorButton.onDown(x, y, buttons)) {
                  return;
              }
-@@ -306,6 +312,7 @@ public class StripLayoutHelperManager
+@@ -306,6 +313,7 @@ public class StripLayoutHelperManager
              if (DragDropGlobalState.hasValue()) {
                  return;
              }
@@ -1060,7 +1061,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
              if (mModelSelectorButton != null) {
                  mModelSelectorButton.drag(x, y);
              }
-@@ -317,6 +324,7 @@ public class StripLayoutHelperManager
+@@ -317,6 +325,7 @@ public class StripLayoutHelperManager
              if (DragDropGlobalState.hasValue()) {
                  return;
              }
@@ -1068,7 +1069,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
              long time = time();
              if (mModelSelectorButton != null && mModelSelectorButton.click(x, y, buttons)) {
                  mModelSelectorButton.handleClick(time, buttons, modifiers);
-@@ -330,6 +338,7 @@ public class StripLayoutHelperManager
+@@ -330,6 +339,7 @@ public class StripLayoutHelperManager
              if (DragDropGlobalState.hasValue()) {
                  return;
              }
@@ -1076,7 +1077,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
              getActiveStripLayoutHelper().fling(time(), velocityX);
          }
  
-@@ -338,6 +347,7 @@ public class StripLayoutHelperManager
+@@ -338,6 +348,7 @@ public class StripLayoutHelperManager
              if (DragDropGlobalState.hasValue()) {
                  return;
              }
@@ -1084,7 +1085,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
              getActiveStripLayoutHelper().onLongPress(x, y);
          }
  
-@@ -477,7 +487,8 @@ public class StripLayoutHelperManager
+@@ -477,7 +488,8 @@ public class StripLayoutHelperManager
              DataSharingTabManager dataSharingTabManager,
              BottomSheetController bottomSheetController,
              Supplier<ShareDelegate> shareDelegateSupplier,
@@ -1094,7 +1095,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
          mContext = context;
          Resources res = context.getResources();
          mManagerHost = managerHost;
-@@ -597,6 +608,8 @@ public class StripLayoutHelperManager
+@@ -597,6 +609,8 @@ public class StripLayoutHelperManager
                          multiInstanceManager,
                          shareDelegateSupplier,
                          TabGroupListBottomSheetCoordinator::new);
@@ -1103,7 +1104,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
  
          tabHoverCardViewStub.setOnInflateListener(
                  (viewStub, view) -> {
-@@ -861,6 +874,10 @@ public class StripLayoutHelperManager
+@@ -818,6 +832,7 @@ public class StripLayoutHelperManager
+             RectF viewport, RectF visibleViewport, ResourceManager resourceManager) {
+         assert mTabStripTreeProvider != null;
+         mResourceManager = resourceManager;
++        mCachedViewport = viewport;
+ 
+         // When refactor is enabled, the mSceneLayerYOffset / mSceneLayerVisibleHeight wil be
+         // calculated externally, so we can skip the adjustment here.
+@@ -861,6 +876,10 @@ public class StripLayoutHelperManager
                      getStripTransitionScrimColor(), mStripTransitionScrimOpacity);
          }
  
@@ -1114,18 +1123,18 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
          mTabStripTreeProvider.pushAndUpdateStrip(
                  this,
                  mLayerTitleCacheSupplier.get(),
-@@ -874,7 +891,9 @@ public class StripLayoutHelperManager
+@@ -874,7 +893,9 @@ public class StripLayoutHelperManager
                  mStripTransitionScrimOpacity,
                  getActiveStripLayoutHelper().getLeftPaddingToDraw(),
                  getActiveStripLayoutHelper().getRightPaddingToDraw(),
 -                mTopPadding);
 +                mTopPadding,
-+                viewport.height(),
++                mCachedViewport.height(),
 +                topControlsHeight);
      }
  
      private float getVisibleHeightDp(float topControlOffsetDp) {
-@@ -976,11 +995,21 @@ public class StripLayoutHelperManager
+@@ -976,11 +997,21 @@ public class StripLayoutHelperManager
                  mRightPadding,
                  mTopPadding);
  
@@ -2204,7 +2213,15 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
  import android.os.SystemClock;
  import android.view.Gravity;
  import android.view.KeyEvent;
-@@ -424,6 +425,13 @@ class AppMenu implements OnKeyListener {
+@@ -45,6 +46,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.build.annotations.RequiresNonNull;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider.ControlsPosition;
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.ui.appmenu.internal.R;
+ import org.chromium.components.browser_ui.styles.SemanticColorUtils;
+ import org.chromium.components.browser_ui.widget.chips.ChipView;
+@@ -424,6 +426,13 @@ class AppMenu implements OnKeyListener {
              mListView.setVerticalScrollBarEnabled(false);
          }
  
@@ -2218,7 +2235,7 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
          int footerHeight = attachFooter(footer, (ViewGroup) contentView, menuWidth);
          int headerHeight = attachHeader(header, menuWidth);
  
-@@ -471,7 +479,8 @@ class AppMenu implements OnKeyListener {
+@@ -471,7 +480,8 @@ class AppMenu implements OnKeyListener {
                          anchorView,
                          anchorViewOffset);
  
@@ -2228,7 +2245,7 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
  
          int[] popupPosition =
                  getPopupPosition(
-@@ -483,8 +492,14 @@ class AppMenu implements OnKeyListener {
+@@ -483,8 +493,14 @@ class AppMenu implements OnKeyListener {
                          padding,
                          anchorView,
                          popupWidth,
@@ -2239,12 +2256,12 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
 +        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +            // due to some unknown behaviour, the popup must be resized to
 +            // allow selection without leaving touch
-+            mPopup.setHeight(popupHeight - 1);
++            popup.setHeight(popupHeight - 1);
 +        }
  
          mHierarchicalMenuController.setupFlyoutController(
                  /* flyoutHandler= */ flyoutHandler,
-@@ -609,11 +624,20 @@ class AppMenu implements OnKeyListener {
+@@ -609,11 +625,20 @@ class AppMenu implements OnKeyListener {
              Rect padding,
              View anchorView,
              int popupWidth,
@@ -2266,7 +2283,7 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
          int[] offsets = new int[2];
          // If we have a hardware menu button, locate the app menu closer to the estimated
          // hardware menu button location.
-@@ -744,7 +768,13 @@ class AppMenu implements OnKeyListener {
+@@ -744,7 +769,13 @@ class AppMenu implements OnKeyListener {
                          - mMenuSpec.footerHeight
                          - mMenuSpec.headerHeight
                          - anchorViewImpactHeight;
@@ -2275,7 +2292,7 @@ diff --git a/chrome/browser/ui/android/appmenu/internal/java/src/org/chromium/ch
 +            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.N) {
 +                // due to an Android Nougat bug the popup does not appear above the anchorview.
 +                // the display is not pleasant, so we reduce the space
-+                availableScreenSpace -= anchorView.getHeight();
++                availableScreenSpace -= mMenuSpec.anchorView.getHeight();
 +            }
 +        }
          if (mIsByPermanentButton) availableScreenSpace -= mMenuSpec.padding.top;

@@ -12,21 +12,17 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../privacy/settings/PrivacySettings.java     |   9 ++
  chrome/app/settings_strings.grdp              |  15 +++
  .../api/settings_private/prefs_util.cc        |   1 +
- chrome/browser/renderer_preferences_util.cc   |   3 +
+ chrome/browser/renderer_preferences_util.cc   |   2 +
  chrome/browser/resources/settings/BUILD.gn    |   1 +
  .../settings/privacy_page/cookies_page.html   |   2 +
  .../settings/privacy_page/cookies_page.ts     |   1 +
  .../settings/privacy_page/gpc_toggle.html     |  32 +++++
  .../settings/privacy_page/gpc_toggle.ts       | 112 ++++++++++++++++++
  .../Enable-Global-Privacy-Control.grdp        |  15 +++
- chrome/browser/ui/prefs/pref_watcher.cc       |   4 +
- chrome/browser/ui/prefs/pref_watcher.h        |   2 +
+ chrome/browser/ui/browser_ui_prefs.cc         |   1 +
+ chrome/browser/ui/prefs/pref_watcher.cc       |   2 +
  .../settings_localized_strings_provider.cc    |   3 +
- .../tracking_protection_prefs.cc              |   1 +
- .../tracking_protection_prefs.h               |   2 +
- .../tracking_protection_settings.cc           |  15 +++
- .../tracking_protection_settings.h            |   3 +
- .../tracking_protection_settings_observer.h   |   2 +
+ chrome/common/pref_names.h                    |   2 +
  .../browser_initiated_resource_request.cc     |   6 +
  content/renderer/render_frame_impl.cc         |   4 +
  .../blink/common/loader/loader_constants.cc   |   1 +
@@ -46,7 +42,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../web_service_worker_fetch_context_impl.cc  |   3 +
  ...shared_worker_global_scope_context_impl.cc |   3 +
  .../platform/runtime_enabled_features.json5   |   5 +
- 42 files changed, 391 insertions(+)
+ 38 files changed, 366 insertions(+)
  create mode 100644 chrome/android/java/res/xml/gpc_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/GpcSettings.java
  create mode 100644 chrome/browser/resources/settings/privacy_page/gpc_toggle.html
@@ -240,13 +236,12 @@ diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chro
 diff --git a/chrome/browser/renderer_preferences_util.cc b/chrome/browser/renderer_preferences_util.cc
 --- a/chrome/browser/renderer_preferences_util.cc
 +++ b/chrome/browser/renderer_preferences_util.cc
-@@ -152,6 +152,9 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
+@@ -152,6 +152,8 @@ void UpdateFromSystemSettings(blink::RendererPreferences* prefs,
    prefs->referrers_policy = pref_service->GetInteger(prefs::kReferrersPolicy);
    prefs->enable_do_not_track =
        pref_service->GetBoolean(prefs::kEnableDoNotTrack);
 +  prefs->enable_gpc =
-+      TrackingProtectionSettingsFactory::GetForProfile(profile)
-+          ->IsGPCEnabled();
++      pref_service->GetBoolean(prefs::kEnableGPC);
    prefs->enable_encrypted_media =
        pref_service->GetBoolean(prefs::kEnableEncryptedMedia);
    prefs->webrtc_ip_handling_policy = blink::ToWebRTCIPHandlingPolicy(
@@ -458,32 +453,29 @@ new file mode 100644
 +Please note that it only applies to the states of California (under CCPA and CPRA) and Colorado (under CoPA).
 +      </message>
 +</grit-part>
+diff --git a/chrome/browser/ui/browser_ui_prefs.cc b/chrome/browser/ui/browser_ui_prefs.cc
+--- a/chrome/browser/ui/browser_ui_prefs.cc
++++ b/chrome/browser/ui/browser_ui_prefs.cc
+@@ -141,6 +141,7 @@ void RegisterBrowserUserPrefs(user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(
+       prefs::kEnableDoNotTrack, false,
+       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
++  registry->RegisterBooleanPref(prefs::kEnableGPC, true);
+ #if !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
+   registry->RegisterBooleanPref(prefs::kPrintPreviewUseSystemDefaultPrinter,
+                                 false);
 diff --git a/chrome/browser/ui/prefs/pref_watcher.cc b/chrome/browser/ui/prefs/pref_watcher.cc
 --- a/chrome/browser/ui/prefs/pref_watcher.cc
 +++ b/chrome/browser/ui/prefs/pref_watcher.cc
-@@ -199,6 +199,10 @@ void PrefWatcher::OnNativeThemeUpdated(ui::NativeTheme* observed_theme) {
-   UpdateRendererPreferences();
- }
+@@ -150,6 +150,8 @@ PrefWatcher::PrefWatcher(Profile* profile) : profile_(profile) {
+                                      renderer_callback);
+   profile_pref_change_registrar_.Add(prefs::kEnableDoNotTrack,
+                                      renderer_callback);
++  profile_pref_change_registrar_.Add(prefs::kEnableGPC,
++                                     renderer_callback);
  
-+void PrefWatcher::OnGPCEnabledChanged() {
-+  UpdateRendererPreferences();
-+}
-+
- void PrefWatcher::UpdateRendererPreferences() {
-   for (PrefsTabHelper* helper : tab_helpers_) {
-     helper->UpdateRendererPreferences();
-diff --git a/chrome/browser/ui/prefs/pref_watcher.h b/chrome/browser/ui/prefs/pref_watcher.h
---- a/chrome/browser/ui/prefs/pref_watcher.h
-+++ b/chrome/browser/ui/prefs/pref_watcher.h
-@@ -41,6 +41,8 @@ class PrefWatcher : public KeyedService,
-   // ui::NativeThemeObserver:
-   void OnNativeThemeUpdated(ui::NativeTheme* observed_theme) override;
- 
-+  void OnGPCEnabledChanged() override;
-+
-   void UpdateRendererPreferences();
-   void OnWebPrefChanged(const std::string& pref_name);
-   void OnLiveCaptionEnabledPrefChanged(const std::string& pref_name);
+ #if !BUILDFLAG(IS_MAC)
+   profile_pref_change_registrar_.Add(prefs::kFullscreenAllowed,
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
@@ -497,93 +489,18 @@ diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provide
        // TODO(crbug.com/40122957): This string is no longer used. Remove.
        {"permissionsPageTitle", IDS_SETTINGS_PERMISSIONS},
        {"siteSettingsSublabel", IDS_SETTINGS_PERMISSIONS_DESCRIPTION},
-diff --git a/components/privacy_sandbox/tracking_protection_prefs.cc b/components/privacy_sandbox/tracking_protection_prefs.cc
---- a/components/privacy_sandbox/tracking_protection_prefs.cc
-+++ b/components/privacy_sandbox/tracking_protection_prefs.cc
-@@ -16,6 +16,7 @@ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
-   registry->RegisterBooleanPref(
-       prefs::kFingerprintingProtectionEnabled, true,
-       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-+  registry->RegisterBooleanPref(prefs::kEnableGPC, true);
-   registry->RegisterBooleanPref(
-       prefs::kIpProtectionEnabled, true,
-       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-diff --git a/components/privacy_sandbox/tracking_protection_prefs.h b/components/privacy_sandbox/tracking_protection_prefs.h
---- a/components/privacy_sandbox/tracking_protection_prefs.h
-+++ b/components/privacy_sandbox/tracking_protection_prefs.h
-@@ -101,6 +101,8 @@ inline constexpr char kIpProtectionInitializedByDogfood[] =
- inline constexpr char kFingerprintingProtectionEnabled[] =
-     "tracking_protection.fingerprinting_protection_enabled";
+diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
+--- a/chrome/common/pref_names.h
++++ b/chrome/common/pref_names.h
+@@ -1558,6 +1558,8 @@ inline constexpr char kEnableReferrers[] = "enable_referrers";
+ // Whether to send the DNT header.
+ inline constexpr char kEnableDoNotTrack[] = "enable_do_not_track";
  
 +inline constexpr char kEnableGPC[] = "enable_gpc";
 +
- // Whether User Bypass 3PC exceptions have been migrated to Tracking Protection
- // exceptions.
- inline constexpr char kUserBypass3pcExceptionsMigrated[] =
-diff --git a/components/privacy_sandbox/tracking_protection_settings.cc b/components/privacy_sandbox/tracking_protection_settings.cc
---- a/components/privacy_sandbox/tracking_protection_settings.cc
-+++ b/components/privacy_sandbox/tracking_protection_settings.cc
-@@ -48,6 +48,11 @@ TrackingProtectionSettings::TrackingProtectionSettings(
-       base::BindRepeating(
-           &TrackingProtectionSettings::OnIpProtectionPrefChanged,
-           base::Unretained(this)));
-+  pref_change_registrar_.Add(
-+      prefs::kEnableGPC,
-+      base::BindRepeating(
-+          &TrackingProtectionSettings::OnGPCEnabledPrefChanged,
-+          base::Unretained(this)));
-   pref_change_registrar_.Add(
-       prefs::kBlockAll3pcToggleEnabled,
-       base::BindRepeating(
-@@ -135,6 +140,16 @@ void TrackingProtectionSettings::OnEnterpriseControlForPrefsChanged() {
-   }
- }
- 
-+bool TrackingProtectionSettings::IsGPCEnabled() const {
-+  return pref_service_->GetBoolean(prefs::kEnableGPC);
-+}
-+
-+void TrackingProtectionSettings::OnGPCEnabledPrefChanged() {
-+  for (auto& observer : observers_) {
-+    observer.OnGPCEnabledChanged();
-+  }
-+}
-+
- void TrackingProtectionSettings::OnIpProtectionPrefChanged() {
-   for (auto& observer : observers_) {
-     observer.OnIpProtectionEnabledChanged();
-diff --git a/components/privacy_sandbox/tracking_protection_settings.h b/components/privacy_sandbox/tracking_protection_settings.h
---- a/components/privacy_sandbox/tracking_protection_settings.h
-+++ b/components/privacy_sandbox/tracking_protection_settings.h
-@@ -49,6 +49,8 @@ class TrackingProtectionSettings : public KeyedService {
-   void AddObserver(TrackingProtectionSettingsObserver* observer);
-   void RemoveObserver(TrackingProtectionSettingsObserver* observer);
- 
-+  bool IsGPCEnabled() const;
-+
-   // Returns whether tracking protection for 3PCD (prefs + UX) is enabled.
-   bool IsTrackingProtection3pcdEnabled() const;
- 
-@@ -70,6 +72,7 @@ class TrackingProtectionSettings : public KeyedService {
-   void OnEnterpriseControlForPrefsChanged();
- 
-   // Callbacks for pref observation.
-+  void OnGPCEnabledPrefChanged();
-   void OnBlockAllThirdPartyCookiesPrefChanged();
-   void OnTrackingProtection3pcdPrefChanged();
-   void OnIpProtectionPrefChanged();
-diff --git a/components/privacy_sandbox/tracking_protection_settings_observer.h b/components/privacy_sandbox/tracking_protection_settings_observer.h
---- a/components/privacy_sandbox/tracking_protection_settings_observer.h
-+++ b/components/privacy_sandbox/tracking_protection_settings_observer.h
-@@ -21,6 +21,8 @@ class TrackingProtectionSettingsObserver {
- 
-   virtual ~TrackingProtectionSettingsObserver() = default;
- 
-+  virtual void OnGPCEnabledChanged() {}
-+
-   // For observation of IP protection.
-   virtual void OnIpProtectionEnabledChanged() {}
- 
+ // Whether to allow the use of Encrypted Media Extensions (EME), except for the
+ // use of Clear Key key sytems, which is always allowed as required by the spec.
+ // TODO(crbug.com/40549758): This pref was used as a WebPreference which is why
 diff --git a/content/browser/loader/browser_initiated_resource_request.cc b/content/browser/loader/browser_initiated_resource_request.cc
 --- a/content/browser/loader/browser_initiated_resource_request.cc
 +++ b/content/browser/loader/browser_initiated_resource_request.cc

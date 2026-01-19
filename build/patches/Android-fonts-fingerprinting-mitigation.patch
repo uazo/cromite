@@ -8,10 +8,12 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
  .../common/ProductionSupportedFlagList.java   |    3 +
  .../component_updater/registration.cc         |    9 +
+ build/config/freetype/freetype.gni            |    2 +-
  .../java/res/xml/developer_preferences.xml    |    5 +
  chrome/browser/BUILD.gn                       |    7 +
  .../browser/component_updater/registration.cc |   10 +
  ...droid-fonts-fingerprinting-mitigation.grdp |    9 +
+ chrome/browser/ui/prefs/prefs_tab_helper.cc   |    9 +-
  chrome/renderer/BUILD.gn                      |    4 +
  .../installer_policies/BUILD.gn               |    7 +
  .../fonts_pack_component_installer.cc         |   96 +
@@ -29,10 +31,12 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  content/child/BUILD.gn                        |    7 +
  content/renderer/BUILD.gn                     |    4 +
  .../renderer/renderer_blink_platform_impl.cc  |   55 +-
+ ...renderer_main_platform_delegate_android.cc |    2 +-
  ...ndroid-fonts-fingerprinting-mitigation.inc |   12 +
  ...ndroid-fonts-fingerprinting-mitigation.inc |    7 +
  ...ndroid-fonts-fingerprinting-mitigation.inc |    5 +
  skia/BUILD.gn                                 |   12 +
+ skia/ext/font_utils.cc                        |    1 +
  .../include/ports/SkFontConfigInterface.h     |    2 +
  .../skia/include/ports/SkFontMgr_android.h    |   42 +-
  .../skia/src/ports/SkFontConfigInterface.cpp  |    4 +
@@ -40,9 +44,10 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../src/ports/SkFontConfigInterface_direct.h  |    1 +
  .../skia/src/ports/SkFontMgr_android.cpp      |  278 ++-
  .../skia/src/ports/SkFontMgr_android_data.cpp | 1640 +++++++++++++++++
+ .../skia/src/ports/SkFontMgr_android_ndk.cpp  |    2 +-
  .../src/ports/SkFontMgr_android_parser.cpp    |   49 +-
  .../skia/src/ports/SkFontMgr_android_parser.h |    5 +-
- 36 files changed, 2416 insertions(+), 76 deletions(-)
+ 41 files changed, 2424 insertions(+), 84 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
  create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.cc
  create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.h
@@ -90,6 +95,16 @@ diff --git a/android_webview/nonembedded/component_updater/registration.cc b/and
    component_installer_list.push_back(
        std::make_unique<
            component_updater::OriginTrialsComponentInstallerPolicy>());
+diff --git a/build/config/freetype/freetype.gni b/build/config/freetype/freetype.gni
+--- a/build/config/freetype/freetype.gni
++++ b/build/config/freetype/freetype.gni
+@@ -26,5 +26,5 @@ declare_args() {
+   #   https://crbug.com/370816215
+   #
+   # Note: //build should not import directly from //pdf for layering reasons.
+-  enable_freetype = !is_android && !is_ios && (is_linux || !is_castos)
++  enable_freetype = !is_ios && (is_linux || !is_castos)
+ }
 diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/android/java/res/xml/developer_preferences.xml
 --- a/chrome/android/java/res/xml/developer_preferences.xml
 +++ b/chrome/android/java/res/xml/developer_preferences.xml
@@ -158,6 +173,32 @@ new file mode 100644
 +        Replaces all system fonts with the same for all devices
 +    </message>
 +</grit-part>
+diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/prefs/prefs_tab_helper.cc
+--- a/chrome/browser/ui/prefs/prefs_tab_helper.cc
++++ b/chrome/browser/ui/prefs/prefs_tab_helper.cc
+@@ -64,8 +64,7 @@
+ #include <windows.h>
+ #endif
+ 
+-#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_ANDROID) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
++#if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+ // If a font name in prefs default values starts with a comma, consider it's a
+ // comma-separated font list and resolve it to the first available font.
+ #define PREFS_FONT_LIST 1
+@@ -442,9 +441,9 @@ void PrefsTabHelper::RegisterProfilePrefs(
+         value = gfx::FontList::FirstAvailableOrFirst(value);
+       }
+ #else   // !PREFS_FONT_LIST
+-      DCHECK(!value.starts_with(','))
+-          << "This platform doesn't support default font lists. "
+-          << pref.pref_name << "=" << value;
++      // DCHECK(!value.starts_with(','))
++      //     << "This platform doesn't support default font lists. "
++      //     << pref.pref_name << "=" << value;
+ #endif  // PREFS_FONT_LIST
+       registry->RegisterStringPref(pref.pref_name, value);
+       fonts_with_defaults.insert(pref.pref_name);
 diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
 --- a/chrome/renderer/BUILD.gn
 +++ b/chrome/renderer/BUILD.gn
@@ -806,6 +847,18 @@ diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer
  #endif
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
+diff --git a/content/renderer/renderer_main_platform_delegate_android.cc b/content/renderer/renderer_main_platform_delegate_android.cc
+--- a/content/renderer/renderer_main_platform_delegate_android.cc
++++ b/content/renderer/renderer_main_platform_delegate_android.cc
+@@ -35,7 +35,7 @@ void RendererMainPlatformDelegate::PlatformInitialize() {
+   // Android 14+ user devices with updated system fonts will call statx and
+   // possibly other system calls that are not allowed in the sandbox.
+   // See https://crbug.com/40618213 for details.
+-  [[maybe_unused]] auto mgr = skia::DefaultFontMgr();
++  // [[maybe_unused]] auto mgr = skia::DefaultFontMgr();
+ }
+ 
+ void RendererMainPlatformDelegate::PlatformUninitialize() {
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/Android-fonts-fingerprinting-mitigation.inc b/cromite_flags/chrome/browser/about_flags_cc/Android-fonts-fingerprinting-mitigation.inc
 new file mode 100644
 --- /dev/null
@@ -867,6 +920,17 @@ diff --git a/skia/BUILD.gn b/skia/BUILD.gn
    if (is_linux || is_chromeos || is_android) {
      # Retain the files for the SkFontMgr_Android on linux to emulate android
      # fonts. See content/zygote/zygote_main_linux.cc
+diff --git a/skia/ext/font_utils.cc b/skia/ext/font_utils.cc
+--- a/skia/ext/font_utils.cc
++++ b/skia/ext/font_utils.cc
+@@ -59,6 +59,7 @@ SkFontMgr* g_fontmgr_override = nullptr;
+ #if BUILDFLAG(IS_ANDROID)
+ // https://crbug.com/461659286 Failure to create any font causes crash.
+ BASE_FEATURE(kUseAndroidNDKFontAPI, base::FEATURE_DISABLED_BY_DEFAULT);
++SET_CROMITE_FEATURE_DISABLED(kUseAndroidNDKFontAPI);
+ #endif
+ 
+ }  // namespace
 diff --git a/third_party/skia/include/ports/SkFontConfigInterface.h b/third_party/skia/include/ports/SkFontConfigInterface.h
 --- a/third_party/skia/include/ports/SkFontConfigInterface.h
 +++ b/third_party/skia/include/ports/SkFontConfigInterface.h
@@ -3051,6 +3115,18 @@ new file mode 100644
 +
 +    return false;
 +}
+diff --git a/third_party/skia/src/ports/SkFontMgr_android_ndk.cpp b/third_party/skia/src/ports/SkFontMgr_android_ndk.cpp
+--- a/third_party/skia/src/ports/SkFontMgr_android_ndk.cpp
++++ b/third_party/skia/src/ports/SkFontMgr_android_ndk.cpp
+@@ -996,7 +996,7 @@ public:
+         }
+ 
+         std::vector<std::unique_ptr<FontFamily>> xmlFamilies;
+-        SkFontMgr_Android_Parser::GetSystemFontFamilies(xmlFamilies);
++        SkFontMgr_Android_Parser::GetSystemFontFamilies(xmlFamilies, /*custom*/ nullptr);
+ 
+         skia_private::THashMap<SkString, std::unique_ptr<SkStreamAsset>> streamForPath;
+ 
 diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
 --- a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
 +++ b/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
@@ -3129,7 +3205,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
  void SkFontMgr_Android_Parser::GetSystemFontFamilies(
 -        std::vector<std::unique_ptr<FontFamily>>& fontFamilies)
 +        std::vector<std::unique_ptr<FontFamily>>& fontFamilies,
-+                                                     const SkFontMgr_Android_CustomFonts* custom)
++        const SkFontMgr_Android_CustomFonts* custom)
  {
      // Version 21 of the system font configuration does not need any fallback configuration files.
      SkString basePath(getenv("ANDROID_ROOT"));

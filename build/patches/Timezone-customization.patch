@@ -30,13 +30,14 @@ Require: Content-settings-infrastructure.patch
  .../common/content_settings_mojom_traits.cc   |   3 +-
  .../common/content_settings_mojom_traits.h    |   5 +
  .../content_settings/core/common/pref_names.h |   3 +
- .../renderer/content_settings_agent_impl.cc   |  77 +++++++
+ .../renderer/content_settings_agent_impl.cc   |  78 +++++++
  .../renderer/content_settings_agent_impl.h    |  11 +
  .../blink/renderer/core/timezone/build.gni    |   2 +
- .../timezone/external_timezone_controller.cc  |  37 ++++
+ .../timezone/external_timezone_controller.cc  |  40 ++++
  .../timezone/external_timezone_controller.h   |  34 +++
- .../core/timezone/timezone_controller.h       |   6 +-
- 26 files changed, 756 insertions(+), 2 deletions(-)
+ .../core/timezone/timezone_controller.cc      |  11 -
+ .../core/timezone/timezone_controller.h       |  12 +-
+ 27 files changed, 762 insertions(+), 17 deletions(-)
  create mode 100755 components/browser_ui/site_settings/android/java/res/layout/time_zone_select_dialog.xml
  create mode 100755 components/browser_ui/site_settings/android/java/res/layout/timezoneoverride_site_settings_preference.xml
  create mode 100755 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/TimezoneOverrideSiteSettingsPreference.java
@@ -855,7 +856,7 @@ diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc
  
    blink::WebLocalFrame* frame = render_frame()->GetWebFrame();
    if (frame->Parent())
-@@ -465,4 +468,78 @@ void ContentSettingsAgentImpl::ClearBlockedContentSettings() {
+@@ -465,4 +468,79 @@ void ContentSettingsAgentImpl::ClearBlockedContentSettings() {
    cached_script_permissions_.clear();
  }
  
@@ -877,6 +878,20 @@ diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc
 +    const std::string& timezone_override_value) {
 +  // base/i18n/icu_util.cc # 329
 +
++  if (setting == CONTENT_SETTING_ALLOW) {
++    // system time
++    if (timezone_override_) {
++      timezone_override_.reset();
++    }
++    return true;
++  }
++
++  // https://chromium-review.googlesource.com/c/chromium/src/+/7031664
++  if (blink::ExternalTimeZoneController::HasTimeZoneOverride()) {
++    DLOG(INFO) << "UpdateTimeZoneOverride: already set";
++    return false;
++  }
++
 +  /* timezone_id: third_party/icu/source/i18n/timezone.cpp
 +      We first try to lookup the zone ID in our system list.  If this
 +      * fails, we try to parse it as a custom string GMT[+-]hh:mm.  If
@@ -884,14 +899,7 @@ diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc
 +      * user wants, but at least is a functioning TimeZone object.
 +      */
 +  std::string timezone_id;
-+
-+  if (setting == CONTENT_SETTING_ALLOW) {
-+    // system time
-+    if (timezone_override_) {
-+      timezone_override_.reset();
-+    }
-+    return true;
-+  } else if (setting == CONTENT_SETTING_BLOCK) {
++  if (setting == CONTENT_SETTING_BLOCK) {
 +    // timezone random
 +    UErrorCode ec = U_ZERO_ERROR;
 +    int32_t rawOffset = base::RandInt(-12, 11) * 3600 * 1000;
@@ -912,24 +920,18 @@ diff --git a/components/content_settings/renderer/content_settings_agent_impl.cc
 +      timezone_id = timezone_override_value;
 +  }
 +
-+  if (!blink::ExternalTimeZoneController::HasTimeZoneOverride()) {
-+    timezone_override_.reset();
-+    timezone_override_ =
-+        blink::ExternalTimeZoneController::SetTimeZoneOverride(timezone_id);
-+    if (!timezone_override_) {
-+      DLOG(WARNING) << "UpdateTimeZoneOverride - Invalid timezone id '"
-+                   << timezone_id << "'";
-+      return false;
-+    } else {
-+      DLOG(INFO)
-+          << "UpdateTimeZoneOverride - setting to '"
-+          << timezone_id << "'";
-+      return true;
-+    }
++  timezone_override_.reset();
++  timezone_override_ =
++      blink::ExternalTimeZoneController::SetTimeZoneOverride(timezone_id);
++  if (!timezone_override_) {
++    DLOG(WARNING) << "UpdateTimeZoneOverride - Invalid timezone id '"
++                  << timezone_id << "'";
++    return false;
 +  } else {
 +    DLOG(INFO)
-+        << "UpdateTimeZoneOverride: already set";
-+    return false;
++        << "UpdateTimeZoneOverride - setting to '"
++        << timezone_id << "'";
++    return true;
 +  }
 +}
 +
@@ -976,7 +978,7 @@ diff --git a/third_party/blink/renderer/core/timezone/external_timezone_controll
 new file mode 100644
 --- /dev/null
 +++ b/third_party/blink/renderer/core/timezone/external_timezone_controller.cc
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,40 @@
 +// Copyright 2019 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -994,17 +996,20 @@ new file mode 100644
 +// static
 +std::unique_ptr<ExternalTimeZoneController::TimeZoneOverride>
 +ExternalTimeZoneController::SetTimeZoneOverride(const std::string& timezone_id) {
++  DCHECK(IsMainThread());
 +  auto timezone = String(timezone_id.c_str());
 +
-+  auto timezone_override = TimeZoneController::SetTimeZoneOverride(timezone);
-+  if (!timezone_override) return nullptr;
++  auto result = TimeZoneController::SetTimeZoneOverride(timezone);
++  if (result.status != TimeZoneController::TimeZoneOverrideStatus::kSuccess)
++    return nullptr;
 +
-+  timezone_override->clear_at_destruction_ = false;
++  result.handle->clear_at_destruction_ = false;
 +  return std::unique_ptr<TimeZoneOverride>(new TimeZoneOverride());
 +}
 +
 +// static
 +bool ExternalTimeZoneController::HasTimeZoneOverride() {
++  DCHECK(IsMainThread());
 +  return TimeZoneController::HasTimeZoneOverride();
 +}
 +
@@ -1053,6 +1058,65 @@ new file mode 100644
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_TIMEZONE_EXTERNAL_TIMEZONE_CONTROLLER_H_
+diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.cc b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+--- a/third_party/blink/renderer/core/timezone/timezone_controller.cc
++++ b/third_party/blink/renderer/core/timezone/timezone_controller.cc
+@@ -141,8 +141,6 @@ TimeZoneController::TimeZoneOverrideResult
+ TimeZoneController::SetTimeZoneOverride(const String& timezone_id) {
+   DCHECK(!timezone_id.empty());
+ 
+-  base::AutoLock locker(instance().lock_);
+-
+   if (timezone_id == instance().TimeZoneIdOverride()) {
+     // Do nothing.
+     return {TimeZoneOverrideStatus::kSuccess, nullptr};
+@@ -168,20 +166,16 @@ TimeZoneController::SetTimeZoneOverride(const String& timezone_id) {
+ 
+ // static
+ bool TimeZoneController::HasTimeZoneOverride() {
+-  instance().lock_.AssertAcquired();
+   return !instance().override_timezone_id_.empty();
+ }
+ 
+ // static
+ const String& TimeZoneController::TimeZoneIdOverride() {
+-  instance().lock_.AssertAcquired();
+   return instance().override_timezone_id_;
+ }
+ 
+ // static
+ void TimeZoneController::ClearTimeZoneOverride() {
+-  base::AutoLock locker(instance().lock_);
+-
+   DCHECK(HasTimeZoneOverride());
+ 
+   if (!CanonicalEquals(instance().GetHostTimezoneId(),
+@@ -197,8 +191,6 @@ void TimeZoneController::ClearTimeZoneOverride() {
+ void TimeZoneController::ChangeTimeZoneOverride(const String& timezone_id) {
+   DCHECK(!timezone_id.empty());
+ 
+-  base::AutoLock locker(instance().lock_);
+-
+   if (!HasTimeZoneOverride()) {
+     VLOG(1) << "Cannot change if there are no existing timezone override.";
+     return;
+@@ -243,8 +235,6 @@ bool TimeZoneController::SetIcuTimeZoneAndNotifyV8(const String& timezone_id) {
+ void TimeZoneController::OnTimeZoneChange(const String& timezone_id) {
+   DCHECK(IsMainThread());
+ 
+-  base::AutoLock locker(instance().lock_);
+-
+   // Remember requested timezone id so we can set it when timezone
+   // override is removed.
+   instance().host_timezone_id_ = timezone_id;
+@@ -254,7 +244,6 @@ void TimeZoneController::OnTimeZoneChange(const String& timezone_id) {
+ }
+ 
+ const String& TimeZoneController::GetHostTimezoneId() {
+-  lock_.AssertAcquired();
+   if (host_timezone_id_.IsNull()) {
+     CHECK(base::FeatureList::IsEnabled(kLazyBlinkTimezoneInit));
+     host_timezone_id_ = GetCurrentTimezoneId();
 diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.h b/third_party/blink/renderer/core/timezone/timezone_controller.h
 --- a/third_party/blink/renderer/core/timezone/timezone_controller.h
 +++ b/third_party/blink/renderer/core/timezone/timezone_controller.h
@@ -1083,4 +1147,17 @@ diff --git a/third_party/blink/renderer/core/timezone/timezone_controller.h b/th
    };
  
    struct TimeZoneOverrideResult {
+@@ -96,10 +100,8 @@ class CORE_EXPORT TimeZoneController final
+   // by Oilpan.
+   mojo::Receiver<device::mojom::blink::TimeZoneMonitorClient> receiver_{this};
+ 
+-  base::Lock lock_;
+-
+-  String host_timezone_id_ GUARDED_BY(lock_);
+-  String override_timezone_id_ GUARDED_BY(lock_);
++  String host_timezone_id_;
++  String override_timezone_id_;
+ };
+ 
+ }  // namespace blink
 --
