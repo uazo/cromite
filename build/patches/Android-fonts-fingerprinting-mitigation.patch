@@ -37,17 +37,18 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ...ndroid-fonts-fingerprinting-mitigation.inc |    5 +
  skia/BUILD.gn                                 |   12 +
  skia/ext/font_utils.cc                        |    1 +
+ .../freetype/config/ftoption.h                |    2 +-
  .../include/ports/SkFontConfigInterface.h     |    2 +
  .../skia/include/ports/SkFontMgr_android.h    |   42 +-
- .../skia/src/ports/SkFontConfigInterface.cpp  |    4 +
+ .../skia/src/ports/SkFontConfigInterface.cpp  |    5 +
  .../ports/SkFontConfigInterface_direct.cpp    |    5 +
  .../src/ports/SkFontConfigInterface_direct.h  |    1 +
- .../skia/src/ports/SkFontMgr_android.cpp      |  278 ++-
- .../skia/src/ports/SkFontMgr_android_data.cpp | 1640 +++++++++++++++++
+ .../skia/src/ports/SkFontMgr_android.cpp      |  282 ++-
+ .../skia/src/ports/SkFontMgr_android_data.cpp | 1641 +++++++++++++++++
  .../skia/src/ports/SkFontMgr_android_ndk.cpp  |    2 +-
- .../src/ports/SkFontMgr_android_parser.cpp    |   49 +-
+ .../src/ports/SkFontMgr_android_parser.cpp    |   66 +-
  .../skia/src/ports/SkFontMgr_android_parser.h |    5 +-
- 41 files changed, 2424 insertions(+), 84 deletions(-)
+ 42 files changed, 2448 insertions(+), 85 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
  create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.cc
  create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.h
@@ -103,7 +104,7 @@ diff --git a/build/config/freetype/freetype.gni b/build/config/freetype/freetype
    #
    # Note: //build should not import directly from //pdf for layering reasons.
 -  enable_freetype = !is_android && !is_ios && (is_linux || !is_castos)
-+  enable_freetype = !is_ios && (is_linux || !is_castos)
++  enable_freetype = is_android || (!is_ios && (is_linux || !is_castos))
  }
 diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/android/java/res/xml/developer_preferences.xml
 --- a/chrome/android/java/res/xml/developer_preferences.xml
@@ -931,6 +932,18 @@ diff --git a/skia/ext/font_utils.cc b/skia/ext/font_utils.cc
  #endif
  
  }  // namespace
+diff --git a/third_party/freetype/include/freetype-custom/freetype/config/ftoption.h b/third_party/freetype/include/freetype-custom/freetype/config/ftoption.h
+--- a/third_party/freetype/include/freetype-custom/freetype/config/ftoption.h
++++ b/third_party/freetype/include/freetype-custom/freetype/config/ftoption.h
+@@ -607,7 +607,7 @@ FT_BEGIN_HEADER
+    * module (namely TrueType~& OpenType).
+    */
+ /* Not needed since PDFs do not support any of the color font formats. */
+-/* #define TT_CONFIG_OPTION_COLOR_LAYERS */
++#define TT_CONFIG_OPTION_COLOR_LAYERS
+ 
+ 
+   /**************************************************************************
 diff --git a/third_party/skia/include/ports/SkFontConfigInterface.h b/third_party/skia/include/ports/SkFontConfigInterface.h
 --- a/third_party/skia/include/ports/SkFontConfigInterface.h
 +++ b/third_party/skia/include/ports/SkFontConfigInterface.h
@@ -1007,11 +1020,12 @@ diff --git a/third_party/skia/include/ports/SkFontMgr_android.h b/third_party/sk
 diff --git a/third_party/skia/src/ports/SkFontConfigInterface.cpp b/third_party/skia/src/ports/SkFontConfigInterface.cpp
 --- a/third_party/skia/src/ports/SkFontConfigInterface.cpp
 +++ b/third_party/skia/src/ports/SkFontConfigInterface.cpp
-@@ -22,7 +22,11 @@ sk_sp<SkFontConfigInterface> SkFontConfigInterface::RefGlobal() {
+@@ -22,7 +22,12 @@ sk_sp<SkFontConfigInterface> SkFontConfigInterface::RefGlobal() {
      if (gFontConfigInterface) {
          return sk_ref_sp(gFontConfigInterface);
      }
 +#if defined(CROMITE_IS_ANDROID)
++    SkASSERT(false);
 +    return nullptr;
 +#else
      return sk_ref_sp(SkFontConfigInterface::GetSingletonDirectInterface());
@@ -1061,7 +1075,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
  
  #include <algorithm>
  #include <limits>
-@@ -37,7 +39,91 @@ class SkData;
+@@ -37,7 +39,95 @@ class SkData;
  
  namespace {
  
@@ -1114,18 +1128,22 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
 +        desc->setFactoryId(SkTypeface_FreeType::FactoryId);
 +        *serialize = false;
 +    }
++
 +    std::unique_ptr<SkStreamAsset> onOpenStream(int* ttcIndex) const override {
 +        *ttcIndex = fIndex;
 +        return this->makeStream();
 +    }
++
 +    std::unique_ptr<SkFontData> onMakeFontData() const override {
 +        return std::make_unique<SkFontData>(
 +                this->makeStream(), fIndex, 0, fAxes.begin(), fAxes.size(), nullptr, 0);
 +    }
++
 +    sk_sp<SkTypeface> onMakeClone(const SkFontArguments& args) const override {
 +        SkFontStyle style = this->fontStyle();
 +        std::unique_ptr<SkFontData> data = this->cloneFontData(args, &style);
 +        if (!data) {
++            SkASSERT(false);
 +            return nullptr;
 +        }
 +        return sk_make_sp<SkTypeface_AndroidSystemCustom>(
@@ -1154,7 +1172,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
  
  class SkTypeface_AndroidSystem : public SkTypeface_proxy {
  public:
-@@ -112,7 +198,8 @@ using StreamForPathCache = skia_private::THashMap<SkString, std::unique_ptr<SkSt
+@@ -112,7 +202,8 @@ using StreamForPathCache = skia_private::THashMap<SkString, std::unique_ptr<SkSt
  class SkFontStyleSet_Android : public SkFontStyleSet {
  public:
      explicit SkFontStyleSet_Android(const FontFamily& family, const SkFontScanner* scanner,
@@ -1164,7 +1182,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
          const SkString* cannonicalFamilyName = nullptr;
          if (!family.fNames.empty()) {
              cannonicalFamilyName = &family.fNames[0];
-@@ -121,38 +208,60 @@ public:
+@@ -121,38 +212,60 @@ public:
  
          // TODO? make this lazy
          for (int i = 0; i < family.fFonts.size(); ++i) {
@@ -1213,7 +1231,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
 +                use_custom = true;
 +                if (!GetFontData(fontFile.fFileName,
 +                                  &familyName, &fontStyle, &isFixedWidth, &axisDefinitions)) {
-+                    stream = custom->getPlatformFile(pathName.c_str());
++                    stream = custom->getPlatformFile(fontFile.fFileName.c_str());
 +                }
 +                pathName = fontFile.fFileName;
              }
@@ -1248,7 +1266,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
              }
  
              uint32_t variant = family.fVariant;
-@@ -163,13 +272,25 @@ public:
+@@ -163,13 +276,25 @@ public:
              // The first specified family name overrides the family name found in the font.
              // TODO: SkTypeface_AndroidSystem::onCreateFamilyNameIterator should return
              // all of the specified family names in addition to the names found in the font.
@@ -1280,7 +1298,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
              int weight = fontFile.fWeight != 0 ? fontFile.fWeight : fontStyle.weight();
              SkFontStyle::Slant slant = fontStyle.slant();
              switch (fontFile.fStyle) {
-@@ -180,6 +301,19 @@ public:
+@@ -180,6 +305,19 @@ public:
              }
              fontStyle = SkFontStyle(weight, fontStyle.width(), slant);
  
@@ -1300,7 +1318,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
              fStyles.push_back(
                  SkTypeface_AndroidSystem::Make(proxy,
                                                 fontStyle, proxy->isFixedPitch(),
-@@ -208,15 +342,18 @@ public:
+@@ -208,15 +346,18 @@ public:
          return fStyles[index];
      }
  
@@ -1322,7 +1340,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
      SkString fFallbackFor;
  
      friend struct NameToFamily;
-@@ -237,24 +374,26 @@ struct NameToFamily {
+@@ -237,24 +378,26 @@ struct NameToFamily {
  
  class SkFontMgr_Android : public SkFontMgr {
  public:
@@ -1353,7 +1371,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
          }
          this->buildNameToFamilyMap(families, custom ? custom->fIsolated : false);
          this->findDefaultStyleSet();
-@@ -309,12 +448,12 @@ protected:
+@@ -309,12 +452,12 @@ protected:
      }
  
      enum class NameType { Self, Fallback };
@@ -1368,7 +1386,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
      {
          for (auto&& nameToFamily : nameToFamilyMap) {
              SkFontStyleSet_Android* family = nameToFamily.styleSet;
-@@ -325,22 +464,42 @@ protected:
+@@ -325,22 +468,42 @@ protected:
                      continue;
                  }
              }
@@ -1424,7 +1442,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
              }
          }
          return nullptr;
-@@ -355,7 +514,7 @@ protected:
+@@ -355,7 +518,7 @@ protected:
          // The variant 'default' means 'compact and elegant'.
          // As a result, it is not possible to know the variant context from the font alone.
          // TODO: add 'is_elegant' and 'is_compact' bits to 'style' request.
@@ -1433,7 +1451,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
          SkString familyNameString(familyName);
          for (const SkString& currentFamilyName : { familyNameString, SkString() }) {
              // The first time match anything elegant, second time anything not elegant.
-@@ -435,6 +594,7 @@ protected:
+@@ -435,6 +598,7 @@ protected:
  private:
  
      std::unique_ptr<SkFontScanner> fScanner;
@@ -1441,7 +1459,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
  
      TArray<sk_sp<SkFontStyleSet_Android>> fStyleSets;
      sk_sp<SkFontStyleSet> fDefaultStyleSet;
-@@ -456,7 +616,7 @@ private:
+@@ -456,7 +620,7 @@ private:
          }
  
          sk_sp<SkFontStyleSet_Android> newSet =
@@ -1450,7 +1468,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
          if (0 == newSet->count()) {
              return;
          }
-@@ -502,7 +662,11 @@ static char const * const gSystemFontUseStrings[] = {
+@@ -502,7 +666,11 @@ static char const * const gSystemFontUseStrings[] = {
  
  }  // namespace
  
@@ -1463,7 +1481,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android.cpp b/third_party/skia
                                         std::unique_ptr<SkFontScanner> scanner) {
      if (custom) {
          SkASSERT(0 <= custom->fSystemFontUse);
-@@ -515,5 +679,5 @@ sk_sp<SkFontMgr> SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* cust
+@@ -515,5 +683,5 @@ sk_sp<SkFontMgr> SkFontMgr_New_Android(const SkFontMgr_Android_CustomFonts* cust
                       custom->fFallbackFontsXml);
          }
      }
@@ -1474,7 +1492,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_data.cpp b/third_party
 new file mode 100644
 --- /dev/null
 +++ b/third_party/skia/src/ports/SkFontMgr_android_data.cpp
-@@ -0,0 +1,1640 @@
+@@ -0,0 +1,1641 @@
 +// AUTOGENERATED
 +//
 +// SkString dumpAxis("axis|");
@@ -3064,6 +3082,7 @@ new file mode 100644
 +        return true;
 +    }
 +    else if (file.equals("RobotoStatic-Regular.ttf")) {
++        // see https://android.googlesource.com/platform/frameworks/base/+/89abe560d722a6f4136b7a05d80f23b269413aad
 +        familyName->set("RobotoStatic");
 +        *style = SkFontStyle(400, 5, SkFontStyle::kUpright_Slant);
 +        *isFixedPitch = false;
@@ -3175,31 +3194,55 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
          XML_Status status = XML_ParseBuffer(parser, len, done);
          if (XML_STATUS_ERROR == status) {
              XML_Error error = XML_GetErrorCode(parser);
-@@ -768,8 +781,10 @@ static void append_fallback_font_families_for_locale(
+@@ -706,6 +719,23 @@ static int parse_config_file(const char* filename,
+             return -1;
+         }
+     }
++    if (custom) {
++        // remove NotoColorEmojiLegacy.ttf
++        for (int i = 0; i < families.size(); ++i) {
++            bool exists = false;
++            auto& family = families[i];
++            for (auto& font : family->fFonts) {
++                if (font.fFileName.equals("NotoColorEmojiLegacy.ttf")) {
++                    exists = true;
++                    break;
++                }
++            }
++            if (exists) {
++                families.erase(families.begin() + i);
++                break;
++            }
++        }
++    }
+     return self.fVersion;
+ }
+ 
+@@ -768,8 +798,10 @@ static void append_fallback_font_families_for_locale(
  
  static void append_system_fallback_font_families(
      std::vector<std::unique_ptr<FontFamily>>& fallbackFonts,
 -    const SkString& basePath)
 +    const SkString& basePath,
-+                                                 const SkFontMgr_Android_CustomFonts* custom)
++    const SkFontMgr_Android_CustomFonts* custom)
  {
 +    if (custom) return;
      parse_config_file(FALLBACK_FONTS_FILE, fallbackFonts, basePath, true);
      append_fallback_font_families_for_locale(fallbackFonts,
                                               LOCALE_FALLBACK_FONTS_SYSTEM_DIR,
-@@ -778,8 +793,10 @@ static void append_system_fallback_font_families(
+@@ -778,8 +810,10 @@ static void append_system_fallback_font_families(
  
  static void mixin_vendor_fallback_font_families(
          std::vector<std::unique_ptr<FontFamily>>& fallbackFonts,
 -        const SkString& basePath)
 +        const SkString& basePath,
-+                                                const SkFontMgr_Android_CustomFonts* custom)
++        const SkFontMgr_Android_CustomFonts* custom)
  {
 +    if (custom) return;
      std::vector<std::unique_ptr<FontFamily>> vendorFonts;
      parse_config_file(VENDOR_FONTS_FILE, vendorFonts, basePath, true);
      append_fallback_font_families_for_locale(vendorFonts,
-@@ -811,7 +828,8 @@ static void mixin_vendor_fallback_font_families(
+@@ -811,7 +845,8 @@ static void mixin_vendor_fallback_font_families(
  }
  
  void SkFontMgr_Android_Parser::GetSystemFontFamilies(
@@ -3209,7 +3252,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
  {
      // Version 21 of the system font configuration does not need any fallback configuration files.
      SkString basePath(getenv("ANDROID_ROOT"));
-@@ -823,8 +841,8 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
+@@ -823,8 +858,8 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
  
      // Append all the fallback fonts to system fonts
      std::vector<std::unique_ptr<FontFamily>> fallbackFonts;
@@ -3220,7 +3263,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
      fontFamilies.insert(fontFamilies.end(),
                          std::make_move_iterator(fallbackFonts.begin()),
                          std::make_move_iterator(fallbackFonts.end()));
-@@ -833,15 +851,16 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
+@@ -833,15 +868,16 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
  void SkFontMgr_Android_Parser::GetCustomFontFamilies(
          std::vector<std::unique_ptr<FontFamily>>& fontFamilies,
          const SkString& basePath,
