@@ -75,9 +75,19 @@ jobs:
     
     - name: Setup depot_tools
       run: |
-        export PATH="$HOME/depot_tools:$PATH"
+        # Ensure depot_tools is available
+        if [ ! -d "$HOME/depot_tools" ]; then
+          echo "Installing depot_tools..."
+          cd $HOME
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+        fi
+        
+        # Add to PATH for this job
         echo "$HOME/depot_tools" >> $GITHUB_PATH
-        which gclient && echo "depot_tools ready" || echo "depot_tools not found"
+        
+        # Verify tools are available
+        $HOME/depot_tools/gclient --version || echo "gclient not available yet"
+        echo "depot_tools setup complete"
     
     - name: Clone/Update Cromite repository
       run: |
@@ -100,14 +110,14 @@ jobs:
         cd ${WORKSPACE_ROOT}
         if [ ! -d "chromium/src" ]; then
           echo "Fetching Chromium source (this may take hours)..."
-          fetch --nohooks android
+          $HOME/depot_tools/fetch --nohooks android
         else
           echo "Chromium source already exists"
         fi
         cd chromium/src
         git checkout ${CROMITE_VERSION}
         echo "Running gclient sync..."
-        gclient sync -D --nohooks
+        $HOME/depot_tools/gclient sync -D --nohooks
     
     - name: Prepare Chromium for patching
       run: |
@@ -166,14 +176,17 @@ jobs:
         mkdir -p out/Default
         cp ${WORKSPACE_ROOT}/cromite/build/cromite.gn_args out/Default/args.gn
         
-        # Add SFL-specific args
+        # Add Android-specific args
         echo '' >> out/Default/args.gn
-        echo '# SFL Browser customizations' >> out/Default/args.gn
+        echo '# Android build configuration' >> out/Default/args.gn
         echo 'target_os = "android"' >> out/Default/args.gn
         echo 'target_cpu = "arm64"' >> out/Default/args.gn
         
         echo "Running gn gen..."
-        gn gen out/Default
+        ./buildtools/linux64/gn gen out/Default || {
+          echo "GN generation failed, trying alternative..."
+          $HOME/depot_tools/gn gen out/Default
+        }
     
     - name: Build Cromite APK
       run: |
