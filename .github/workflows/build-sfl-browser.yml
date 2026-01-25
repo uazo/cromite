@@ -1,0 +1,189 @@
+name: Build SFL Browser APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Architecture to build'
+        required: true
+        default: 'arm64'
+        type: choice
+        options:
+          - arm
+          - arm64
+          - x64
+          - all
+
+jobs:
+  build:
+    name: Build SFL Browser (${{ matrix.arch }})
+    runs-on: self-hosted
+    strategy:
+      matrix:
+        arch: ${{ fromJson(github.event.inputs.arch == 'all' ? '["arm", "arm64", "x64"]' : format('["{0}"]', github.event.inputs.arch)) }}
+    timeout-minutes: 480
+
+    steps:
+      - name: Checkout SFL Browser repo
+        uses: actions/checkout@v4
+        with:
+          path: sfl-browser-repo
+
+      - name: Setup build environment
+        run: |
+          mkdir -p $HOME/build-workspace
+          export WORKSPACE=$HOME/build-workspace
+          export PATH=$WORKSPACE/depot_tools:$PATH
+          echo "WORKSPACE=$WORKSPACE" >> $GITHUB_ENV
+          echo "GITHUB_ENV"
+
+      - name: Clone Chromium source
+        run: |
+          cd $WORKSPACE
+          # Use fetch chromium to get full source with all dependencies
+          $HOME/depot_tools/fetch chromium --nohooks
+          cd src
+          gclient runhooks
+
+      - name: Initialize ANGLE submodule
+        run: |
+          cd $WORKSPACE/src
+          git submodule update --init third_party/angle
+
+      - name: Apply SFL patches
+        run: |
+          cd $WORKSPACE/src
+          echo "Applying SFL Browser patches..."
+          PATCHES_DIR=${{ github.workspace }}/sfl-browser-repo/build/patches
+          if [ -d "$PATCHES_DIR" ]; then
+            for patch in "$PATCHES_DIR"/*.patch; do
+              if [ -f "$patch" ]; then
+                echo "Applying: $(basename $patch)"
+                if git apply --check "$patch" > /dev/null 2>&1; then
+                  git apply "$patch"
+                  echo "✓ Applied: $(basename $patch)"
+                else
+                  echo "✗ Failed to apply: $(basename $patch)"
+                  exit 1
+                fi
+              fi
+            done
+          else
+            echo "No patches directory found at $PATCHES_DIR"
+          fi
+
+      - name: Setup GN configuration
+        run: |
+          cd $WORKSPACE/src
+          mkdir -p out/Default
+          
+          # Create args.gn for Android build
+          cat > out/Default/args.gn <<'EOF'
+          # SFL Browser Build Configuration
+          target_os = "android"
+          target_cpu = "${{ matrix.arch }}"
+          
+          android_channel="stable"
+          chrome_public_manifest_package = "com.sfl.browser"
+          system_webview_package_name="com.sfl.webview"
+          system_webview_shell_package_name="com.sfl.webview_shell"
+          
+          is_debug=false
+          is_official_build=true
+          chrome_pgo_phase=2
+          
+          blink_symbol_level=1
+          build_contextual_search=false
+          build_with_tflite_lib=false
+          chrome_pgo_phase=0
+          dcheck_always_on=false
+          disable_fieldtrial_testing_config=true
+          enable_hangout_services_extension=false
+          enable_iterator_debugging=false
+          enable_mdns=false
+          enable_nacl=false
+          enable_remoting=false
+          enable_reporting=false
+          enable_vr=false
+          exclude_unwind_tables=false
+          icu_use_data_file=true
+          is_component_build=false
+          rtc_build_examples=false
+          symbol_level=1
+          treat_warnings_as_errors=true
+          use_debug_fission=true
+          use_errorprone_java_compiler=false
+          use_official_google_api_keys=false
+          use_rtti=false
+          webview_includes_weblayer=false
+          enable_arcore=false
+          enable_openxr=false
+          enable_cardboard=false
+          is_high_end_android=true
+          
+          proprietary_codecs=true
+          ffmpeg_branding="Chrome"
+          enable_av1_decoder=true
+          enable_dav1d_decoder=true
+          media_use_openh264=false
+          enable_platform_aac_audio=true
+          enable_platform_h264_video=true
+          enable_platform_hevc=true
+          enable_platform_dolby_vision=false
+          enable_platform_encrypted_dolby_vision=false
+          enable_platform_dts_audio=false
+          enable_passthrough_audio_codecs=false
+          
+          use_v8_context_snapshot=false
+          use_minikin_hyphenation=false
+          enable_bound_session_credentials=false
+          safe_browsing_use_unrar=false
+          enable_request_header_integrity=false
+          enable_precompiled_headers=false
+          
+          include_both_v8_snapshots=false
+          include_both_v8_snapshots_android_secondary_abi=false
+          generate_linker_map=true
+          EOF
+          
+          cat out/Default/args.gn
+
+      - name: Generate build files with GN
+        run: |
+          cd $WORKSPACE/src
+          ./buildtools/linux64/gn gen out/Default
+          echo "Build files generated successfully"
+
+      - name: Build Chrome APK
+        run: |
+          cd $WORKSPACE/src
+          autoninja -C out/Default chrome_public_apk_64
+          echo "APK build completed"
+
+      - name: Collect APK output
+        run: |
+          mkdir -p ${{ github.workspace }}/output
+          cd $WORKSPACE/src
+          
+          # Find and copy APK
+          if [ -f "out/Default/apks/ChromePublic.apk" ]; then
+            cp out/Default/apks/ChromePublic.apk ${{ github.workspace }}/output/SFLBrowser-${{ matrix.arch }}.apk
+            echo "APK copied successfully"
+            ls -lh ${{ github.workspace }}/output/
+          else
+            echo "ERROR: APK not found at out/Default/apks/ChromePublic.apk"
+            exit 1
+          fi
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: sfl-browser-apk-${{ matrix.arch }}
+          path: ${{ github.workspace }}/output/*.apk
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ github.workspace }}/output/*.apk
