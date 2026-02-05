@@ -32,8 +32,18 @@ rm -rf /tmp/vpython*
 cd $WORKSPACE/chromium/src
 vpython3 -vpython-spec .vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
 vpython3 -vpython-spec ../../depot_tools/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+vpython3 -vpython-spec third_party/angle/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+vpython3 -vpython-spec third_party/catapult/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+vpython3 -vpython-spec third_party/webrtc/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+vpython3 -vpython-spec v8/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+vpython3 -vpython-spec v8/tools/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+
+echo -e ${RED} -------- rollup devtools-frontend third_party ${NC}
+cd $WORKSPACE/chromium/src
+cd third_party/devtools-frontend/src ; vpython3 scripts/deps/sync_rollup_libs.py
 
 echo -e ${RED} -------- download pgo profiles ${NC}
+cd $WORKSPACE/chromium/src
 python3 tools/update_pgo_profiles.py --target=android-arm64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
 python3 tools/update_pgo_profiles.py --target=android-arm32 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
 python3 tools/update_pgo_profiles.py --target=win64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
