@@ -40,8 +40,8 @@ suit Cromite logic.
  chrome/browser/ui/tab_helpers.cc              |    3 +-
  .../extensions/api/_permission_features.json  |   14 -
  .../common/extensions/api/adblock_private.idl |    8 +
- .../adblock/android/adblock_controller_jni.cc |   79 +-
- .../components/adblock/AdblockController.java |   51 +-
+ .../adblock/android/adblock_controller_jni.cc |   85 +-
+ .../components/adblock/AdblockController.java |   53 +-
  components/adblock/content/browser/BUILD.gn   |   24 +-
  .../content/browser/adblock_blocking_page.cc  |  183 +
  .../content/browser/adblock_blocking_page.h   |   75 +
@@ -131,7 +131,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 126 files changed, 9342 insertions(+), 687 deletions(-)
+ 126 files changed, 9347 insertions(+), 690 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -1947,6 +1947,15 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
  #include "base/logging.h"
  #include "components/adblock/android/jni_headers/AdblockController_jni.h"
  #include "components/adblock/content/browser/factories/subscription_service_factory.h"
+@@ -34,7 +36,7 @@
+ using base::android::CheckException;
+ using base::android::ConvertUTF8ToJavaString;
+ using base::android::GetClass;
+-using base::android::JavaParamRef;
++using base::android::JavaRef;
+ using base::android::MethodID;
+ using base::android::ScopedJavaLocalRef;
+ using base::android::ToJavaArrayOfObjects;
 @@ -48,6 +50,9 @@ ScopedJavaLocalRef<jobject> ToJava(JNIEnv* env,
                                     const std::string& url,
                                     const std::string& title,
@@ -1971,7 +1980,7 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
  
  std::vector<ScopedJavaLocalRef<jobject>> CSubscriptionsToJObjects(
      JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jbrowser_context_handle,
++    const base::android::JavaRef<jobject>& jbrowser_context_handle,
      const std::vector<scoped_refptr<adblock::Subscription>>& subscriptions) {
 +  auto* subscription_service =
 +  adblock::SubscriptionServiceFactory::GetForBrowserContext(
@@ -2013,13 +2022,13 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
                                    false));
        }
      }
-@@ -104,6 +129,52 @@ std::vector<ScopedJavaLocalRef<jobject>> CSubscriptionsToJObjects(
+@@ -104,10 +129,56 @@ std::vector<ScopedJavaLocalRef<jobject>> CSubscriptionsToJObjects(
  
  }  // namespace
  
 +static void
 +JNI_AdblockController_StartUpdate(JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jbrowser_context_handle) {
++    const base::android::JavaRef<jobject>& jbrowser_context_handle) {
 +  auto* subscription_service =
 +  adblock::SubscriptionServiceFactory::GetForBrowserContext(
 +      content::BrowserContextFromJavaHandle(jbrowser_context_handle));
@@ -2028,7 +2037,7 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
 +
 +static base::android::ScopedJavaLocalRef<jobjectArray>
 +JNI_AdblockController_GetCustomSubscriptions(JNIEnv* env,
-+      const base::android::JavaParamRef<jobject>& jbrowser_context_handle) {
++      const base::android::JavaRef<jobject>& jbrowser_context_handle) {
 +  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 +  auto* subscription_service =
 +      adblock::SubscriptionServiceFactory::GetForBrowserContext(
@@ -2046,7 +2055,7 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
 +
 +static jboolean JNI_AdblockController_IsPrivilegedFiltersEnabled(
 +    JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jbrowser_context_handle) {
++    const base::android::JavaRef<jobject>& jbrowser_context_handle) {
 +  auto* subscription_service =
 +      adblock::SubscriptionServiceFactory::GetForBrowserContext(
 +          content::BrowserContextFromJavaHandle(jbrowser_context_handle));
@@ -2055,7 +2064,7 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
 +
 +static void JNI_AdblockController_SetPrivilegedFiltersEnabled(
 +    JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jbrowser_context_handle,
++    const base::android::JavaRef<jobject>& jbrowser_context_handle,
 +    jboolean j_enabled) {
 +  auto* subscription_service =
 +      adblock::SubscriptionServiceFactory::GetForBrowserContext(
@@ -2066,6 +2075,11 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
  static base::android::ScopedJavaLocalRef<jobjectArray>
  JNI_AdblockController_GetInstalledSubscriptions(
      JNIEnv* env,
+-    const base::android::JavaParamRef<jobject>& jbrowser_context_handle) {
++    const base::android::JavaRef<jobject>& jbrowser_context_handle) {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+   auto* subscription_service =
+       adblock::SubscriptionServiceFactory::GetForBrowserContext(
 @@ -119,7 +190,7 @@ JNI_AdblockController_GetInstalledSubscriptions(
  
    return ToJavaArrayOfObjects(
@@ -2075,6 +2089,12 @@ diff --git a/components/adblock/android/adblock_controller_jni.cc b/components/a
                          subscription_service->GetFilteringConfiguration(
                              adblock::kAdblockFilteringConfigurationName))));
  }
+@@ -131,3 +202,5 @@ JNI_AdblockController_GetRecommendedSubscriptions(JNIEnv* env) {
+   auto list = adblock::config::GetKnownSubscriptions();
+   return ToJavaArrayOfObjects(env, CSubscriptionsToJObjects(env, list));
+ }
++
++DEFINE_JNI(AdblockController)
 diff --git a/components/adblock/android/java/src/org/chromium/components/adblock/AdblockController.java b/components/adblock/android/java/src/org/chromium/components/adblock/AdblockController.java
 --- a/components/adblock/android/java/src/org/chromium/components/adblock/AdblockController.java
 +++ b/components/adblock/android/java/src/org/chromium/components/adblock/AdblockController.java
@@ -2167,10 +2187,12 @@ diff --git a/components/adblock/android/java/src/org/chromium/components/adblock
      @UiThread
      public List<Subscription> getInstalledSubscriptions() {
          return (List<Subscription>)
-@@ -276,6 +321,10 @@ public class AdblockController {
+@@ -275,7 +320,11 @@ public class AdblockController {
+     }
  
      @NativeMethods
-     interface Natives {
+-    interface Natives {
++    public interface Natives {
 +        void startUpdate(BrowserContextHandle contextHandle);
 +        boolean isPrivilegedFiltersEnabled(BrowserContextHandle contextHandle);
 +        void setPrivilegedFiltersEnabled(BrowserContextHandle contextHandle, boolean enabled);

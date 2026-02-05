@@ -17,8 +17,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  cc/base/features.h                            |   2 +
  cc/input/browser_controls_offset_manager.cc   |   6 +
  cc/trees/layer_tree_host_impl.cc              |   3 +
- .../tab_management/TabGroupUiCoordinator.java |   7 +-
- .../tab_management/TabGroupUiMediator.java    |  51 +++++-
+ .../tab_management/TabGroupUiCoordinator.java |   8 +-
+ .../tab_management/TabGroupUiMediator.java    |  52 +++++-
  .../tab_management/TabGroupUiProperties.java  |   5 +
  .../tab_management/TabGroupUiToolbarView.java |  17 ++
  .../tab_management/TabGroupUiViewBinder.java  |   3 +
@@ -29,7 +29,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/feed/FeedSurfaceCoordinator.java  |   4 +
  .../java/res/layout/search_activity.xml       |   1 -
  .../android/java/res/xml/main_preferences.xml |   3 +-
- .../chrome/browser/ChromeTabbedActivity.java  |   1 +
+ .../chrome/browser/ChromeTabbedActivity.java  |   3 +-
  .../ChromeAccessibilitySettingsDelegate.java  |  70 +++++++++
  .../HeadlessBrowserControlsStateProvider.java |   5 +
  .../compositor/CompositorViewHolder.java      |   7 +
@@ -104,7 +104,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../render_widget_host_view_android.cc        |   3 +
  .../Move-navigation-bar-to-bottom.inc         |  17 ++
  .../renderer/core/frame/viewport_data.cc      |   1 +
- 91 files changed, 1061 insertions(+), 87 deletions(-)
+ 91 files changed, 1064 insertions(+), 88 deletions(-)
  create mode 100644 chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/ReversedLinearLayout.java
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Move-navigation-bar-to-bottom.inc
 
@@ -177,7 +177,15 @@ diff --git a/cc/trees/layer_tree_host_impl.cc b/cc/trees/layer_tree_host_impl.cc
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiCoordinator.java
-@@ -61,6 +61,7 @@ import org.chromium.components.sensitive_content.SensitiveContentFeatures;
+@@ -26,6 +26,7 @@ import org.chromium.base.supplier.ObservableSupplier;
+ import org.chromium.base.supplier.ObservableSupplierImpl;
+ import org.chromium.base.supplier.ObservableSuppliers;
+ import org.chromium.base.supplier.OneshotSupplier;
++import org.chromium.base.supplier.NullableObservableSupplier;
+ import org.chromium.base.supplier.SettableNonNullObservableSupplier;
+ import org.chromium.base.supplier.SettableNullableObservableSupplier;
+ import org.chromium.build.annotations.Initializer;
+@@ -61,6 +62,7 @@ import org.chromium.components.sensitive_content.SensitiveContentFeatures;
  import org.chromium.ui.modaldialog.ModalDialogManager;
  import org.chromium.ui.modelutil.PropertyModel;
  import org.chromium.ui.modelutil.PropertyModelChangeProcessor;
@@ -185,17 +193,17 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
  
  import java.util.List;
  import java.util.function.Supplier;
-@@ -198,7 +199,8 @@ public class TabGroupUiCoordinator implements TabGroupUiMediator.ResetHandler, T
+@@ -198,7 +200,8 @@ public class TabGroupUiCoordinator implements TabGroupUiMediator.ResetHandler, T
      @Initializer
      public void initializeWithNative(
              BottomControlsCoordinator.BottomControlsVisibilityController visibilityController,
 -            Callback<Object> onSnapshotTokenChange) {
 +            Callback<Object> onSnapshotTokenChange,
-+            TopUiThemeColorProvider topUiThemeColorProvider, ObservableSupplier<Tab> tabSupplier) {
++            TopUiThemeColorProvider topUiThemeColorProvider, NullableObservableSupplier<Tab> tabSupplier) {
          ObservableSupplierImpl<Object> tabStripTokenSupplier = new ObservableSupplierImpl<>();
  
          var currentTabGroupModelFilterSupplier =
-@@ -294,7 +296,8 @@ public class TabGroupUiCoordinator implements TabGroupUiMediator.ResetHandler, T
+@@ -294,7 +297,8 @@ public class TabGroupUiCoordinator implements TabGroupUiMediator.ResetHandler, T
                              sharedImageTilesConfigBuilder,
                              mThemeColorProvider,
                              onSnapshotTokenChange,
@@ -208,7 +216,15 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
 diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiMediator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiMediator.java
 --- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiMediator.java
 +++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/TabGroupUiMediator.java
-@@ -79,6 +79,12 @@ import java.util.List;
+@@ -25,6 +25,7 @@ import org.chromium.base.Token;
+ import org.chromium.base.metrics.RecordHistogram;
+ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.base.supplier.LazyOneshotSupplier;
++import org.chromium.base.supplier.NullableObservableSupplier;
+ import org.chromium.base.supplier.NonNullObservableSupplier;
+ import org.chromium.base.supplier.ObservableSupplier;
+ import org.chromium.base.supplier.ObservableSupplierImpl;
+@@ -79,6 +80,12 @@ import java.util.List;
  import java.util.Objects;
  import java.util.function.Supplier;
  
@@ -221,7 +237,7 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
  /** A mediator for the TabGroupUi. Responsible for managing the internal state of the component. */
  @NullMarked
  public class TabGroupUiMediator implements BackPressHandler {
-@@ -154,6 +160,11 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -154,6 +161,11 @@ public class TabGroupUiMediator implements BackPressHandler {
      private final Callback<Object> mOnSnapshotTokenChange;
      private final ObservableSupplier<Object> mChildTokenSupplier;
  
@@ -233,18 +249,18 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
      // These should only be used when regular (non-incognito) tabs are set in the model.
      private final @Nullable SharedImageTilesCoordinator mSharedImageTilesCoordinator;
      private final SharedImageTilesConfig.@Nullable Builder mSharedImageTilesConfigBuilder;
-@@ -184,7 +195,9 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -184,7 +196,9 @@ public class TabGroupUiMediator implements BackPressHandler {
              SharedImageTilesConfig.@Nullable Builder sharedImageTilesConfigBuilder,
              ThemeColorProvider themeColorProvider,
              Callback<Object> onSnapshotTokenChange,
 -            ObservableSupplierImpl<Object> childTokenSupplier) {
 +            ObservableSupplierImpl<Object> childTokenSupplier,
-+            TopUiThemeColorProvider topUiThemeColorProvider, ObservableSupplier<Tab> tabSupplier) {
++            TopUiThemeColorProvider topUiThemeColorProvider, NullableObservableSupplier<Tab> tabSupplier) {
 +        mTopUiThemeColorProvider = topUiThemeColorProvider;
          mResetHandler = resetHandler;
          mModel = model;
          mTabModelSelector = tabModelSelector;
-@@ -238,11 +251,30 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -238,11 +252,30 @@ public class TabGroupUiMediator implements BackPressHandler {
              mIsShowingHub = true;
          }
  
@@ -275,7 +291,7 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
                          resetTabStrip();
                      }
  
-@@ -264,6 +296,8 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -264,6 +297,8 @@ public class TabGroupUiMediator implements BackPressHandler {
                      @Override
                      public void restoreCompleted() {
                          resetTabStrip();
@@ -284,7 +300,7 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
                      }
  
                      @Override
-@@ -361,6 +395,8 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -361,6 +396,8 @@ public class TabGroupUiMediator implements BackPressHandler {
          mModel.set(TabGroupUiProperties.WIDTH_PX_CALLBACK, mWidthPxSupplier::set);
          resetTabStrip();
  
@@ -293,7 +309,7 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
          mHandleBackPressChangedSupplier = handleBackPressChangedSupplier;
          if (mTabGridDialogControllerSupplier != null) {
              mTabGridDialogControllerSupplier.onAvailable(
-@@ -393,6 +429,18 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -393,6 +430,18 @@ public class TabGroupUiMediator implements BackPressHandler {
          mModel.set(TINT, mThemeColorProvider.getTint());
      }
  
@@ -312,7 +328,7 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
      private void setupToolbarButtons() {
          View.OnClickListener showGroupDialogOnClickListener =
                  view -> {
-@@ -584,6 +632,7 @@ public class TabGroupUiMediator implements BackPressHandler {
+@@ -584,6 +633,7 @@ public class TabGroupUiMediator implements BackPressHandler {
  
      @SuppressWarnings("NullAway")
      public void destroy() {
@@ -758,14 +774,16 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -1067,6 +1067,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -1067,7 +1067,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                              mRootUiCoordinator.getBottomSheetController(),
                              mRootUiCoordinator.getShareDelegateSupplier(),
                              mXrSceneCoreSessionManagerSupplier.get(),
-+                            /*browserControlsManagerSupplier*/ () -> getBrowserControlsManager(),
-                             mBackPressManager);
+-                            mBackPressManager);
++                            mBackPressManager,
++                            /*browserControlsManagerSupplier*/ () -> getBrowserControlsManager());
              mLayoutStateProviderSupplier.set(mLayoutManager);
          }
+     }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
@@ -1714,7 +1732,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/Toolbar
                              return readAloud != null && readAloud.isRestoringPlayer();
 -                        });
 +                        },
-+                        mTopUiThemeColorProvider, mActivityTabProvider);
++                        mTopUiThemeColorProvider, mActivityTabProvider.asObservable());
          if (mInitializedWithNative) {
              bottomControlsCoordinator.initializeWithNative();
          }
@@ -2737,7 +2755,7 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
  
 +import android.app.Activity;
 +
-+import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.NullableObservableSupplier;
 +import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
 +import org.chromium.chrome.browser.tab.CurrentTabObserver;
 +import org.chromium.chrome.browser.tab.Tab;
@@ -2756,7 +2774,7 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
              BottomControlsCoordinator.BottomControlsVisibilityController visibilityController,
 -            Callback<Object> onModelTokenChange);
 +            Callback<Object> onModelTokenChange,
-+            TopUiThemeColorProvider topUiThemeColorProvider, ObservableSupplier<Tab> tabSupplier);
++            TopUiThemeColorProvider topUiThemeColorProvider, NullableObservableSupplier<Tab> tabSupplier);
  
      /** Destroy the delegate. */
      void destroy();
@@ -2788,7 +2806,7 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
 -            Supplier<Boolean> readAloudRestoringSupplier) {
 +            Supplier<Boolean> readAloudRestoringSupplier,
 +            TopUiThemeColorProvider topUiThemeColorProvider,
-+            ObservableSupplier<Tab> tabSupplier) {
++            NullableObservableSupplier<Tab> tabSupplier) {
          mRootFrameLayout = root;
          root.setConstraintsSupplier(constraintsSupplier);
          PropertyModel model = new PropertyModel(BottomControlsProperties.ALL_KEYS);
@@ -2798,7 +2816,7 @@ diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/brow
                              },
 -                            root::onModelTokenChange);
 +                            root::onModelTokenChange,
-+                    topUiThemeColorProvider, tabSupplier);
++                            topUiThemeColorProvider, tabSupplier);
                      mContentDelegateWrapper.set(contentDelegate);
                  },
                  mContentDelegateSupplier,
