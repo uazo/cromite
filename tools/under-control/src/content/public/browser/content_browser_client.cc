@@ -50,7 +50,6 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/responsiveness_calculator_delegate.h"
 #include "content/public/browser/sms_fetcher.h"
-#include "content/public/browser/speculation_host_delegate.h"
 #include "content/public/browser/tracing_delegate.h"
 #include "content/public/browser/url_loader_request_interceptor.h"
 #include "content/public/browser/web_authentication_delegate.h"
@@ -725,18 +724,6 @@ bool ContentBrowserClient::IsPrivateAggregationDebugModeAllowed(
   return true;
 }
 
-bool ContentBrowserClient::IsCookieDeprecationLabelAllowed(
-    content::BrowserContext* browser_context) {
-  return false;
-}
-
-bool ContentBrowserClient::IsCookieDeprecationLabelAllowedForContext(
-    content::BrowserContext* browser_context,
-    const url::Origin& top_frame_origin,
-    const url::Origin& context_origin) {
-  return false;
-}
-
 bool ContentBrowserClient::IsFullCookieAccessAllowed(
     content::BrowserContext* browser_context,
     content::WebContents* web_contents,
@@ -1227,7 +1214,7 @@ void ContentBrowserClient::ConfigureNetworkContextParams(
     network::mojom::NetworkContextParams* network_context_params,
     cert_verifier::mojom::CertVerifierCreationParams*
         cert_verifier_creation_params) {
-  network_context_params->user_agent = GetUserAgentBasedOnPolicy(context);
+  network_context_params->user_agent = GetUserAgent();
   network_context_params->accept_language = "en-us,en";
 }
 
@@ -1413,8 +1400,8 @@ bool ContentBrowserClient::CanAcceptUntrustedExchangesIfNeeded() {
 void ContentBrowserClient::OnNetworkServiceDataUseUpdate(
     GlobalRenderFrameHostId render_frame_host_id,
     int32_t network_traffic_annotation_id_hash,
-    int64_t recv_bytes,
-    int64_t sent_bytes) {}
+    base::ByteSize recv_bytes,
+    base::ByteSize sent_bytes) {}
 
 base::FilePath ContentBrowserClient::GetSandboxedStorageServiceDataDirectory() {
   return base::FilePath();
@@ -1449,11 +1436,6 @@ std::string ContentBrowserClient::GetProduct() {
 
 std::string ContentBrowserClient::GetUserAgent() {
   return std::string();
-}
-
-std::string ContentBrowserClient::GetUserAgentBasedOnPolicy(
-    content::BrowserContext* content) {
-  return GetUserAgent();
 }
 
 blink::UserAgentMetadata ContentBrowserClient::GetUserAgentMetadata() {
@@ -1642,6 +1624,10 @@ bool ContentBrowserClient::DisallowV8FeatureFlagOverridesForSite(
   return false;
 }
 
+bool ContentBrowserClient::IsAndroidAdvancedProtectionEnabled() {
+  return false;
+}
+
 ukm::UkmService* ContentBrowserClient::GetUkmService() {
   return nullptr;
 }
@@ -1689,12 +1675,6 @@ bool ContentBrowserClient::SuppressDifferentOriginSubframeJSDialogs(
 
 std::unique_ptr<AnchorElementPreconnectDelegate>
 ContentBrowserClient::CreateAnchorElementPreconnectDelegate(
-    RenderFrameHost& render_frame_host) {
-  return nullptr;
-}
-
-std::unique_ptr<SpeculationHostDelegate>
-ContentBrowserClient::CreateSpeculationHostDelegate(
     RenderFrameHost& render_frame_host) {
   return nullptr;
 }
@@ -1772,14 +1752,6 @@ bool ContentBrowserClient::AreIsolatedWebAppsEnabled(
 bool ContentBrowserClient::IsThirdPartyStoragePartitioningAllowed(
     content::BrowserContext*,
     const url::Origin&) {
-  return true;
-}
-
-bool ContentBrowserClient::IsUnpartitionedStorageAccessAllowedByUserPreference(
-    content::BrowserContext* browser_context,
-    const GURL& url,
-    const net::SiteForCookies& site_for_cookies,
-    const url::Origin& top_frame_origin) {
   return true;
 }
 
@@ -2040,6 +2012,9 @@ void ContentBrowserClient::RecordAssistedLogin(AssistedLoginType login_type) {}
 std::optional<bool> ContentBrowserClient::GetOverrideValueForStaticStorageQuota(
     BrowserContext* browser_context) {
   return std::nullopt;
+}
+std::string ContentBrowserClient::GetDnsTxtResolverUrlPrefix() {
+  return std::string();
 }
 
 }  // namespace content
