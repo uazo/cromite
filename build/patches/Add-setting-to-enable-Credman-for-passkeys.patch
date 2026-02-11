@@ -19,7 +19,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../webauthn/android/webauthn_feature_map.cc  |  1 +
  components/webauthn/features.cc               |  4 +++
  components/webauthn/features.h                |  3 ++
- device/fido/features.cc                       |  2 ++
+ device/fido/public/features.cc                |  2 ++
  .../authentication_credentials_container.cc   |  5 ++++
  11 files changed, 75 insertions(+), 37 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-enable-Credman-for-passkeys.grdp
@@ -27,7 +27,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/password_manager/settings/PasswordSettings.java
-@@ -10,6 +10,7 @@ import android.app.Activity;
+@@ -11,6 +11,7 @@ import android.app.Activity;
  import android.content.Context;
  import android.content.Intent;
  import android.net.Uri;
@@ -35,7 +35,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manage
  import android.os.Bundle;
  import android.text.SpannableString;
  import android.text.style.ForegroundColorSpan;
-@@ -64,6 +65,10 @@ import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
+@@ -67,6 +68,10 @@ import org.chromium.chrome.browser.ui.messages.snackbar.INeedSnackbarManager;
  import org.chromium.chrome.browser.ui.messages.snackbar.Snackbar;
  import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
  
@@ -46,7 +46,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manage
  /**
   * The "Passwords" screen in Settings, which allows the user to enable or disable password saving,
   * to view saved passwords (just the username and URL), and to delete saved passwords.
-@@ -322,6 +327,7 @@ public class PasswordSettings extends ChromeBaseSettingsFragment
+@@ -332,6 +337,7 @@ public class PasswordSettings extends ChromeBaseSettingsFragment
          createSavePasswordsSwitch();
          createAutoSignInCheckbox();
          createEnableAndroidAutofillSwitch();
@@ -54,7 +54,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/password_manage
  
          PasswordManagerHandlerProvider.getForProfile(getProfile())
                  .getPasswordManagerHandler()
-@@ -673,6 +679,27 @@ public class PasswordSettings extends ChromeBaseSettingsFragment
+@@ -685,6 +691,27 @@ public class PasswordSettings extends ChromeBaseSettingsFragment
                  getPrefService().getBoolean(Pref.CREDENTIALS_ENABLE_AUTOSIGNIN));
      }
  
@@ -121,36 +121,36 @@ new file mode 100644
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/AuthenticatorImpl.java
-@@ -34,6 +34,8 @@ import org.chromium.blink.mojom.PublicKeyCredentialReportOptions;
- import org.chromium.blink.mojom.WebAuthnClientCapability;
+@@ -30,6 +30,8 @@ import org.chromium.blink.mojom.WebAuthnClientCapability;
  import org.chromium.build.annotations.NullMarked;
  import org.chromium.build.annotations.Nullable;
+ import org.chromium.components.password_manager.BrowserAssistedLoginType;
 +import org.chromium.components.webauthn.CredManSupport;
 +import org.chromium.components.webauthn.cred_man.CredManSupportProvider;
  import org.chromium.components.ukm.UkmRecorder;
  import org.chromium.content_public.browser.RenderFrameHost;
  import org.chromium.content_public.browser.WebContents;
-@@ -170,8 +172,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+@@ -166,8 +168,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
          mIsPaymentRequest = options.isPaymentCredentialCreation;
-         mMakeCredentialCallback = callback;
-         mIsOperationPending = true;
+         mRequestCallback = requestCallback;
+         mRequestCallback.setCompletionCallback(this::cleanupRequest);
 -        if (!GmsCoreUtils.isWebauthnSupported()
 -                || (!isChrome(mWebContents) && !GmsCoreUtils.isResultReceiverSupported())) {
 +        if (CredManSupportProvider.getCredManSupport() == CredManSupport.DISABLED) {
-             recordOutcomeEvent(MakeCredentialOutcome.OTHER_FAILURE);
-             onError(AuthenticatorStatus.NOT_IMPLEMENTED);
-             return;
-@@ -235,8 +236,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
-         mIsConditionalRequest = options.mediation == Mediation.CONDITIONAL;
-         mIsImmediateRequest = options.mediation == Mediation.IMMEDIATE;
- 
+             mRequestCallback.onComplete(
+                     WebauthnRequestResponse.forFailedMakeCredential(
+                             AuthenticatorStatus.NOT_IMPLEMENTED,
+@@ -250,8 +251,7 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+                         && DeviceFeatureMap.isEnabled(
+                                 DeviceFeatureList
+                                         .WEBAUTHN_AUTHENTICATOR_PASSWORDS_ONLY_IMMEDIATE_REQUESTS);
 -        if (!GmsCoreUtils.isWebauthnSupported()
 -                || (!isChrome(mWebContents) && !GmsCoreUtils.isResultReceiverSupported())
 +        if (CredManSupportProvider.getCredManSupport() == CredManSupport.DISABLED
-                 || options.publicKey == null) {
-             recordOutcomeEvent(GetAssertionOutcome.OTHER_FAILURE);
-             onError(AuthenticatorStatus.NOT_IMPLEMENTED);
-@@ -277,12 +277,11 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+                 || (options.publicKey == null && !isPasswordOnlyFlux)) {
+             RequestMetrics metrics =
+                     new RequestMetrics.Builder()
+@@ -291,12 +291,11 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
      }
  
      private boolean couldSupportConditionalMediation() {
@@ -165,7 +165,7 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
      }
  
      @Override
-@@ -356,26 +355,20 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
+@@ -370,26 +369,20 @@ public final class AuthenticatorImpl implements Authenticator, AuthenticationCon
                              capabilities.add(
                                      createWebAuthnClientCapability(
                                              AuthenticatorConstants.CAPABILITY_CONDITIONAL_GET,
@@ -200,10 +200,10 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
 diff --git a/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java b/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java
 --- a/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java
 +++ b/components/webauthn/android/java/src/org/chromium/components/webauthn/WebauthnFeatures.java
-@@ -17,4 +17,6 @@ public abstract class WebauthnFeatures {
-     public static final String WEBAUTHN_ANDROID_PASSKEY_CACHE_MIGRATION =
-             "WebAuthenticationAndroidPasskeyCacheMigration";
+@@ -19,4 +19,6 @@ public abstract class WebauthnFeatures {
      public static final String WEBAUTHN_ANDROID_CRED_MAN_FOR_DEV = "WebAuthnAndroidCredManForDev";
+     public static final String WEBAUTHN_ANDROID_CRED_MAN_REQUEST_EXTRA_BUNDLE =
+             "WebAuthenticationAndroidCredManRequestExtraBundle";
 +    public static final String WEBAUTHN_ANDROID_PASSKEY =
 +            "WebAuthenticationAndroidPasskey";
  }
@@ -284,10 +284,10 @@ diff --git a/components/webauthn/android/java/src/org/chromium/components/webaut
 diff --git a/components/webauthn/android/webauthn_feature_map.cc b/components/webauthn/android/webauthn_feature_map.cc
 --- a/components/webauthn/android/webauthn_feature_map.cc
 +++ b/components/webauthn/android/webauthn_feature_map.cc
-@@ -17,6 +17,7 @@ namespace {
- const base::Feature* const kFeaturesExposedToJava[] = {
+@@ -18,6 +18,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
      &kWebAuthnAndroidPasskeyCacheMigration,
      &kWebAuthnAndroidCredManForDev,
+     &kWebAuthnAndroidCredManRequestExtraBundle,
 +    &kWebAuthnAndroidPasskey,
  };
  
@@ -295,9 +295,9 @@ diff --git a/components/webauthn/android/webauthn_feature_map.cc b/components/we
 diff --git a/components/webauthn/features.cc b/components/webauthn/features.cc
 --- a/components/webauthn/features.cc
 +++ b/components/webauthn/features.cc
-@@ -25,6 +25,10 @@ BASE_FEATURE(kWebAuthnAndroidCredManForDev, base::FEATURE_DISABLED_BY_DEFAULT);
- const base::FeatureParam<std::string> kWebAuthnAndroidCredManForDevMode{
-     &kWebAuthnAndroidCredManForDev, "mode", ""};
+@@ -34,6 +34,10 @@ BASE_FEATURE(kWebAuthnAndroidCredManRequestExtraBundle,
+ BASE_FEATURE(kWebAuthnConditionalUiSuppressedOnWebView,
+              base::FEATURE_ENABLED_BY_DEFAULT);
  
 +CROMITE_FEATURE(kWebAuthnAndroidPasskey,
 +                "WebAuthenticationAndroidPasskey",
@@ -316,12 +316,12 @@ diff --git a/components/webauthn/features.h b/components/webauthn/features.h
 +COMPONENT_EXPORT(WEBAUTHN)
 +BASE_DECLARE_FEATURE(kWebAuthnAndroidPasskey);
 +
- #endif  // BUILDFLAG(IS_ANDROID)
- 
- #if !BUILDFLAG(IS_ANDROID)
-diff --git a/device/fido/features.cc b/device/fido/features.cc
---- a/device/fido/features.cc
-+++ b/device/fido/features.cc
+ // Whether to send a custom bundle values for the CredMan requests. The extras
+ // are used by Google Password Manager.
+ COMPONENT_EXPORT(WEBAUTHN)
+diff --git a/device/fido/public/features.cc b/device/fido/public/features.cc
+--- a/device/fido/public/features.cc
++++ b/device/fido/public/features.cc
 @@ -188,6 +188,7 @@ BASE_FEATURE(kWebAuthnImmediateGet,
  #else
               base::FEATURE_ENABLED_BY_DEFAULT);
@@ -336,12 +336,12 @@ diff --git a/device/fido/features.cc b/device/fido/features.cc
               base::FEATURE_ENABLED_BY_DEFAULT);
 +SET_CROMITE_FEATURE_DISABLED(kWebAuthnImmediateGetAutoselect);
  
- // Default enabled in M140. Remove in or after M143.
- BASE_FEATURE(kWebAuthnLargeBlobForGPM,
+ // Deprecation flag. Disabled by default in M142. Remove in or after M145.
+ BASE_FEATURE(kWebAuthnSendPinGeneration,
 diff --git a/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc b/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc
 --- a/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc
 +++ b/third_party/blink/renderer/modules/credentialmanagement/authentication_credentials_container.cc
-@@ -1090,6 +1090,11 @@ DOMException* AuthenticatorStatusToDOMException(
+@@ -1135,6 +1135,11 @@ DOMException* AuthenticatorStatusToDOMException(
      const WebAuthnDOMExceptionDetailsPtr& dom_exception_details) {
    DCHECK_EQ(status != AuthenticatorStatus::ERROR_WITH_DOM_EXCEPTION_DETAILS,
              dom_exception_details.is_null());

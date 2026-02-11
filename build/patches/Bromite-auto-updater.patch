@@ -21,7 +21,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/endpoint_fetcher/BUILD.gn      |  32 ++
  chrome/browser/endpoint_fetcher/DEPS          |   3 +
  chrome/browser/endpoint_fetcher/OWNERS        |   1 +
- .../endpoint_fetcher_android.cc               | 107 +++++++
+ .../endpoint_fetcher_android.cc               | 109 +++++++
  .../endpoint_fetcher/EndpointFetcher.java     |  63 ++++
  .../EndpointHeaderResponse.java               |  31 ++
  .../endpoint_fetcher/EndpointResponse.java    |  30 ++
@@ -50,7 +50,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/manta/base_provider.cc             |   4 +-
  .../Bromite-auto-updater.inc                  |   3 +
  .../Bromite-auto-updater.inc                  |   1 +
- 42 files changed, 1154 insertions(+), 106 deletions(-)
+ 42 files changed, 1156 insertions(+), 106 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/CromiteUpdateStatusProvider.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/omaha/inline/BromiteInlineUpdateController.java
  create mode 100644 chrome/browser/endpoint_fetcher/BUILD.gn
@@ -79,7 +79,7 @@ diff --git a/build/android/java/templates/BuildConfig.template b/build/android/j
 diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
 --- a/build/config/android/rules.gni
 +++ b/build/config/android/rules.gni
-@@ -1959,6 +1959,9 @@ if (!is_robolectric && enable_java_templates) {
+@@ -1963,6 +1963,9 @@ if (!is_robolectric && enable_java_templates) {
        sources = [ "//build/android/java/templates/BuildConfig.template" ]
        defines = []
  
@@ -92,7 +92,7 @@ diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
 diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
 --- a/chrome/android/chrome_java_sources.gni
 +++ b/chrome/android/chrome_java_sources.gni
-@@ -871,6 +871,8 @@ chrome_java_sources = [
+@@ -880,6 +880,8 @@ chrome_java_sources = [
    "java/src/org/chromium/chrome/browser/omaha/OmahaBase.java",
    "java/src/org/chromium/chrome/browser/omaha/OmahaDelegate.java",
    "java/src/org/chromium/chrome/browser/omaha/OmahaDelegateBase.java",
@@ -144,9 +144,9 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/
      private static final String PREF_OS_VERSION = "os_version";
      private static final String PREF_LEGAL_INFORMATION = "legal_information";
  
-@@ -78,6 +84,13 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
-         assumeNonNull(p);
-         int currentYear = CalendarFactory.get().get(Calendar.YEAR);
+@@ -80,6 +86,13 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
+         calendar.setTimeInMillis(System.currentTimeMillis());
+         int currentYear = calendar.get(Calendar.YEAR);
          p.setSummary(getString(R.string.legal_information_summary, currentYear));
 +
 +        ChromeSwitchPreference allowInlineUpdate =
@@ -158,7 +158,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/about_settings/
      }
  
      @Override
-@@ -148,6 +161,19 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
+@@ -150,6 +163,19 @@ public class AboutChromeSettings extends ChromeBaseSettingsFragment
          return true;
      }
  
@@ -366,7 +366,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/omaha/UpdateMen
 +                    mMenuUiState.itemState.summary =
 +                            resources.getString(defaultUpdateSummary);
 +                }
-+                mMenuUiState.itemState.icon = R.drawable.ic_history_googblue_24dp;
++                mMenuUiState.itemState.icon = R.drawable.ic_history_24dp;
 +                mMenuUiState.itemState.iconTintId = R.color.default_icon_color_blue_light;
 +                mMenuUiState.itemState.enabled = true;
 +                break;
@@ -390,7 +390,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/omaha/UpdateMen
 +                mMenuUiState.itemState.title = R.string.menu_inline_update_failed;
 +                mMenuUiState.itemState.titleColorId = R.color.default_text_color_blue_dark;
 +                mMenuUiState.itemState.summary = resources.getString(R.string.try_again);
-+                mMenuUiState.itemState.icon = R.drawable.ic_history_googblue_24dp;
++                mMenuUiState.itemState.icon = R.drawable.ic_history_24dp;
 +                mMenuUiState.itemState.iconTintId = R.color.default_icon_color_blue_light;
 +                mMenuUiState.itemState.enabled = true;
 +                break;
@@ -690,7 +690,7 @@ new file mode 100644
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -2652,6 +2652,12 @@ static_library("browser") {
+@@ -2614,6 +2614,12 @@ static_library("browser") {
    }
  
    if (is_android) {
@@ -758,7 +758,7 @@ diff --git a/chrome/browser/endpoint_fetcher/endpoint_fetcher_android.cc b/chrom
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/endpoint_fetcher/endpoint_fetcher_android.cc
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,109 @@
 +// Copyright 2019 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -815,11 +815,11 @@ new file mode 100644
 +
 +static void JNI_EndpointFetcher_NativeFetchWithNoAuth(
 +    JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jprofile,
-+    const base::android::JavaParamRef<jstring>& jurl,
++    const base::android::JavaRef<jobject>& jprofile,
++    const base::android::JavaRef<jstring>& jurl,
 +    jlong jtimeout, jboolean intercept_redirect,
 +    jint jannotation_hash_code,
-+    const base::android::JavaParamRef<jobject>& jcallback) {
++    const base::android::JavaRef<jobject>& jcallback) {
 +  auto endpoint_fetcher = std::make_unique<endpoint_fetcher::EndpointFetcher>(
 +      Profile::FromJavaObject(jprofile)
 +          ->GetDefaultStoragePartition()
@@ -842,11 +842,11 @@ new file mode 100644
 +
 +static void JNI_EndpointFetcher_NativeHeadWithNoAuth(
 +    JNIEnv* env,
-+    const base::android::JavaParamRef<jobject>& jprofile,
-+    const base::android::JavaParamRef<jstring>& jurl,
++    const base::android::JavaRef<jobject>& jprofile,
++    const base::android::JavaRef<jstring>& jurl,
 +    jlong jtimeout, jboolean intercept_redirect,
 +    jint jannotation_hash_code,
-+    const base::android::JavaParamRef<jobject>& jcallback) {
++    const base::android::JavaRef<jobject>& jcallback) {
 +  auto endpoint_fetcher = std::make_unique<endpoint_fetcher::EndpointFetcher>(
 +      Profile::FromJavaObject(jprofile)
 +        ->GetDefaultStoragePartition()
@@ -866,6 +866,8 @@ new file mode 100644
 +                     std::move(endpoint_fetcher)),
 +      nullptr);
 +}
++
++DEFINE_JNI(EndpointFetcher)
 diff --git a/chrome/browser/endpoint_fetcher/java/src/org/chromium/chrome/browser/endpoint_fetcher/EndpointFetcher.java b/chrome/browser/endpoint_fetcher/java/src/org/chromium/chrome/browser/endpoint_fetcher/EndpointFetcher.java
 new file mode 100644
 --- /dev/null
@@ -1008,7 +1010,7 @@ new file mode 100644
 diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browser/flags/android/chrome_feature_list.cc
 --- a/chrome/browser/flags/android/chrome_feature_list.cc
 +++ b/chrome/browser/flags/android/chrome_feature_list.cc
-@@ -387,6 +387,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
+@@ -383,6 +383,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
      &kProtectedTabsAndroid,
      &kPwaRestoreUi,
      &kPwaRestoreUiAtStartup,
@@ -1019,18 +1021,18 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
 --- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
 +++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
-@@ -477,6 +477,7 @@ public abstract class ChromeFeatureList {
+@@ -463,6 +463,7 @@ public abstract class ChromeFeatureList {
      public static final String INCOGNITO_NTP_SMALL_ICON = "IncognitoNtpSmallIcon";
      public static final String INCOGNITO_SCREENSHOT = "IncognitoScreenshot";
      public static final String INCOGNITO_THEME_OVERLAY_TESTING = "IncognitoThemeOverlayTesting";
 +    public static final String INLINE_UPDATE_FLOW = "InlineUpdateFlow";
      public static final String INSTANCE_SWITCHER_V2 = "InstanceSwitcherV2";
-     public static final String IP_PROTECTION_UX = "IpProtectionUx";
      public static final String KEYBOARD_ESC_BACK_NAVIGATION = "KeyboardEscBackNavigation";
+     public static final String LAUNCH_CAUSE_SCREEN_OFF_FIX = "LaunchCauseScreenOffFix";
 diff --git a/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc b/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc
 --- a/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc
 +++ b/chrome/browser/media/router/discovery/access_code/access_code_cast_discovery_interface.cc
-@@ -264,7 +264,7 @@ AccessCodeCastDiscoveryInterface::CreateEndpointFetcher(
+@@ -265,7 +265,7 @@ AccessCodeCastDiscoveryInterface::CreateEndpointFetcher(
            .SetTimeout(kTimeout)
            .SetUrl(GURL(base::StrCat({GetDiscoveryUrl(), "/", access_code})))
            .SetPostData(kEmptyPostData)
@@ -1621,7 +1623,7 @@ diff --git a/chrome/browser/save_to_drive/drive_uploader.cc b/chrome/browser/sav
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -2315,6 +2315,12 @@ Your Google account may have other forms of browsing history like searches and a
+@@ -2313,6 +2313,12 @@ Your Google account may have other forms of browsing history like searches and a
        <message name="IDS_DEPRECATION_WARNING" desc="Warning about Chrome updates no longer being supported">
          Chrome updates are no longer supported for this version of Android
        </message>
@@ -1634,7 +1636,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
  
        <!-- Account management UI strings. -->
        <message name="IDS_ACCOUNT_MANAGEMENT_TITLE" desc="Header title for the account management screen. [CHAR_LIMIT=32]">
-@@ -4366,7 +4372,10 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4389,7 +4395,10 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
  
        <!-- Main menu items -->
        <message name="IDS_MENU_UPDATE" desc="Menu item for updating chrome. [CHAR_LIMIT=24]">
@@ -1646,7 +1648,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
        </message>
        <message name="IDS_MENU_UPDATE_SUMMARY_DEFAULT" desc="Summary string for update menu item explaining that a newer version of Chrome is available. [CHAR_LIMIT=30]">
          Newer version is available
-@@ -4377,6 +4386,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
+@@ -4400,6 +4409,18 @@ To change this setting, <ph name="BEGIN_LINK">BEGIN_LINK</ph>delete the Chrome d
        <message name="IDS_MENU_UPDATE_UNSUPPORTED_SUMMARY_DEFAULT" desc="Summary string for update menu item explaining that the Android version on the device is unsupported. [CHAR_LIMIT=30]">
          Android version is unsupported
        </message>
@@ -1668,7 +1670,7 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
 diff --git a/chrome/browser/ui/lens/lens_overlay_query_controller.cc b/chrome/browser/ui/lens/lens_overlay_query_controller.cc
 --- a/chrome/browser/ui/lens/lens_overlay_query_controller.cc
 +++ b/chrome/browser/ui/lens/lens_overlay_query_controller.cc
-@@ -770,7 +770,7 @@ LensOverlayQueryController::CreateEndpointFetcher(
+@@ -768,7 +768,7 @@ LensOverlayQueryController::CreateEndpointFetcher(
            .SetTimeout(timeout)
            .SetUrl(fetch_url)
            .SetUploadProgressCallback(std::move(upload_progress_callback))
@@ -1728,7 +1730,7 @@ diff --git a/components/commerce/core/subscriptions/subscriptions_server_proxy.c
 diff --git a/components/contextual_search/internal/composebox_query_controller.cc b/components/contextual_search/internal/composebox_query_controller.cc
 --- a/components/contextual_search/internal/composebox_query_controller.cc
 +++ b/components/contextual_search/internal/composebox_query_controller.cc
-@@ -777,7 +777,7 @@ ComposeboxQueryController::CreateEndpointFetcher(
+@@ -705,7 +705,7 @@ ComposeboxQueryController::CreateEndpointFetcher(
            .SetTimeout(timeout)
            .SetUploadProgressCallback(std::move(upload_progress_callback))
            .SetUrl(fetch_url)
@@ -1973,7 +1975,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.cc b/components/endpoi
 diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoint_fetcher/endpoint_fetcher.h
 --- a/components/endpoint_fetcher/endpoint_fetcher.h
 +++ b/components/endpoint_fetcher/endpoint_fetcher.h
-@@ -20,6 +20,9 @@
+@@ -19,6 +19,9 @@
  #include "services/network/public/mojom/fetch_api.mojom-forward.h"
  #include "url/gurl.h"
  
@@ -1983,7 +1985,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
  namespace base {
  class TimeDelta;
  }  // namespace base
-@@ -61,6 +64,7 @@ enum class HttpMethod {
+@@ -60,6 +63,7 @@ enum class HttpMethod {
    kPost = 1,
    kDelete = 2,
    kPut = 3,
@@ -1991,7 +1993,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
  };
  
  enum AuthType {
-@@ -79,6 +83,8 @@ struct EndpointResponse {
+@@ -78,6 +82,8 @@ struct EndpointResponse {
    ~EndpointResponse();
  
    std::string response;
@@ -2000,7 +2002,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
    int http_status_code{-1};
    std::optional<FetchErrorType> error_type;
    scoped_refptr<net::HttpResponseHeaders> headers;
-@@ -301,7 +307,16 @@ class EndpointFetcher {
+@@ -300,7 +306,16 @@ class EndpointFetcher {
    EndpointFetcher(
        const scoped_refptr<network::SharedURLLoaderFactory>& url_loader_factory,
        signin::IdentityManager* identity_manager,
@@ -2018,7 +2020,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
  
    EndpointFetcher(const EndpointFetcher& endpoint_fetcher) = delete;
    EndpointFetcher& operator=(const EndpointFetcher& endpoint_fetcher) = delete;
-@@ -334,11 +349,17 @@ class EndpointFetcher {
+@@ -333,11 +348,17 @@ class EndpointFetcher {
  
    void OnResponseFetched(EndpointFetcherCallback callback,
                           std::optional<std::string> response_body);
@@ -2036,7 +2038,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
  
    // Members set in constructor
    const scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-@@ -349,6 +370,8 @@ class EndpointFetcher {
+@@ -348,6 +369,8 @@ class EndpointFetcher {
    // SingleClientSharedTabGroupVersioningSyncTest.ShouldShowVersioningMessagesAfterRestart/kSyncTransportOnly
    const raw_ptr<signin::IdentityManager, DanglingUntriaged> identity_manager_;
  
@@ -2045,7 +2047,7 @@ diff --git a/components/endpoint_fetcher/endpoint_fetcher.h b/components/endpoin
    // The complete definition of the specific network request to be performed.
    // Contains authentication details and response handling preferences.
    const RequestParams request_params_;
-@@ -358,6 +381,9 @@ class EndpointFetcher {
+@@ -357,6 +380,9 @@ class EndpointFetcher {
        access_token_fetcher_;
    std::unique_ptr<network::SimpleURLLoader> simple_url_loader_;
  

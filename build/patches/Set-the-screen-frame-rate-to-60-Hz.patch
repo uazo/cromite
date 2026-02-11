@@ -9,39 +9,45 @@ The feature can be disabled using the throttle-main-thread-to-60hz flag (enabled
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- cc/base/features.cc                            |  3 ++-
- cc/scheduler/scheduler_state_machine.cc        | 17 +++++++++++++++++
- .../java/res/xml/privacy_preferences.xml       |  6 ++++++
- chrome/browser/about_flags.cc                  |  6 +++---
- .../browser/chrome_content_browser_client.cc   | 11 +++++++++++
- .../Set-the-screen-frame-rate-to-60-Hz.grdp    |  9 +++++++++
- components/viz/common/features.cc              |  1 +
- .../common/frame_sinks/begin_frame_source.cc   | 14 +++++++++++++-
- .../common/frame_sinks/begin_frame_source.h    |  1 +
- components/viz/service/display/display.cc      | 18 ++++++++++++++++--
- .../external_begin_frame_source_android.cc     | 13 +++++++++++++
- .../external_begin_frame_source_android.h      |  2 ++
- .../root_compositor_frame_sink_impl.cc         | 10 ++++++++--
- .../Set-the-screen-frame-rate-to-60-Hz.inc     |  7 +++++++
- .../renderer/core/animation/animation_clock.cc | 11 ++++++++---
- .../core/view_transition/view_transition.cc    |  2 ++
- 16 files changed, 119 insertions(+), 12 deletions(-)
+ cc/base/features.cc                           |  9 ++-------
+ cc/scheduler/scheduler_state_machine.cc       | 19 ++++++++++++++++++-
+ .../java/res/xml/privacy_preferences.xml      |  6 ++++++
+ chrome/browser/about_flags.cc                 |  6 +++---
+ .../browser/chrome_content_browser_client.cc  | 11 +++++++++++
+ .../Set-the-screen-frame-rate-to-60-Hz.grdp   |  9 +++++++++
+ components/viz/common/features.cc             |  1 +
+ .../common/frame_sinks/begin_frame_source.cc  | 14 +++++++++++++-
+ .../common/frame_sinks/begin_frame_source.h   |  1 +
+ components/viz/service/display/display.cc     | 18 ++++++++++++++++--
+ .../external_begin_frame_source_android.cc    | 13 +++++++++++++
+ .../external_begin_frame_source_android.h     |  2 ++
+ .../root_compositor_frame_sink_impl.cc        | 10 ++++++++--
+ .../Set-the-screen-frame-rate-to-60-Hz.inc    |  7 +++++++
+ .../core/animation/animation_clock.cc         | 11 ++++++++---
+ .../core/view_transition/view_transition.cc   |  2 ++
+ 16 files changed, 120 insertions(+), 19 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Set-the-screen-frame-rate-to-60-Hz.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Set-the-screen-frame-rate-to-60-Hz.inc
 
 diff --git a/cc/base/features.cc b/cc/base/features.cc
 --- a/cc/base/features.cc
 +++ b/cc/base/features.cc
-@@ -135,7 +135,7 @@ BASE_FEATURE(kPreventDuplicateImageDecodes, base::FEATURE_DISABLED_BY_DEFAULT);
- 
+@@ -136,13 +136,7 @@ BASE_FEATURE(kPreventDuplicateImageDecodes, base::FEATURE_DISABLED_BY_DEFAULT);
  BASE_FEATURE(kInitImageDecodeLastUseTime, base::FEATURE_ENABLED_BY_DEFAULT);
  
--BASE_FEATURE(kThrottleMainFrameTo60Hz, base::FEATURE_DISABLED_BY_DEFAULT);
+ // Enabled on Android, after a field trial showed improvements.
+-BASE_FEATURE(kThrottleMainFrameTo60Hz,
+-#if BUILDFLAG(IS_ANDROID)
+-             base::FEATURE_ENABLED_BY_DEFAULT
+-#else
+-             base::FEATURE_DISABLED_BY_DEFAULT
+-#endif
+-);
 +CROMITE_FEATURE(kThrottleMainFrameTo60Hz, "ThrottleMainFrameTo60Hz", base::FEATURE_ENABLED_BY_DEFAULT);
  
- BASE_FEATURE(kBoostFrameRateForUrgentMainFrame,
-              base::FEATURE_DISABLED_BY_DEFAULT);
-@@ -163,6 +163,7 @@ BASE_FEATURE(kViewTransitionFloorTransform, base::FEATURE_ENABLED_BY_DEFAULT);
+ #if BUILDFLAG(IS_ANDROID)
+ BASE_FEATURE(kThrottleMainFrameTo60HzWebView,
+@@ -175,6 +169,7 @@ BASE_FEATURE(kViewTransitionFloorTransform, base::FEATURE_ENABLED_BY_DEFAULT);
  BASE_FEATURE(kRenderThrottleFrameRate, base::FEATURE_ENABLED_BY_DEFAULT);
  const base::FeatureParam<int> kRenderThrottledFrameIntervalHz{
      &kRenderThrottleFrameRate, "render-throttled-frame-interval-hz", 30};
@@ -52,7 +58,16 @@ diff --git a/cc/base/features.cc b/cc/base/features.cc
 diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_state_machine.cc
 --- a/cc/scheduler/scheduler_state_machine.cc
 +++ b/cc/scheduler/scheduler_state_machine.cc
-@@ -1548,6 +1548,15 @@ void SchedulerStateMachine::FrameIntervalUpdated(
+@@ -34,7 +34,7 @@ const int kMaxPendingSubmitFrames = 1;
+ bool IsEligibleToThrottleMainFrameRate() {
+ #if BUILDFLAG(IS_ANDROID)
+   // Still requires balancing tradeoffs for desktop Android, not enabled yet.
+-  return !base::android::device_info::is_desktop();
++  return true;
+ #else
+   return true;
+ #endif
+@@ -1578,6 +1578,15 @@ void SchedulerStateMachine::FrameIntervalUpdated(
    //
    // Apply some slack, so that if for some reason the interval is a bit larger
    // than 8.33333333333333ms, then we catch it still.
@@ -65,10 +80,10 @@ diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_st
 +  }
 +  if ((true)) return;
 +#endif
-   //
-   // Do not enable throttling for the synchronous compositor, as it hasn't been
-   // evaluated for this use case, as of 09/2025. The aim is to make sure that
-@@ -1876,6 +1885,14 @@ base::TimeTicks SchedulerStateMachine::Now() const {
+   constexpr float kSlackFactor = .9;
+   bool fast_vsync_interval =
+       frame_interval < base::Hertz(120) * (1 / kSlackFactor);
+@@ -1903,6 +1912,14 @@ base::TimeTicks SchedulerStateMachine::Now() const {
  }
  
  base::TimeDelta SchedulerStateMachine::MainFrameThrottledInterval() const {
@@ -86,7 +101,7 @@ diff --git a/cc/scheduler/scheduler_state_machine.cc b/cc/scheduler/scheduler_st
 diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/android/java/res/xml/privacy_preferences.xml
 --- a/chrome/android/java/res/xml/privacy_preferences.xml
 +++ b/chrome/android/java/res/xml/privacy_preferences.xml
-@@ -98,6 +98,12 @@ found in the LICENSE file.
+@@ -92,6 +92,12 @@ found in the LICENSE file.
          android:summary="@string/tab_switcher_list_mode_summary"
          app:featureName="TabSwitcherListMode"
          app:needRestart="true" />
@@ -102,7 +117,7 @@ diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/androi
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
-@@ -12052,9 +12052,9 @@ const FeatureEntry kFeatureEntries[] = {
+@@ -11700,9 +11700,9 @@ const FeatureEntry kFeatureEntries[] = {
       FEATURE_VALUE_TYPE(::features::kBlockRootWindowAccessibleNameChangeEvent)},
  #endif  // BUILDFLAG(IS_MAC)
  
@@ -118,7 +133,7 @@ diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -52,6 +52,7 @@
+@@ -51,6 +51,7 @@
  #include "build/branding_buildflags.h"
  #include "build/build_config.h"
  #include "build/config/chromebox_for_meetings/buildflags.h"  // PLATFORM_CFM
@@ -126,7 +141,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  #include "chrome/browser/after_startup_task_utils.h"
  #include "chrome/browser/ai/ai_manager.h"
  #include "chrome/browser/app_mode/app_mode_utils.h"
-@@ -305,6 +306,7 @@
+@@ -302,6 +303,7 @@
  #include "components/variations/variations_associated_data.h"
  #include "components/variations/variations_switches.h"
  #include "components/version_info/version_info.h"
@@ -134,7 +149,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  #include "components/webapps/common/web_app_id.h"
  #include "components/webui/chrome_urls/pref_names.h"
  #include "content/public/browser/attribution_data_model.h"
-@@ -2718,6 +2720,15 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
+@@ -2720,6 +2722,15 @@ void ChromeContentBrowserClient::AppendExtraCommandLineSwitches(
    command_line->AppendSwitchASCII(ash::switches::kHomedir, homedir.value());
  #endif
  
@@ -167,10 +182,10 @@ new file mode 100644
 diff --git a/components/viz/common/features.cc b/components/viz/common/features.cc
 --- a/components/viz/common/features.cc
 +++ b/components/viz/common/features.cc
-@@ -97,6 +97,7 @@ const char kMaxOverlaysParam[] = "max_overlays";
+@@ -84,6 +84,7 @@ const char kMaxOverlaysParam[] = "max_overlays";
  BASE_FEATURE(kDelegatedCompositing, base::FEATURE_DISABLED_BY_DEFAULT);
  
- BASE_FEATURE(kAvoidDuplicateDelayBeginFrame, base::FEATURE_DISABLED_BY_DEFAULT);
+ BASE_FEATURE(kAvoidDuplicateDelayBeginFrame, base::FEATURE_ENABLED_BY_DEFAULT);
 +SET_CROMITE_FEATURE_ENABLED(kAvoidDuplicateDelayBeginFrame);
  
  const char kDrawQuadSplit[] = "num_of_splits";
@@ -178,7 +193,7 @@ diff --git a/components/viz/common/features.cc b/components/viz/common/features.
 diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/components/viz/common/frame_sinks/begin_frame_source.cc
 --- a/components/viz/common/frame_sinks/begin_frame_source.cc
 +++ b/components/viz/common/frame_sinks/begin_frame_source.cc
-@@ -25,6 +25,7 @@
+@@ -24,6 +24,7 @@
  #include "base/tracing/protos/chrome_track_event.pbzero.h"
  #include "components/viz/common/features.h"
  #include "components/viz/common/frame_sinks/delay_based_time_source.h"
@@ -186,7 +201,7 @@ diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/component
  
  namespace viz {
  
-@@ -250,7 +251,10 @@ BackToBackBeginFrameSource::BackToBackBeginFrameSource(
+@@ -260,7 +261,10 @@ BackToBackBeginFrameSource::BackToBackBeginFrameSource(
    time_source_->SetClient(this);
    // The time_source_ ticks immediately, so we SetActive(true) for a single
    // tick when we need it, and keep it as SetActive(false) otherwise.
@@ -198,7 +213,7 @@ diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/component
  }
  
  BackToBackBeginFrameSource::~BackToBackBeginFrameSource() = default;
-@@ -308,6 +312,14 @@ void BackToBackBeginFrameSource::OnTimerTick() {
+@@ -318,6 +322,14 @@ void BackToBackBeginFrameSource::OnTimerTick() {
    }
    base::TimeTicks frame_time = time_source_->LastTickTime();
    base::TimeDelta interval = max_vrr_interval_.value_or(vsync_interval_);
@@ -216,7 +231,7 @@ diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/component
 diff --git a/components/viz/common/frame_sinks/begin_frame_source.h b/components/viz/common/frame_sinks/begin_frame_source.h
 --- a/components/viz/common/frame_sinks/begin_frame_source.h
 +++ b/components/viz/common/frame_sinks/begin_frame_source.h
-@@ -339,6 +339,7 @@ class VIZ_COMMON_EXPORT BackToBackBeginFrameSource
+@@ -362,6 +362,7 @@ class VIZ_COMMON_EXPORT BackToBackBeginFrameSource
        pending_begin_frame_observers_;
    uint64_t next_sequence_number_;
    base::TimeDelta vsync_interval_ = BeginFrameArgs::DefaultInterval();
@@ -227,7 +242,7 @@ diff --git a/components/viz/common/frame_sinks/begin_frame_source.h b/components
 diff --git a/components/viz/service/display/display.cc b/components/viz/service/display/display.cc
 --- a/components/viz/service/display/display.cc
 +++ b/components/viz/service/display/display.cc
-@@ -33,6 +33,7 @@
+@@ -32,6 +32,7 @@
  #include "base/trace_event/traced_value.h"
  #include "base/trace_event/typed_macros.h"
  #include "build/build_config.h"
@@ -235,7 +250,7 @@ diff --git a/components/viz/service/display/display.cc b/components/viz/service/
  #include "cc/base/math_util.h"
  #include "cc/base/region.h"
  #include "cc/base/simple_enclosed_region.h"
-@@ -274,8 +275,21 @@ void Display::PresentationGroupTiming::OnSwap(gfx::SwapTimings timings,
+@@ -272,8 +273,21 @@ void Display::PresentationGroupTiming::OnSwap(gfx::SwapTimings timings,
  
    auto frame_latency = timings.swap_start - frame_time_;
    if (frame_latency < base::Seconds(0)) {
@@ -319,7 +334,7 @@ diff --git a/components/viz/service/frame_sinks/root_compositor_frame_sink_impl.
  #include "components/viz/common/features.h"
  #include "components/viz/common/frame_sinks/begin_frame_source.h"
  #include "components/viz/service/display/display.h"
-@@ -753,7 +754,10 @@ void RootCompositorFrameSinkImpl::FrameIntervalDeciderResultCallback(
+@@ -757,7 +758,10 @@ void RootCompositorFrameSinkImpl::FrameIntervalDeciderResultCallback(
            result);
    interval = interval_and_compat.first;
    gfx::SurfaceControlFrameRateCompatibility compat = interval_and_compat.second;
@@ -331,7 +346,7 @@ diff --git a/components/viz/service/frame_sinks/root_compositor_frame_sink_impl.
    if (decided_display_interval_ == interval &&
        decided_display_frame_rate_compat_ == compat) {
      return;
-@@ -775,7 +779,9 @@ void RootCompositorFrameSinkImpl::FrameIntervalDeciderResultCallback(
+@@ -779,7 +783,9 @@ void RootCompositorFrameSinkImpl::FrameIntervalDeciderResultCallback(
              return interval.interval;
            }),
        result);
@@ -385,7 +400,7 @@ diff --git a/third_party/blink/renderer/core/animation/animation_clock.cc b/thir
 diff --git a/third_party/blink/renderer/core/view_transition/view_transition.cc b/third_party/blink/renderer/core/view_transition/view_transition.cc
 --- a/third_party/blink/renderer/core/view_transition/view_transition.cc
 +++ b/third_party/blink/renderer/core/view_transition/view_transition.cc
-@@ -989,8 +989,10 @@ CSSStyleSheet* ViewTransition::UAStyleSheet() const {
+@@ -998,8 +998,10 @@ CSSStyleSheet* ViewTransition::UAStyleSheet() const {
  void ViewTransition::WillCommitCompositorFrame() {
    // There should only be 1 commit when we're in the capturing phase and
    // rendering is paused immediately after it finishes.
