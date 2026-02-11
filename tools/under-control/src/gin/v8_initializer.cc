@@ -197,7 +197,7 @@ void SetV8FlagsFormatted(const char* format, ...) {
   char buffer[128];
   va_list args;
   va_start(args, format);
-  int length = base::VSpanPrintf(buffer, format, args);
+  int length = UNSAFE_TODO(base::VSpanPrintf(buffer, format, args));
   if (length <= 0 || sizeof(buffer) <= static_cast<unsigned>(length)) {
     PLOG(ERROR) << "Invalid formatted V8 flag: " << format;
     return;
@@ -460,9 +460,6 @@ void SetFeatureFlags() {
       features::kV8SingleThreadedGCInBackgroundNoIncrementalMarking,
       "--no-incremental-marking-for-gc-in-background",
       "--incremental-marking-for-gc-in-background");
-  SetV8FlagsIfOverridden(features::kV8DecommitPooledPages,
-                         "--decommit-pooled-pages",
-                         "--no-decommit-pooled-pages");
 
   if (base::FeatureList::IsEnabled(features::kV8ConcurrentSparkplug)) {
     if (int max_threads = features::kV8ConcurrentSparkplugMaxThreads.Get()) {
