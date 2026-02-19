@@ -35,9 +35,13 @@ WORKDIR /home/${user}
 
 RUN echo 'debconf debconf/frontend select Noninteractive' | sudo debconf-set-selections
 
-RUN wget https://raw.githubusercontent.com/chromium/chromium/$VERSION/build/install-build-deps.sh && \
-    wget https://raw.githubusercontent.com/chromium/chromium/$VERSION/build/install-build-deps.py && \
-    sed -i 's/snapcraft/wget/' install-build-deps.sh && \
+RUN wget https://raw.githubusercontent.com/chromium/chromium/$VERSION/build/install-build-deps.sh || \
+    wget -qO- https://chromium.googlesource.com/chromium/src/+/refs/tags/$VERSION/build/install-build-deps.sh?format=TEXT | base64 --decode > install-build-deps.sh
+
+RUN wget https://raw.githubusercontent.com/chromium/chromium/$VERSION/build/install-build-deps.py || \
+    wget -qO- https://chromium.googlesource.com/chromium/src/+/refs/tags/$VERSION/build/install-build-deps.py?format=TEXT | base64 --decode > install-build-deps.py
+
+RUN sed -i 's/snapcraft/wget/' install-build-deps.sh && \
     chmod +x ./install-build-deps.sh && \
     chmod +x ./install-build-deps.py && \
     sudo DEBIAN_FRONTEND=noninteractive ./install-build-deps.sh --no-prompt --lib32 --no-chromeos-fonts && \

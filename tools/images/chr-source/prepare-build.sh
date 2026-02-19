@@ -23,8 +23,8 @@ gclient root
 mkdir ./src
 cd ./src
 
-#CHR_SOURCE=https://chromium.googlesource.com/chromium/src.git
-CHR_SOURCE=https://github.com/chromium/chromium.git
+CHR_SOURCE=https://chromium.googlesource.com/chromium/src.git
+#CHR_SOURCE=https://github.com/chromium/chromium.git
 
 git init
 git remote add origin $CHR_SOURCE
