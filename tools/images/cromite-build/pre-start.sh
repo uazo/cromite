@@ -44,7 +44,10 @@ cd third_party/devtools-frontend/src ; vpython3 scripts/deps/sync_rollup_libs.py
 
 echo -e ${RED} -------- download pgo profiles ${NC}
 cd $WORKSPACE/chromium/src
-python3 tools/update_pgo_profiles.py --target=android-arm64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
+#pgo for android-arm64 are no more public - see https://issues.chromium.org/issues/372686816
+#python3 tools/update_pgo_profiles.py --target=android-arm64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
+python3 tools/update_pgo_profiles.py --target=android-desktop-arm64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
+python3 tools/update_pgo_profiles.py --target=android-desktop-x64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
 python3 tools/update_pgo_profiles.py --target=android-arm32 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
 python3 tools/update_pgo_profiles.py --target=win64 update --gs-url-base=chromium-optimization-profiles/pgo_profiles
 python3 tools/update_pgo_profiles.py --target=linux update --gs-url-base=chromium-optimization-profiles/pgo_profiles
@@ -92,7 +95,7 @@ rm clangd_indexing_tools-linux-snapshot_20250518.zip
 echo -e ${RED} -------- download rc ${NC}
 cd $WORKSPACE/chromium/src
 python3 third_party/depot_tools/download_from_google_storage.py	\
-    --no_resume  --no_auth \
+    --no_resume \
     --bucket chromium-browser-clang/rc \
     -s build/toolchain/win/rc/linux64/rc.sha1
 
