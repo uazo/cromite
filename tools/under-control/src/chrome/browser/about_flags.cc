@@ -873,33 +873,33 @@ const FeatureEntry::FeatureVariation
 #if !BUILDFLAG(IS_ANDROID)
 const FeatureEntry::FeatureParam
     kWebUIOmniboxAimPopupAddContextButtonBelowResults[] = {
-        {"AddContextButtonVariant", "below_results"},
+        {"Omnibox_AddContextButtonVariant", "below_results"},
 };
 const FeatureEntry::FeatureParam kWebUIOmniboxAimPopupAddContextButtonInline[] =
     {
-        {"AddContextButtonVariant", "inline"},
+        {"Omnibox_AddContextButtonVariant", "inline"},
 };
 const FeatureEntry::FeatureParam
     kWebUIOmniboxAimPopupAddContextButtonAboveResults[] = {
-        {"AddContextButtonVariant", "above_results"},
+        {"Omnibox_AddContextButtonVariant", "above_results"},
 };
 const FeatureEntry::FeatureParam
     kWebUIOmniboxAimPopupAddContextButtonBelowResultsNoContextualChips[] = {
-        {"AddContextButtonVariant", "below_results"},
-        {"ShowRecentTabChip", "false"},
-        {"ShowLensSearchChip", "false"},
+        {"Omnibox_AddContextButtonVariant", "below_results"},
+        {"Omnibox_ShowRecentTabChip", "false"},
+        {"Omnibox_ShowLensSearchChip", "false"},
 };
 const FeatureEntry::FeatureParam
     kWebUIOmniboxAimPopupAddContextButtonInlineNoContextualChips[] = {
-        {"AddContextButtonVariant", "inline"},
-        {"ShowRecentTabChip", "false"},
-        {"ShowLensSearchChip", "false"},
+        {"Omnibox_AddContextButtonVariant", "inline"},
+        {"Omnibox_ShowRecentTabChip", "false"},
+        {"Omnibox_ShowLensSearchChip", "false"},
 };
 const FeatureEntry::FeatureParam
     kWebUIOmniboxAimPopupAddContextButtonAboveResultsNoContextualChips[] = {
-        {"AddContextButtonVariant", "above_results"},
-        {"ShowRecentTabChip", "false"},
-        {"ShowLensSearchChip", "false"},
+        {"Omnibox_AddContextButtonVariant", "above_results"},
+        {"Omnibox_ShowRecentTabChip", "false"},
+        {"Omnibox_ShowLensSearchChip", "false"},
 };
 
 const FeatureEntry::FeatureVariation kWebUIOmniboxAimPopupVariations[] = {
@@ -1291,6 +1291,23 @@ const FeatureEntry::FeatureVariation kRemotePageMetadataVariations[] = {
     {"High Performance Canonicalization", nullptr, 0, "3362133"},
 };
 
+const FeatureEntry::FeatureParam
+    kAimServerEligibilityRequestModePostWithProto[] = {
+        {"mode", "post_with_proto"}};
+const FeatureEntry::FeatureParam
+    kAimServerEligibilityRequestModeGetWithLocale[] = {
+        {"mode", "get_with_locale"}};
+
+const FeatureEntry::FeatureVariation
+    kAimServerEligibilityIncludeClientLocaleVariations[] = {
+        {"GET with Locale", kAimServerEligibilityRequestModeGetWithLocale,
+         std::size(kAimServerEligibilityRequestModeGetWithLocale),
+         nullptr},
+        {"POST with Proto", kAimServerEligibilityRequestModePostWithProto,
+         std::size(kAimServerEligibilityRequestModeGetWithLocale),
+         nullptr},
+};
+
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC) || \
     BUILDFLAG(IS_WIN)
 
@@ -1646,90 +1663,20 @@ const FeatureEntry::FeatureVariation kOmniboxToolbeltVariations[] = {
      std::size(kOmniboxToolbeltAllActionsZeroTypedInputs), nullptr},
 };
 
-const FeatureEntry::FeatureParam
-    kComposeboxShowContextMenuAndSuggestMultiFile[] = {
-        {"ShowComposeboxZps", "true"},
-        {"ShowComposeboxTypedSuggest", "true"},
-        {"ShowContextMenu", "true"},
-        {"ShowRecentTabChip", "true"},
-};
-const FeatureEntry::FeatureParam
-    kComposeboxShowContextMenuAndSuggestMultiFileNoViewport[] = {
-        {"ShowComposeboxZps", "true"},
-        {"ShowComposeboxTypedSuggest", "true"},
-        {"ShowContextMenu", "true"},
-        {"ShowRecentTabChip", "true"},
-        {"EnableViewportImages", "false"},
-};
-const FeatureEntry::FeatureParam
-    kComposeboxShowContextMenuAndSuggestMultiFileAndTabPreviews[] = {
-        {"ShowComposeboxZps", "true"},
-        {"ShowComposeboxTypedSuggest", "true"},
-        {"ShowContextMenu", "true"},
-        {"ShowRecentTabChip", "true"},
-        {"ShowContextMenuTabPreviews", "true"},
-};
-const FeatureEntry::FeatureParam kComposeboxNext[] = {
-    {"ShowContextMenu", "true"},
-    {"ShowContextMenuTabPreviews", "true"},
-    {"ShowComposeboxZps", "true"},
-    {"ShowComposeboxTypedSuggest", "true"},
-    {"ShowRecentTabChip", "true"},
-    {"CloseComposeboxByEscape", "false"},
-    {"CloseComposeboxByClickOutside", "false"},
-    {"ContextMenuEnableMultiTabSelection", "true"},
-};
 const FeatureEntry::FeatureParam kComposeboxNextSingleContext[] = {
     {"MaxNumFiles", "1"},
-    {"ShowContextMenu", "true"},
-    {"ShowContextMenuTabPreviews", "true"},
-    {"ShowComposeboxZps", "true"},
-    {"ShowComposeboxTypedSuggest", "true"},
-    {"ShowRecentTabChip", "true"},
-    {"CloseComposeboxByEscape", "false"},
-    {"CloseComposeboxByClickOutside", "false"},
 };
 const FeatureEntry::FeatureParam kComposeboxNextSingleContextForRealboxNext[] =
     {
         {"NtpComposeboxMaxNumFiles", "1"},
-        {"NtpComposeboxShowContextMenu", "true"},
-        {"NtpComposeboxShowComposeboxZps", "true"},
-        {"NtpComposeboxShowComposeboxTypedSuggest", "true"},
         {"NtpComposeboxShowRecentTabChip", "true"},
 };
 const FeatureEntry::FeatureParam kComposeboxNextForRealboxNext[] = {
-    {"NtpComposeboxShowContextMenu", "true"},
-    {"NtpComposeboxShowComposeboxZps", "true"},
-    {"NtpComposeboxShowComposeboxTypedSuggest", "true"},
     {"NtpComposeboxShowRecentTabChip", "true"},
     {"NtpComposeboxContextMenuEnableMultiTabSelection", "true"},
-    {"EnableEphemeralContextMenuDescription", "true"},
-};
-const FeatureEntry::FeatureParam kComposeboxNextWithModelPicker[] = {
-    {"NtpComposeboxShowContextMenu", "true"},
-    {"NtpComposeboxShowComposeboxZps", "true"},
-    {"NtpComposeboxShowComposeboxTypedSuggest", "true"},
-    {"NtpComposeboxShowRecentTabChip", "true"},
-    {"NtpComposeboxContextMenuEnableMultiTabSelection", "true"},
-    {"EnableEphemeralContextMenuDescription", "true"},
-    {"EnableThreadsRail", "true"},
-    {"NtpComposeboxShowModelPicker", "true"},
 };
 
 const FeatureEntry::FeatureVariation kNtpComposeboxVariations[] = {
-    {"- Show Contextual Input Menu and Suggest, 5 File Limit",
-     kComposeboxShowContextMenuAndSuggestMultiFile,
-     std::size(kComposeboxShowContextMenuAndSuggestMultiFile), nullptr},
-    {"- Show Contextual Input Menu and Suggest, 5 File Limit, no viewport "
-     "uploading",
-     kComposeboxShowContextMenuAndSuggestMultiFileNoViewport,
-     std::size(kComposeboxShowContextMenuAndSuggestMultiFileNoViewport),
-     nullptr},
-    {"- Show Contextual Input Menu and Suggest, Tab Previews, 5 File Limit",
-     kComposeboxShowContextMenuAndSuggestMultiFileAndTabPreviews,
-     std::size(kComposeboxShowContextMenuAndSuggestMultiFileAndTabPreviews),
-     nullptr},
-    {"- Next Experience", kComposeboxNext, std::size(kComposeboxNext), nullptr},
     {"- Next Experience Single Context", kComposeboxNextSingleContext,
      std::size(kComposeboxNextSingleContext), nullptr},
     {"- Next Experience for Realbox Next", kComposeboxNextForRealboxNext,
@@ -1737,8 +1684,6 @@ const FeatureEntry::FeatureVariation kNtpComposeboxVariations[] = {
     {"- Next Experience Single Context for Realbox Next",
      kComposeboxNextSingleContextForRealboxNext,
      std::size(kComposeboxNextSingleContextForRealboxNext), nullptr},
-    {"- Next Experience with Model Picker", kComposeboxNextWithModelPicker,
-     std::size(kComposeboxNextWithModelPicker), nullptr},
 };
 
 const FeatureEntry::FeatureParam kShowNextRealboxTallTopContext[] = {
@@ -1772,16 +1717,9 @@ const FeatureEntry::FeatureVariation kNtpRealboxNextVariations[] = {
      std::size(kShowNextRealboxCompactCyclingPlaceholders), nullptr},
 };
 
-const FeatureEntry::FeatureParam kNtpNextShowStaticText[] = {
-    {"NtpNextShowStaticTextParam", "true"},
-};
-
 const FeatureEntry::FeatureParam kNtpNextShowDeepDiveSuggestions[] = {
     {"NtpNextShowDeepDiveSuggestionsParam", "true"},
     {"NtpNextSuggestionsFromNewSearchSuggestionsEndpointParam", "false"},
-};
-const FeatureEntry::FeatureParam kNtpNextShowSimplificationUI[] = {
-    {"NtpNextShowSimplificationUIParam", "true"},
 };
 const FeatureEntry::FeatureParam kNtpNextShowSimplificationUIWithDeepDive[] = {
     {"NtpNextShowSimplificationUIParam", "true"},
@@ -1826,12 +1764,8 @@ const FeatureEntry::FeatureParam kNtpNextShowSimplificationUIWithDismissal[] = {
 };
 
 const FeatureEntry::FeatureVariation kNtpNextVariations[] = {
-    {"- Show Static Text", kNtpNextShowStaticText,
-     std::size(kNtpNextShowStaticText), nullptr},
     {"- Show Deep Dive Suggestions", kNtpNextShowDeepDiveSuggestions,
      std::size(kNtpNextShowDeepDiveSuggestions), nullptr},
-    {"- Show Row UI", kNtpNextShowSimplificationUI,
-     std::size(kNtpNextShowSimplificationUI), nullptr},
     {"- Show Row UI With Deep Dive", kNtpNextShowSimplificationUIWithDeepDive,
      std::size(kNtpNextShowSimplificationUIWithDeepDive), nullptr},
     {"- Show Chips UI with a New Suggestions Client",
@@ -7205,6 +7139,11 @@ const FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kOmniboxHideSuggestionGroupHeadersDescription,
      kOsDesktop, FEATURE_VALUE_TYPE(omnibox::kHideSuggestionGroupHeaders)},
 
+    {"omnibox-hide-contextual-group-headers",
+     flag_descriptions::kOmniboxHideContextualGroupHeadersName,
+     flag_descriptions::kOmniboxHideContextualGroupHeadersDescription,
+     kOsDesktop, FEATURE_VALUE_TYPE(omnibox::kHideContextualGroupHeaders)},
+
     {"omnibox-url-suggestions-on-focus",
      flag_descriptions::kOmniboxUrlSuggestionsOnFocus,
      flag_descriptions::kOmniboxUrlSuggestionsOnFocusDescription, kOsDesktop,
@@ -7241,6 +7180,19 @@ const FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kOmniboxAimServerEligibilityName,
      flag_descriptions::kOmniboxAimServerEligibilityDescription, kOsAll,
      FEATURE_VALUE_TYPE(omnibox::kAimServerEligibilityEnabled)},
+
+    {"aim-server-eligibility-include-client-locale",
+     flag_descriptions::kAimServerEligibilityIncludeClientLocaleName,
+     flag_descriptions::kAimServerEligibilityIncludeClientLocaleDescription,
+     kOsAll,
+     FEATURE_WITH_PARAMS_VALUE_TYPE(
+         omnibox::kAimServerEligibilityIncludeClientLocale,
+         kAimServerEligibilityIncludeClientLocaleVariations,
+         "AimServerEligibilityIncludeClientLocale")},
+
+    {"aim-use-pec-api", flag_descriptions::kAimUsePecApiName,
+     flag_descriptions::kAimUsePecApiDescription, kOsAll,
+     FEATURE_VALUE_TYPE(omnibox::kAimUsePecApi)},
 
 #if BUILDFLAG(IS_ANDROID)
     {"animate-suggestions-list-appearance",
@@ -7808,11 +7760,6 @@ const FeatureEntry kFeatureEntries[] = {
      FEATURE_WITH_PARAMS_VALUE_TYPE(ntp_features::kRealboxCr23Theming,
                                     kNtpRealboxCr23ThemingVariations,
                                     "NtpRealboxCr23Theming")},
-
-    {"ntp-realbox-match-searchbox-theme",
-     flag_descriptions::kNtpRealboxMatchSearchboxThemeName,
-     flag_descriptions::kNtpRealboxMatchSearchboxThemeDescription, kOsDesktop,
-     FEATURE_VALUE_TYPE(ntp_features::kRealboxMatchSearchboxTheme)},
 
     {"ntp-realbox-use-google-g-icon",
      flag_descriptions::kNtpRealboxUseGoogleGIconName,
@@ -12961,6 +12908,10 @@ const FeatureEntry kFeatureEntries[] = {
                                     kContextualTaskEntryPointVariations,
                                     "ContextualTasks")},
 
+    {"omnibox-debug-logs", omnibox::flag_descriptions::kOmniboxDebugLogsName,
+     omnibox::flag_descriptions::kOmniboxDebugLogsDescription, kOsDesktop,
+     FEATURE_VALUE_TYPE(omnibox::kOmniboxDebugLogs)},
+
     {"contextual-tasks-context",
      contextual_tasks::flag_descriptions::kContextualTasksContextName,
      contextual_tasks::flag_descriptions::kContextualTasksContextDescription,
@@ -12983,6 +12934,13 @@ const FeatureEntry kFeatureEntries[] = {
          kContextualTasksContextLibraryDescription,
      kOsDesktop,
      FEATURE_VALUE_TYPE(contextual_tasks::kContextualTasksContextLibrary)},
+
+    {"contextual-tasks-expand-button",
+     contextual_tasks::flag_descriptions::kContextualTasksExpandButtonName,
+     contextual_tasks::flag_descriptions::
+         kContextualTasksExpandButtonDescription,
+     kOsDesktop,
+     FEATURE_VALUE_TYPE(contextual_tasks::kContextualTasksExpandButton)},
 
 #if !BUILDFLAG(IS_ANDROID)
     {"create-new-tab-group-app-menu-top-level",
