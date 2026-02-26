@@ -839,7 +839,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     @BrowserServicesIntentDataProvider.CustomTabsUiType
     private int getCustomTabsUiType(int requestedUiType) {
         if (mNetwork != null) return CustomTabsUiType.NETWORK_BOUND_TAB;
-        if (isTrustedWebActivity() && resolveDisplayMode() == DisplayMode.MINIMAL_UI) {
+        if (isTrustedWebActivity()) {
             return CustomTabsUiType.TRUSTED_WEB_ACTIVITY;
         }
         if (!isTrustedIntent()) {
@@ -1068,14 +1068,13 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         switch (type) {
             case CustomTabsUiType.MEDIA_VIEWER:
             case CustomTabsUiType.READER_MODE:
-            case CustomTabsUiType.MINIMAL_UI_WEBAPP:
             case CustomTabsUiType.OFFLINE_PAGE:
             case CustomTabsUiType.AUTH_TAB:
             case CustomTabsUiType.NETWORK_BOUND_TAB:
+            case CustomTabsUiType.TRUSTED_WEB_ACTIVITY:
             case CustomTabsUiType.POPUP:
                 return false;
-            case CustomTabsUiType.TRUSTED_WEB_ACTIVITY:
-                return !ChromeFeatureList.sAndroidWebAppMenuButton.isEnabled();
+            case CustomTabsUiType.MINIMAL_UI_WEBAPP:
             case CustomTabsUiType.DEFAULT:
             default:
                 return true;
@@ -1322,6 +1321,18 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         }
         if (IntentUtils.safeHasExtra(intent, EXTRA_CUSTOM_CONTENT_ACTIONS)) {
             featureUsage.log(CustomTabsFeature.EXTRA_CUSTOM_CONTENT_ACTIONS);
+        }
+        if (IntentUtils.safeHasExtra(
+                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_MINUTES)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_MINUTES);
+        }
+        if (IntentUtils.safeHasExtra(
+                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_MINUTES_ALLOWED)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_MINUTES_ALLOWED);
+        }
+        if (IntentUtils.safeHasExtra(
+                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_PENDING_INTENT)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_PENDING_INTENT);
         }
     }
 
