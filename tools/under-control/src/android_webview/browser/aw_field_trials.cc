@@ -18,6 +18,7 @@
 #include "components/payments/content/android/payment_feature_map.h"
 #include "components/permissions/features.h"
 #include "components/safe_browsing/core/common/features.h"
+#include "components/stylus_handwriting/android/stylus_handwriting_feature_map.h"
 #include "components/variations/feature_overrides.h"
 #include "components/viz/common/features.h"
 #include "content/public/common/content_features.h"
@@ -32,7 +33,6 @@
 #include "third_party/blink/public/common/features_generated.h"
 #include "ui/android/ui_android_features.h"
 #include "ui/base/ui_base_features.h"
-#include "ui/events/features.h"
 #include "ui/gl/gl_features.h"
 #include "ui/gl/gl_switches.h"
 
@@ -81,10 +81,6 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // HDR does not support webview yet. See crbug.com/1493153 for an explanation.
   aw_feature_overrides.DisableFeature(ui::kAndroidHDR);
-
-  // TODO(crbug.com/450845471): Remove this once webview experiment has
-  // concluded.
-  aw_feature_overrides.DisableFeature(ui::kCompensateGestureDetectorTimeouts);
 
   // Disable launch_handler on WebView.
   aw_feature_overrides.DisableFeature(::features::kAndroidWebAppLaunchHandler);
@@ -317,4 +313,8 @@ void AwFieldTrials::RegisterFeatureOverrides(base::FeatureList* feature_list) {
 
   // Don't pass the data about browser window position on screen to WebView.
   aw_feature_overrides.DisableFeature(ui::kAndroidUseCorrectWindowBounds);
+
+  // Launched for WebView. Experimentation needed for Chrome on Android.
+  aw_feature_overrides.EnableFeature(
+      stylus_handwriting::android::kProbeStylusWritingInBackground);
 }
