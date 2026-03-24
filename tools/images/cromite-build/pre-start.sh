@@ -37,6 +37,7 @@ vpython3 -vpython-spec third_party/catapult/.vpython3 -vpython-root $VPYTHON_VIR
 vpython3 -vpython-spec third_party/webrtc/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
 vpython3 -vpython-spec v8/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
 vpython3 -vpython-spec v8/tools/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
+vpython3 -vpython-spec tools/flags/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
 
 echo -e ${RED} -------- rollup devtools-frontend third_party ${NC}
 cd $WORKSPACE/chromium/src
