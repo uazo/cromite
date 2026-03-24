@@ -152,7 +152,7 @@ diff --git a/chrome/browser/net/proxy_service_factory.cc b/chrome/browser/net/pr
 -  return std::make_unique<PrefProxyConfigTrackerImpl>(profile_prefs, nullptr);
 +  // Migrate from profile_prefs to local_state_prefs
 +  if (local_state_prefs->GetBoolean("proxy_migrated") == false) {
-+    const base::Value::Dict& dict =
++    const base::DictValue& dict =
 +        profile_prefs->GetDict(proxy_config::prefs::kProxy);
 +
 +    LOG(INFO) << "CreatePrefProxyConfigTrackerOfProfile: Migration from profile to local state";
@@ -774,9 +774,9 @@ new file mode 100644
 +  void RegisterMessages() override;
 +
 +  // Messages
-+  void OnEnableNotifyUIWithState(const base::Value::List& args);
-+  void OnApply(const base::Value::List& args);
-+  void OnClear(const base::Value::List& args);
++  void OnEnableNotifyUIWithState(const base::ListValue& args);
++  void OnApply(const base::ListValue& args);
++  void OnClear(const base::ListValue& args);
 +
 +  // net::ProxyConfigService::Observer implementation:
 +  // Calls ProxyConfigView.onProxyConfigChanged JavaScript function in the
@@ -793,7 +793,7 @@ new file mode 100644
 +  std::unique_ptr<PrefProxyConfigTracker> pref_proxy_config_tracker_;
 +  bool is_observing_;
 +
-+  void encodeConfig(const net::ProxyConfig& config, base::Value::Dict& state);
++  void encodeConfig(const net::ProxyConfig& config, base::DictValue& state);
 +
 +  void apply(const net::ProxyConfig& config);
 +
@@ -833,7 +833,7 @@ new file mode 100644
 +  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI) ||
 +         !BrowserThread::IsThreadInitialized(BrowserThread::UI));
 +
-+  base::Value::Dict state;
++  base::DictValue state;
 +  bool pending = false;
 +  switch (availability) {
 +    case net::ProxyConfigService::CONFIG_VALID:
@@ -861,7 +861,7 @@ new file mode 100644
 +  return pacString;
 +}
 +
-+void ProxyConfigMessageHandler::encodeConfig(const net::ProxyConfig& config, base::Value::Dict& state) {
++void ProxyConfigMessageHandler::encodeConfig(const net::ProxyConfig& config, base::DictValue& state) {
 +  // when automatic settings are enabled they take precedence over manual settings
 +  // automatic settings are either the "auto-detect" flag or the existance of a PAC URL
 +
@@ -932,7 +932,7 @@ new file mode 100644
 +// The proxy configuration UI is not notified of state changes until this function runs.
 +// After this function, OnProxyConfigChanged() will be called on all proxy state changes.
 +void ProxyConfigMessageHandler::OnEnableNotifyUIWithState(
-+    const base::Value::List& list) {
++    const base::ListValue& list) {
 +  DCHECK_CURRENTLY_ON(BrowserThread::UI);
 +
 +  if (!is_observing_) {
@@ -954,23 +954,23 @@ new file mode 100644
 +  OnProxyConfigChanged(config, availability);
 +}
 +
-+void ProxyConfigMessageHandler::OnClear(const base::Value::List& list) {
++void ProxyConfigMessageHandler::OnClear(const base::ListValue& list) {
 +  DCHECK_CURRENTLY_ON(BrowserThread::UI);
 +
-+  const base::Value::Dict cfg = ProxyConfigDictionary::CreateSystem();
++  const base::DictValue cfg = ProxyConfigDictionary::CreateSystem();
 +  pref_service_->SetDict(proxy_config::prefs::kProxy, cfg.Clone());
 +  pref_service_->CommitPendingWrite();
 +  OnEnableNotifyUIWithState(list);
 +}
 +
-+void ProxyConfigMessageHandler::OnApply(const base::Value::List& list) {
++void ProxyConfigMessageHandler::OnApply(const base::ListValue& list) {
 +  DCHECK_CURRENTLY_ON(BrowserThread::UI);
 +
 +  if ((list.size() != 1) || !list[0].is_dict()) {
 +    return;
 +  }
 +
-+  const base::Value::Dict& config = list[0].GetDict();
++  const base::DictValue& config = list[0].GetDict();
 +
 +  if (config.FindBool("auto_detect").value_or(false)) {
 +    apply(net::ProxyConfig::CreateAutoDetect());
@@ -986,7 +986,7 @@ new file mode 100644
 +    return;
 +  }
 +
-+  const base::Value::Dict* rules = config.FindDict("rules");
++  const base::DictValue* rules = config.FindDict("rules");
 +  if (rules == nullptr)
 +    return;
 +
@@ -1023,7 +1023,7 @@ new file mode 100644
 +  } else if (*type == "direct") {
 +      proxyConfig.proxy_rules().type = net::ProxyConfig::ProxyRules::Type::EMPTY;
 +  } else if (*type == "none") {
-+      base::Value::List empty;
++      base::ListValue empty;
 +      OnClear(empty);
 +      return;
 +  } else {
@@ -1049,26 +1049,26 @@ new file mode 100644
 +
 +void ProxyConfigMessageHandler::apply(const net::ProxyConfig& proxyConfig) {
 +  if (proxyConfig.auto_detect()) {
-+    const base::Value::Dict cfg = ProxyConfigDictionary::CreateAutoDetect();
++    const base::DictValue cfg = ProxyConfigDictionary::CreateAutoDetect();
 +    pref_service_->SetDict(proxy_config::prefs::kProxy, cfg.Clone());
 +  } else if (proxyConfig.has_pac_url()) {
-+    const base::Value::Dict cfg = ProxyConfigDictionary::CreatePacScript(proxyConfig.pac_url().spec(), proxyConfig.pac_mandatory());
++    const base::DictValue cfg = ProxyConfigDictionary::CreatePacScript(proxyConfig.pac_url().spec(), proxyConfig.pac_mandatory());
 +    pref_service_->SetDict(proxy_config::prefs::kProxy, cfg.Clone());
 +  } else if (proxyConfig.proxy_rules().type == net::ProxyConfig::ProxyRules::Type::EMPTY) {
-+    const base::Value::Dict cfg = ProxyConfigDictionary::CreateDirect();
++    const base::DictValue cfg = ProxyConfigDictionary::CreateDirect();
 +    pref_service_->SetDict(proxy_config::prefs::kProxy, cfg.Clone());
 +  } else {
 +    auto proxyRulesAsString = proxyConfig.proxy_rules().ToString();
 +    auto bypassRulesAsString = proxyConfig.proxy_rules().bypass_rules.ToString();
 +
 +    // fixed servers
-+    const base::Value::Dict cfg = ProxyConfigDictionary::CreateFixedServers(proxyRulesAsString,
++    const base::DictValue cfg = ProxyConfigDictionary::CreateFixedServers(proxyRulesAsString,
 +                            bypassRulesAsString, proxyConfig.proxy_rules().reverse_bypass);
 +    pref_service_->SetDict(proxy_config::prefs::kProxy, cfg.Clone());
 +  }
 +  pref_service_->CommitPendingWrite();
 +
-+  base::Value::List empty;
++  base::ListValue empty;
 +  OnEnableNotifyUIWithState(empty);
 +}
 +

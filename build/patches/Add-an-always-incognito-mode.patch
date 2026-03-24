@@ -28,7 +28,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../chrome/browser/app/ChromeActivity.java    |   4 +
  .../AppMenuPropertiesDelegateImpl.java        |   7 +-
  .../ChromeContextMenuPopulator.java           |   6 +-
- .../CustomTabActivityLifecycleUmaTracker.java |  31 ----
+ .../CustomTabActivityLifecycleUmaTracker.java |  31 ---
  .../CustomTabAppMenuPropertiesDelegate.java   |   5 +
  .../CustomTabIntentDataProvider.java          |  10 +
  .../browser/download/DownloadUtils.java       |  13 +-
@@ -37,7 +37,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../chrome/browser/history/HistoryPage.java   |  16 ++
  .../native_page/NativePageFactory.java        |   4 +-
  .../chrome/browser/ntp/RecentTabsManager.java |  29 ++-
- .../privacy/settings/IncognitoSettings.java   | 175 ++++++++++++++++++
+ .../privacy/settings/IncognitoSettings.java   | 177 ++++++++++++++++++
  .../settings/FragmentDependencyProvider.java  |   4 +
  .../HistoricalTabModelObserver.java           |   5 +-
  .../tab/tab_restore/HistoricalTabSaver.java   |   2 +-
@@ -62,13 +62,13 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../android/offline_page_model_factory.cc     |  20 +-
  .../android/request_coordinator_factory.cc    |  33 +++-
  .../offline_page_model_factory.h              |   1 +
- .../offline_pages/recent_tab_helper.cc        |  31 +++-
+ .../offline_pages/recent_tab_helper.cc        |  31 ++-
  .../browser/offline_pages/recent_tab_helper.h |   5 +
  .../request_coordinator_factory.h             |   4 +-
  chrome/browser/prefs/browser_prefs.cc         |   5 +
  chrome/browser/profiles/profile_selections.cc |  10 +
  chrome/browser/profiles/profile_selections.h  |   7 +-
- .../signin/services/ProfileDataCache.java     |   5 +-
+ .../signin/services/ProfileDataCache.java     |  18 +-
  .../browser/ui/android/native_page/BUILD.gn   |   2 +
  .../browser/ui/native_page/NativePage.java    |  17 +-
  .../browser/omnibox/LocationBarMediator.java  |   8 +
@@ -89,7 +89,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../add-an-always-incognito-mode.inc          |   1 +
  .../add-an-always-incognito-mode.inc          |   3 +
  .../add-an-always-incognito-mode.inc          |   1 +
- 70 files changed, 808 insertions(+), 108 deletions(-)
+ 70 files changed, 812 insertions(+), 119 deletions(-)
  create mode 100644 chrome/android/java/res/xml/incognito_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/AlwaysIncognitoLinkInterceptor.java
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoSettings.java
@@ -699,7 +699,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoSettings.java
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,177 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -732,8 +732,9 @@ new file mode 100644
 +import androidx.preference.PreferenceFragmentCompat;
 +import androidx.vectordrawable.graphics.drawable.VectorDrawableCompat;
 +
-+import org.chromium.base.supplier.ObservableSupplier;
-+import org.chromium.base.supplier.ObservableSupplierImpl;
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
 +import java.util.function.Supplier;
 +
 +import org.chromium.chrome.R;
@@ -767,10 +768,11 @@ new file mode 100644
 +    private static final String PREF_INCOGNITO_SAVE_SITE_SETTING = "incognito_save_site_setting";
 +
 +    private final PrefService prefService = UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
-+    private final ObservableSupplierImpl<String> mPageTitle = new ObservableSupplierImpl<>();
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++        ObservableSuppliers.createMonotonic();
 +
 +    @Override
-+    public ObservableSupplier<String> getPageTitle() {
++    public MonotonicObservableSupplier<String> getPageTitle() {
 +        return mPageTitle;
 +    }
 +
@@ -1912,6 +1914,54 @@ diff --git a/chrome/browser/signin/services/android/java/src/org/chromium/chrome
          mImageSize = imageSize;
          mDefaultBadgeConfig = badgeConfig;
          mPlaceholderImage = getScaledPlaceholderImage(context, imageSize);
+@@ -338,7 +335,6 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
+         ThreadUtils.assertOnUiThread();
+         if (mObservers.isEmpty()) {
+             mAccountManagerFacade.addObserver(this);
+-            mIdentityManager.addObserver(this);
+         }
+         mObservers.addObserver(observer);
+     }
+@@ -351,7 +347,6 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
+         mObservers.removeObserver(observer);
+         if (mObservers.isEmpty()) {
+             mAccountManagerFacade.removeObserver(this);
+-            mIdentityManager.removeObserver(this);
+         }
+     }
+ 
+@@ -382,6 +377,7 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
+     }
+ 
+     private void updateCache() {
++        if ((true)) return;
+         var accounts = mAccountManagerFacade.getAccounts();
+         if (!accounts.isFulfilled()) {
+             // When the list of accounts is ready - onCoreAccountInfosChanged will call
+@@ -391,13 +387,7 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
+ 
+         List<DisplayableProfileData> displayableAccounts = new ArrayList<>();
+         for (CoreAccountInfo account : accounts.getResult()) {
+-            var accountInfo = mIdentityManager.findExtendedAccountInfoByAccountId(account.getId());
+-            if (accountInfo != null
+-                    && (accountInfo.hasDisplayableInfo()
+-                            || getBadgeConfigForAccount(accountInfo.getEmail()) != null)) {
+-                displayableAccounts.add(toDisplayableProfileData(accountInfo));
+-            }
+-        }
++         }
+         mAccountsCache.setAccounts(displayableAccounts);
+ 
+         mAccountsCache
+@@ -413,8 +403,6 @@ public class ProfileDataCache implements IdentityManager.Observer, AccountsChang
+     /** TODO(crbug.com/476990153): Replace with email parameter with {@link #CoreAccountId}. */
+     @Deprecated
+     private void populateCacheForAccount(String accountEmail) {
+-        var accountInfo = mIdentityManager.findExtendedAccountInfoByEmailAddress(accountEmail);
+-        onExtendedAccountInfoUpdated(accountInfo);
+     }
+ 
+     private DisplayableProfileData toDisplayableProfileData(AccountInfo accountInfo) {
 diff --git a/chrome/browser/ui/android/native_page/BUILD.gn b/chrome/browser/ui/android/native_page/BUILD.gn
 --- a/chrome/browser/ui/android/native_page/BUILD.gn
 +++ b/chrome/browser/ui/android/native_page/BUILD.gn

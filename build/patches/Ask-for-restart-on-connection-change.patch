@@ -23,7 +23,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../java/res/xml/homepage_preferences.xml     |   6 +
  .../ConnectivityDetector.java                 |   1 -
  .../indicator/OfflineDetector.java            | 111 +++++++++++++++++-
- .../OfflineIndicatorControllerV2.java         |  15 ++-
+ .../OfflineIndicatorControllerV2.java         |  14 ++-
  .../tabbed_mode/TabbedRootUiCoordinator.java  |   5 +-
  .../tabmodel/TabModelSelectorBase.java        |   7 ++
  .../sAskForRestartOnConnectionChange.java     |  32 +++++
@@ -49,7 +49,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../blink/renderer/core/frame/local_frame.cc  |   2 +
  .../main_thread/frame_scheduler_impl.cc       |   2 +
  .../main_thread/page_scheduler_impl.cc        |   9 +-
- 29 files changed, 320 insertions(+), 9 deletions(-)
+ 29 files changed, 319 insertions(+), 9 deletions(-)
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sAskForRestartOnConnectionChange.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Ask-for-restart-on-connection-change.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Ask-for-restart-on-connection-change.inc
@@ -95,7 +95,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/in
  import org.chromium.components.variations.VariationsAssociatedData;
  
 +import android.app.Activity;
-+import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.MonotonicObservableSupplier;
 +import org.chromium.url.GURL;
 +import org.chromium.chrome.R;
 +import org.chromium.chrome.browser.app.tabwindow.TabWindowManagerSingleton;
@@ -135,8 +135,8 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/in
      private static final String TAG = "OfflineDetector";
  
 +    private long mLastNetworkId = 0;
-+    private ObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
-+    private ObservableSupplier<LayoutManager> mLayoutManager;
++    private MonotonicObservableSupplier<TabModelSelector> mTabModelSelectorSupplier;
++    private MonotonicObservableSupplier<LayoutManager> mLayoutManager;
 +    private Supplier<SnackbarManager> mSnackbarManagerSupplier;
 +
      /**
@@ -148,8 +148,8 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/in
              Callback<Boolean> isForegroundCallback,
 -            Context context) {
 +            Context context,
-+            ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
-+            ObservableSupplier<LayoutManager> layoutManager,
++            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
++            MonotonicObservableSupplier<LayoutManager> layoutManager,
 +            Supplier<SnackbarManager> snackbarManagerSupplier) {
 +        mTabModelSelectorSupplier = tabModelSelectorSupplier;
 +        mSnackbarManagerSupplier = snackbarManagerSupplier;
@@ -244,11 +244,10 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/in
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/indicator/OfflineIndicatorControllerV2.java b/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/indicator/OfflineIndicatorControllerV2.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/indicator/OfflineIndicatorControllerV2.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/indicator/OfflineIndicatorControllerV2.java
-@@ -32,6 +32,11 @@ import java.lang.annotation.Retention;
+@@ -32,6 +32,10 @@ import java.lang.annotation.Retention;
  import java.lang.annotation.RetentionPolicy;
  import java.util.function.Supplier;
  
-+import org.chromium.base.supplier.ObservableSupplierImpl;
 +import org.chromium.chrome.browser.layouts.LayoutManager;
 +import org.chromium.chrome.browser.tabmodel.TabModelSelector;
 +import org.chromium.chrome.browser.ui.messages.snackbar.SnackbarManager;
@@ -256,19 +255,19 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/offlinepages/in
  /**
   * Class that controls visibility and content of {@link StatusIndicatorCoordinator} to relay
   * connectivity information.
-@@ -105,7 +110,10 @@ public class OfflineIndicatorControllerV2 {
+@@ -105,7 +109,10 @@ public class OfflineIndicatorControllerV2 {
              Context context,
              StatusIndicatorCoordinator statusIndicator,
              NonNullObservableSupplier<Boolean> isUrlBarFocusedSupplier,
 -            Supplier<Boolean> canAnimateNativeBrowserControls) {
 +            Supplier<Boolean> canAnimateNativeBrowserControls,
-+            ObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
-+            ObservableSupplierImpl<LayoutManager> layoutManager,
++            MonotonicObservableSupplier<TabModelSelector> tabModelSelectorSupplier,
++            MonotonicObservableSupplier<LayoutManager> layoutManager,
 +            Supplier<SnackbarManager> snackbarManagerSupplier) {
          // If "force online connection state" switch is set, the offline indicator should never
          // show.
          assert !CommandLine.getInstance()
-@@ -131,7 +139,10 @@ public class OfflineIndicatorControllerV2 {
+@@ -131,7 +138,10 @@ public class OfflineIndicatorControllerV2 {
                      new OfflineDetector(
                              (Boolean offline) -> onConnectionStateChanged(offline),
                              (Boolean isForeground) -> onApplicationStateChanged(isForeground),
@@ -424,8 +423,8 @@ diff --git a/chrome/browser/tabwindow/internal/android/java/src/org/chromium/chr
  
 +    @Override
 +    public void setPagesFrozen(boolean frozen) {
-+        for (int i : mWindowIdToSelectors.keySet()) {
-+            TabModelSelector selector = mWindowIdToSelectors.get(i);
++        for (Map.Entry<@WindowId Integer, WindowDeps> entry : mWindowIdToDeps.entrySet()) {
++            TabModelSelector selector = entry.getValue().selector;
 +            if (selector != null) {
 +                selector.setPagesFrozen(frozen);
 +            }

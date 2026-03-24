@@ -112,7 +112,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../user_scripts/renderer/injection_host.h    |  41 +
  .../renderer/resources/greasemonkey_api.js    |  82 ++
  .../user_scripts_renderer_resources.grd       |  14 +
- .../user_scripts/renderer/script_context.cc   | 191 ++++
+ .../user_scripts/renderer/script_context.cc   | 190 ++++
  .../user_scripts/renderer/script_context.h    |  67 ++
  .../user_scripts/renderer/script_injection.cc | 295 +++++++
  .../user_scripts/renderer/script_injection.h  | 155 ++++
@@ -136,7 +136,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../strings/userscripts_strings.grdp          |  54 ++
  .../Experimental-user-scripts-support.inc     |  13 +
  tools/gritsettings/resource_ids.spec          |   6 +
- 109 files changed, 10495 insertions(+), 3 deletions(-)
+ 109 files changed, 10494 insertions(+), 3 deletions(-)
  create mode 100644 components/user_scripts/README.md
  create mode 100755 components/user_scripts/android/BUILD.gn
  create mode 100644 components/user_scripts/android/java/res/layout/accept_script_item.xml
@@ -3954,7 +3954,7 @@ new file mode 100644
 +  void RegisterMessages() override;
 +
 + private:
-+  void HandleRequestSource(const base::Value::List& args);
++  void HandleRequestSource(const base::ListValue& args);
 +  void OnScriptsLoaded(
 +      const std::string callback_id,
 +      const std::string script_key,
@@ -3979,7 +3979,7 @@ new file mode 100644
 +                          base::Unretained(this)));
 +}
 +
-+void UserScriptsUIHandler::HandleRequestSource(const base::Value::List& args) {
++void UserScriptsUIHandler::HandleRequestSource(const base::ListValue& args) {
 +  AllowJavascript();
 +  if (args.size() < 2) return;
 +
@@ -4015,10 +4015,10 @@ new file mode 100644
 +    std::unique_ptr<user_scripts::UserScriptList> user_scripts) {
 +  loaded_scripts_ = std::move(user_scripts);
 +
-+  base::Value::List response;
++  base::ListValue response;
 +  for (const std::unique_ptr<user_scripts::UserScript>& script : *loaded_scripts_) {
 +    if (script->key() == script_key) {
-+      base::Value::Dict scriptData;
++      base::DictValue scriptData;
 +      for (const std::unique_ptr<user_scripts::UserScript::File>& js_file :
 +          script->js_scripts()) {
 +        std::string_view contents = js_file->GetContent();
@@ -5199,7 +5199,7 @@ new file mode 100644
 +        ScopedDictionaryPrefUpdate::Get();
 +    std::unique_ptr<::prefs::DictionaryValueUpdate> dict_item;
 +    if (!dict->GetDictionaryWithoutPathExpansion(id_, &dict_item)) {
-+      dict_item = dict->SetDictionaryWithoutPathExpansion(id_, base::Value::Dict());
++      dict_item = dict->SetDictionaryWithoutPathExpansion(id_, base::DictValue());
 +    }
 +    return dict_item;
 +  }
@@ -5314,7 +5314,7 @@ new file mode 100644
 +
 +  // remove script from prefs if no more present
 +  std::vector<std::string> all_scripts_to_remove;
-+  const base::Value::Dict& dict = prefs_->GetDict(kUserScriptsList).Clone();
++  const base::DictValue& dict = prefs_->GetDict(kUserScriptsList).Clone();
 +  for (const auto script_it : dict) {
 +    const std::string& key = script_it.first;
 +
@@ -5335,7 +5335,7 @@ new file mode 100644
 +std::string UserScriptsPrefs::GetScriptsInfo() {
 +  std::string json_string;
 +
-+  const base::Value::Dict& dict = prefs_->GetDict(kUserScriptsList);
++  const base::DictValue& dict = prefs_->GetDict(kUserScriptsList);
 +
 +  base::JSONWriter::WriteWithOptions(
 +      dict, base::JSONWriter::OPTIONS_PRETTY_PRINT, &json_string);
@@ -5350,7 +5350,7 @@ new file mode 100644
 +  auto scriptInfo = std::make_unique<UserScriptsListPrefs::ScriptInfo>(
 +      script_id, "", base::Time::Now(), false);
 +
-+  const base::Value::Dict& scripts = prefs_->GetDict(kUserScriptsList);
++  const base::DictValue& scripts = prefs_->GetDict(kUserScriptsList);
 +  if (scripts.empty())
 +    return scriptInfo;
 +
@@ -5358,7 +5358,7 @@ new file mode 100644
 +  if (!script)
 +    return scriptInfo;
 +
-+  const base::Value::Dict& dict = script->GetDict();
++  const base::DictValue& dict = script->GetDict();
 +  const std::string* name = dict.FindString(kScriptName);
 +  const std::string* description = dict.FindString(kScriptDescription);
 +  const std::string* version = dict.FindString(kScriptVersion);
@@ -7059,7 +7059,6 @@ new file mode 100755
 +#include <iterator>
 +#include <ostream>
 +
-+#include "base/containers/contains.h"
 +#include "base/logging.h"
 +#include "base/stl_util.h"
 +#include "error_utils.h"
@@ -7220,12 +7219,13 @@ new file mode 100755
 +  return false;
 +}
 +
-+base::Value::List URLPatternSet::ToValue() const {
-+  base::Value::List result;
++base::ListValue URLPatternSet::ToValue() const {
++  base::ListValue result;
 +  for (const auto& pattern : patterns_) {
-+    base::Value pattern_str_value(pattern.GetAsString());
-+    if (!base::Contains(result, pattern_str_value))
-+      result.Append(std::move(pattern_str_value));
++    std::string pattern_str_value(pattern.GetAsString());
++    if (!result.contains(pattern_str_value)) {
++      result.Append(pattern_str_value);
++    }
 +  }
 +  return result;
 +}
@@ -7264,7 +7264,7 @@ new file mode 100755
 +  return value;
 +}
 +
-+bool URLPatternSet::Populate(const base::Value::List& value,
++bool URLPatternSet::Populate(const base::ListValue& value,
 +                             int valid_schemes,
 +                             bool allow_file_access,
 +                             std::string* error) {
@@ -7363,8 +7363,8 @@ new file mode 100755
 +  bool OverlapsWith(const URLPatternSet& other) const;
 +
 +  // Converts to and from Value for serialization to preferences.
-+  base::Value::List ToValue() const;
-+  bool Populate(const base::Value::List& value,
++  base::ListValue ToValue() const;
++  bool Populate(const base::ListValue& value,
 +                int valid_schemes,
 +                bool allow_file_access,
 +                std::string* error);
@@ -8744,7 +8744,7 @@ diff --git a/components/user_scripts/renderer/script_context.cc b/components/use
 new file mode 100755
 --- /dev/null
 +++ b/components/user_scripts/renderer/script_context.cc
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,190 @@
 +// Copyright 2014 The Chromium Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -8753,7 +8753,6 @@ new file mode 100755
 +
 +#include "base/command_line.h"
 +#include "base/containers/flat_set.h"
-+#include "base/containers/contains.h"
 +#include "base/logging.h"
 +#include "base/no_destructor.h"
 +#include "base/stl_util.h"
@@ -8860,7 +8859,7 @@ new file mode 100755
 +
 +    // Avoid an infinite loop - see https://crbug.com/568432 and
 +    // https://crbug.com/883526.
-+    if (base::Contains(already_visited_frames, parent))
++    if (already_visited_frames.contains(parent))
 +      return document_url;
 +
 +    parent_document = parent && parent->IsWebLocalFrame()

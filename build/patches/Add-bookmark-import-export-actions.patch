@@ -14,8 +14,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/android/java/AndroidManifest.xml       |   1 -
  .../menu/bookmark_toolbar_menu_improved.xml   |  14 +
  .../browser/TabbedModeTabDelegateFactory.java |   5 +-
- .../app/bookmarks/BookmarkActivity.java       |  32 ++
- .../native_page/NativePageFactory.java        |   9 +-
+ .../app/bookmarks/BookmarkActivity.java       |  21 ++
+ .../native_page/NativePageFactory.java        |   7 +-
  chrome/browser/BUILD.gn                       |  11 +-
  .../bookmarks/android/bookmark_bridge.cc      | 193 ++++++++++++
  .../bookmarks/android/bookmark_bridge.h       |  30 +-
@@ -23,7 +23,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../browser/bookmarks/BookmarkDelegate.java   |  10 +
  .../bookmarks/BookmarkManagerCoordinator.java |   9 +
  .../bookmarks/BookmarkManagerMediator.java    | 283 ++++++++++++++++++
- .../browser/bookmarks/BookmarkPage.java       |   9 +-
+ .../browser/bookmarks/BookmarkPage.java       |   8 +-
  .../browser/bookmarks/BookmarkToolbar.java    |  27 ++
  .../bookmarks/BookmarkToolbarMediator.java    |   4 +
  .../bookmarks/BookmarkToolbarProperties.java  |   8 +-
@@ -51,7 +51,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  ui/shell_dialogs/select_file_dialog_linux.cc  |   4 +
  ui/shell_dialogs/select_file_dialog_linux.h   |   2 +
  ui/shell_dialogs/select_file_dialog_win.cc    |   5 +
- 40 files changed, 806 insertions(+), 24 deletions(-)
+ 40 files changed, 793 insertions(+), 23 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_h/add-bookmark-import-export-actions.inc
@@ -132,42 +132,17 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/B
  import android.content.ComponentName;
  import android.content.Intent;
  import android.text.TextUtils;
-@@ -51,6 +53,9 @@ import org.chromium.ui.modaldialog.ModalDialogManager;
- import org.chromium.ui.modaldialog.ModalDialogManager.ModalDialogType;
- import org.chromium.ui.util.ColorUtils;
- 
-+import org.chromium.ui.base.ActivityWindowAndroid;
-+import org.chromium.ui.base.IntentRequestTracker;
-+
- /**
-  * The activity that displays the bookmark UI on the phone. It keeps a {@link
-  * BookmarkManagerCoordinator} inside of it and creates a snackbar manager. This activity should
-@@ -67,6 +72,9 @@ public class BookmarkActivity extends SnackbarActivity {
-     private @Nullable OnKeyDownHandler mOnKeyDownHandler;
-     private @Nullable ActivityWindowAndroid mWindowAndroid;
- 
-+    private ActivityWindowAndroid mWindowAndroid;
-+    private IntentRequestTracker mIntentRequestTracker;
-+
-     @Override
-     protected void onProfileAvailable(Profile profile) {
-         super.onProfileAvailable(profile);
-@@ -131,6 +139,14 @@ public class BookmarkActivity extends SnackbarActivity {
+@@ -131,6 +133,9 @@ public class BookmarkActivity extends SnackbarActivity {
          mOnKeyDownHandler =
                  BackPressHelper.create(
                          this, getOnBackPressedDispatcher(), mBookmarkManagerCoordinator);
 +
-+        final boolean listenToActivityState = true;
-+        mIntentRequestTracker = IntentRequestTracker.createFromActivity(this);
-+        mWindowAndroid = new ActivityWindowAndroid(this, listenToActivityState,
-+                                                   mIntentRequestTracker, /*InsetObserver*/ null,
-+                                                   /* trackOcclusion= */ true);
 +        mBookmarkManagerCoordinator.setWindow(mWindowAndroid,
 +            getModalDialogManagerSupplier().get());
      }
  
      @Override
-@@ -163,6 +179,7 @@ public class BookmarkActivity extends SnackbarActivity {
+@@ -163,6 +168,7 @@ public class BookmarkActivity extends SnackbarActivity {
      @Override
      protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
          super.onActivityResult(requestCode, resultCode, data);
@@ -175,7 +150,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/B
          if (requestCode == EDIT_BOOKMARK_REQUEST_CODE && resultCode == RESULT_OK) {
              assumeNonNull(data);
              BookmarkId bookmarkId =
-@@ -172,6 +189,21 @@ public class BookmarkActivity extends SnackbarActivity {
+@@ -172,6 +178,21 @@ public class BookmarkActivity extends SnackbarActivity {
          }
      }
  
@@ -235,15 +210,6 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
          private final BottomSheetController mBottomSheetController;
          private final Supplier<NewTabPageCreationTracker> mNewTabPageCreationTracker;
          private final BrowserControlsManager mBrowserControlsManager;
-@@ -331,7 +332,7 @@ public class NativePageFactory {
-                             mTabModelSelector,
-                             mEdgeToEdgeControllerSupplier),
-                     mActivity.getComponentName(),
--                    mBackPressManager);
-+                    mBackPressManager, mActivity);
-         }
- 
-         protected NativePage buildDownloadsPage(Tab tab) {
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
@@ -1035,17 +1001,16 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
  
  /** A native page holding a {@link BookmarkManagerCoordinator} on _tablet_. */
  @NullMarked
-@@ -52,7 +55,8 @@ public class BookmarkPage extends BasicNativePage {
-             Profile profile,
-             NativePageHost host,
-             @Nullable ComponentName componentName,
--            BackPressManager backPressManager) {
-+            BackPressManager backPressManager,
-+            ChromeActivity activity) {
-         super(host);
- 
-         mTitle = host.getContext().getString(R.string.bookmarks);
-@@ -83,6 +87,9 @@ public class BookmarkPage extends BasicNativePage {
+@@ -45,7 +48,7 @@ public class BookmarkPage extends BasicNativePage {
+      */
+     public BookmarkPage(
+             WindowAndroid windowAndroid,
+-            Activity activity,
++            ChromeActivity activity,
+             SnackbarManager snackbarManager,
+             Supplier<BottomSheetController> bottomSheetControllerSupplier,
+             ActivityResultTracker activityResultTracker,
+@@ -83,6 +86,9 @@ public class BookmarkPage extends BasicNativePage {
                          backPressManager);
  
          mBookmarkManagerCoordinator.setBasicNativePage(this);

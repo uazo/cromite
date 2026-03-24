@@ -29,6 +29,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../NativePageNavigationDelegateImpl.java     |   2 +-
  .../chrome/browser/ntp/NewTabPage.java        |   8 +-
  .../chrome/browser/ntp/NewTabPageLayout.java  |  33 +-
+ .../ntp/search/SearchBoxViewBinder.java       |   1 +
  .../suggestions/SuggestionsConfig.java        |   2 +-
  .../SuggestionsNavigationDelegate.java        |  27 +-
  .../tile/MostVisitedTilesCoordinator.java     |   6 +-
@@ -50,7 +51,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../Restore-Simplified-NTP-launch.inc         |  12 +
  .../Restore-Simplified-NTP-launch.inc         |  10 +
  .../Restore-Simplified-NTP-launch.inc         |   1 +
- 44 files changed, 649 insertions(+), 65 deletions(-)
+ 45 files changed, 650 insertions(+), 65 deletions(-)
  create mode 100644 chrome/android/java/res/drawable-hdpi/ic_most_visited_placeholder.png
  create mode 100644 chrome/android/java/res/drawable-mdpi/ic_most_visited_placeholder.png
  create mode 100644 chrome/android/java/res/drawable-xhdpi/ic_most_visited_placeholder.png
@@ -610,7 +611,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/TabbedModeTabDe
      private final TopInsetProvider mTopInsetProvider;
      private final StartupMetricsTracker mStartupMetricsTracker;
      private final @Nullable ExclusiveAccessManager mExclusiveAccessManager;
-+    private final ObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
++    private final MonotonicObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
 +
      private @Nullable NativePageFactory mNativePageFactory;
      private final BackPressManager mBackPressManager;
@@ -621,7 +622,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/TabbedModeTabDe
              MultiInstanceManager multiInstanceManager,
 -            RecentlyClosedEntriesManager recentlyClosedEntriesManager) {
 +            RecentlyClosedEntriesManager recentlyClosedEntriesManager,
-+            @NonNull ObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
++            @NonNull MonotonicObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
          mActivity = activity;
          mAppBrowserControlsVisibilityDelegate = appBrowserControlsVisibilityDelegate;
          mShareDelegateSupplier = shareDelegateSupplier;
@@ -735,7 +736,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
      private final MonotonicObservableSupplier<EdgeToEdgeController> mEdgeToEdgeControllerSupplier;
      private final TopInsetProvider mTopInsetProvider;
      private final StartupMetricsTracker mStartupMetricsTracker;
-+    private final ObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
++    private final MonotonicObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
      private @Nullable NewTabPageCreationTracker mNewTabPageCreationTracker;
  
      private @Nullable NativePageBuilder mNativePageBuilder;
@@ -745,7 +746,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
              MultiInstanceManager multiInstanceManager,
 -            RecentlyClosedEntriesManager recentlyClosedEntriesManager) {
 +            RecentlyClosedEntriesManager recentlyClosedEntriesManager,
-+            @NonNull ObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
++            MonotonicObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
          mActivity = activity;
          mBottomSheetController = sheetController;
          mBrowserControlsManager = browserControlsManager;
@@ -771,7 +772,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
          private final BackPressManager mBackPressManager;
          private final MultiInstanceManager mMultiInstanceManager;
          private final RecentlyClosedEntriesManager mRecentlyClosedEntriesManager;
-+        private final ObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
++        private final MonotonicObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
  
          public NativePageBuilder(
 -                Activity activity,
@@ -785,7 +786,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
                  MultiInstanceManager multiInstanceManager,
 -                RecentlyClosedEntriesManager recentlyClosedEntriesManager) {
 +                RecentlyClosedEntriesManager recentlyClosedEntriesManager,
-+                @NonNull ObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
++                MonotonicObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
              mActivity = activity;
              mNewTabPageCreationTracker = newTabPageCreationTracker;
              mBottomSheetController = sheetController;
@@ -838,7 +839,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.
              StartupMetricsTracker startupMetricsTracker,
 -            MultiInstanceManager multiInstanceManager) {
 +            MultiInstanceManager multiInstanceManager,
-+            @NonNull ObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
++            MonotonicObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
          mConstructedTimeNs = System.nanoTime();
          TraceEvent.begin(TAG);
  
@@ -963,6 +964,17 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageL
      /** Makes the Search Box and Logo as wide as Most Visited. */
      private void unifyElementWidths() {
          View searchBoxView = getSearchBoxView();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxViewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxViewBinder.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxViewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/search/SearchBoxViewBinder.java
+@@ -34,6 +34,7 @@ class SearchBoxViewBinder
+         View searchBoxContainer = searchBoxlayout.findViewById(R.id.search_box_container);
+         final TextView searchBoxTextView = searchBoxlayout.findViewById(R.id.search_box_text);
+ 
++        searchBoxlayout.setVisibility(View.GONE);
+         if (SearchBoxProperties.ALPHA == propertyKey) {
+             searchBoxlayout.setAlpha(model.get(SearchBoxProperties.ALPHA));
+         } else if (SearchBoxProperties.VOICE_SEARCH_COLOR_STATE_LIST == propertyKey) {
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/SuggestionsConfig.java b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/SuggestionsConfig.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/SuggestionsConfig.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/SuggestionsConfig.java
@@ -983,7 +995,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/Sug
  import org.chromium.url.GURL;
  
 +import androidx.annotation.NonNull;
-+import org.chromium.base.supplier.ObservableSupplier;
++import org.chromium.base.supplier.MonotonicObservableSupplier;
 +import org.chromium.chrome.browser.bookmarks.BookmarkUtils;
 +import org.chromium.chrome.browser.download.DownloadUtils;
 +import org.chromium.chrome.browser.download.DownloadOpenSource;
@@ -994,7 +1006,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/Sug
  @NullMarked
  public class SuggestionsNavigationDelegate extends NativePageNavigationDelegateImpl {
  
-+    private final @NonNull ObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
++    private final MonotonicObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
 +
      public SuggestionsNavigationDelegate(
              Activity activity,
@@ -1004,7 +1016,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/Sug
              Tab tab,
 -            MultiInstanceManager multiInstanceManager) {
 +            MultiInstanceManager multiInstanceManager,
-+            @NonNull ObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
++            MonotonicObservableSupplier<BookmarkManagerOpener> bookmarkManagerOpenerSupplier) {
          super(activity, profile, host, tabModelSelector, tab, multiInstanceManager);
 +        mBookmarkManagerOpenerSupplier = bookmarkManagerOpenerSupplier;
 +    }

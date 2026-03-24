@@ -13,8 +13,10 @@ in the setting ui.
 Need: bromite-build-utils.patch
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- base/BUILD.gn                                 |   4 +-
+ base/BUILD.gn                                 |   5 +-
  base/android/feature_map.cc                   |   5 +
+ .../src/org/chromium/base/FeatureMap.java     |   5 +
+ .../base/ImmutableFlagWithDefault.java        |  25 +++
  .../base/cached_flags/ValuesReturned.java     |   2 +-
  base/feature_list.cc                          |  76 ++++++++
  base/feature_list.h                           |  98 +++++++++-
@@ -58,7 +60,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ...nthetic_trials_active_group_id_provider.cc |   4 +-
  ...ynthetic_trials_active_group_id_provider.h |   4 +-
  components/webui/flags/flags_state.cc         |  59 ++++++
- components/webui/flags/resources/app.css      |  24 +++
+ components/webui/flags/resources/app.css      |  32 ++++
  components/webui/flags/resources/app.html.ts  |  28 +++
  components/webui/flags/resources/app.ts       |  24 +++
  .../webui/flags/resources/experiment.css      |   9 +-
@@ -106,7 +108,8 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  third_party/blink/public/common/features.h    |   1 +
  ui/base/ui_base_features.cc                   |   1 +
  ui/base/ui_base_features.h                    |   1 +
- 93 files changed, 846 insertions(+), 32 deletions(-)
+ 95 files changed, 885 insertions(+), 32 deletions(-)
+ create mode 100644 base/android/java/src/org/chromium/base/ImmutableFlagWithDefault.java
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/include_all_directory.java
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/java_template/CromiteCachedFlag.java.tmpl
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-cromite-flags-support.grdp
@@ -161,6 +164,14 @@ diff --git a/base/BUILD.gn b/base/BUILD.gn
      ":check_version_internal",
      ":simdutf_shim",
      "//base/allocator:buildflags",
+@@ -4941,6 +4943,7 @@ if (is_android) {
+       "android/java/src/org/chromium/base/Flag.java",
+       "android/java/src/org/chromium/base/MutableBooleanParamWithSafeDefault.java",
+       "android/java/src/org/chromium/base/MutableFlagWithSafeDefault.java",
++      "android/java/src/org/chromium/base/ImmutableFlagWithDefault.java",
+       "android/java/src/org/chromium/base/MutableIntParamWithSafeDefault.java",
+       "android/java/src/org/chromium/base/MutableParamWithSafeDefault.java",
+     ]
 diff --git a/base/android/feature_map.cc b/base/android/feature_map.cc
 --- a/base/android/feature_map.cc
 +++ b/base/android/feature_map.cc
@@ -176,6 +187,51 @@ diff --git a/base/android/feature_map.cc b/base/android/feature_map.cc
    FeatureMap* feature_map = reinterpret_cast<FeatureMap*>(jfeature_map);
    const base::Feature* feature =
        feature_map->FindFeatureExposedToJava(feature_name);
+diff --git a/base/android/java/src/org/chromium/base/FeatureMap.java b/base/android/java/src/org/chromium/base/FeatureMap.java
+--- a/base/android/java/src/org/chromium/base/FeatureMap.java
++++ b/base/android/java/src/org/chromium/base/FeatureMap.java
+@@ -159,6 +159,11 @@ public abstract class FeatureMap {
+         return new MutableFlagWithSafeDefault(this, featureName, defaultValue);
+     }
+ 
++    public ImmutableFlagWithDefault immutableFlagWithDefault(
++            String featureName, boolean defaultValue) {
++        return new ImmutableFlagWithDefault(this, featureName, defaultValue);
++    }
++
+     private void ensureNativeMapInit() {
+         assert FeatureList.isNativeInitialized();
+ 
+diff --git a/base/android/java/src/org/chromium/base/ImmutableFlagWithDefault.java b/base/android/java/src/org/chromium/base/ImmutableFlagWithDefault.java
+new file mode 100644
+--- /dev/null
++++ b/base/android/java/src/org/chromium/base/ImmutableFlagWithDefault.java
+@@ -0,0 +1,25 @@
++// Copyright 2022 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.base;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++
++@NullMarked
++public class ImmutableFlagWithDefault extends MutableFlagWithSafeDefault {
++    private final boolean mDefaultValue;
++    private @Nullable Boolean mInMemoryCachedValue;
++
++    public ImmutableFlagWithDefault(
++            FeatureMap featureMap, String featureName, boolean defaultValue) {
++        super(featureMap, featureName, defaultValue);
++        mDefaultValue = defaultValue;
++    }
++
++    @Override
++    public boolean isEnabled() {
++        return mDefaultValue;
++    }
++}
 diff --git a/base/android/java/src/org/chromium/base/cached_flags/ValuesReturned.java b/base/android/java/src/org/chromium/base/cached_flags/ValuesReturned.java
 --- a/base/android/java/src/org/chromium/base/cached_flags/ValuesReturned.java
 +++ b/base/android/java/src/org/chromium/base/cached_flags/ValuesReturned.java
@@ -1359,31 +1415,39 @@ diff --git a/components/webui/flags/flags_state.cc b/components/webui/flags/flag
 diff --git a/components/webui/flags/resources/app.css b/components/webui/flags/resources/app.css
 --- a/components/webui/flags/resources/app.css
 +++ b/components/webui/flags/resources/app.css
-@@ -391,3 +391,27 @@ cr-tabs {
+@@ -391,3 +391,35 @@ cr-tabs {
      padding-top: 1.5rem;
    }
  }
++
 +#appcontainer {
 +  overflow-y: scroll;
 +}
++
 +.cromite #header {
 +  display: none;
 +}
++
 +.cromite .blurb-container {
 +  display: none;
 +}
++
 +.cromite #tabs {
 +  display: none;
 +}
++
 +.cromite #tab-content-available {
 +  display: none;
 +}
++
 +.cromite #tab-content-unavailable {
 +  display: none;
 +}
++
 +.cromite #tab-content-cromite {
 +  display: block !important;
 +}
++
 +.cromite .section-header-title {
 +  display: none;
 +}
