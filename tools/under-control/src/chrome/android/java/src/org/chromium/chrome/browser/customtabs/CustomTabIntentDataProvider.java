@@ -62,7 +62,6 @@ import androidx.browser.customtabs.CustomTabsIntent.CloseButtonPosition;
 import androidx.browser.customtabs.CustomTabsIntent.OpenInBrowserState;
 import androidx.browser.customtabs.CustomTabsSessionToken;
 import androidx.browser.customtabs.ExperimentalCustomContentAction;
-import androidx.browser.customtabs.ExperimentalOpenInBrowser;
 import androidx.browser.customtabs.TrustedWebUtils;
 import androidx.browser.trusted.FileHandlingData;
 import androidx.browser.trusted.LaunchHandlerClientMode;
@@ -94,6 +93,7 @@ import org.chromium.chrome.browser.customtabs.CustomTabsFeatureUsage.CustomTabsF
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.share.ShareUtils;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
@@ -309,7 +309,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         OpenInBrowserButtonState.OPEN_IN_BROWSER_STATE_DEFAULT
     })
     @Retention(RetentionPolicy.SOURCE)
-    @ExperimentalOpenInBrowser
     public @interface OpenInBrowserButtonState {
         int OPEN_IN_BROWSER_STATE_OFF = CustomTabsIntent.OPEN_IN_BROWSER_STATE_OFF;
         int OPEN_IN_BROWSER_STATE_ON = CustomTabsIntent.OPEN_IN_BROWSER_STATE_ON;
@@ -839,7 +838,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     @BrowserServicesIntentDataProvider.CustomTabsUiType
     private int getCustomTabsUiType(int requestedUiType) {
         if (mNetwork != null) return CustomTabsUiType.NETWORK_BOUND_TAB;
-        if (isTrustedWebActivity() && resolveDisplayMode() == DisplayMode.MINIMAL_UI) {
+        if (isTrustedWebActivity()) {
             return CustomTabsUiType.TRUSTED_WEB_ACTIVITY;
         }
         if (!isTrustedIntent()) {
@@ -1056,7 +1055,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
      * the UI surface.
      *
      * @param type {@link CustomTabsUiType} value.
-     * @param incognito Whether the {@link CustomTabProfileType} is incongnito.
+     * @param incognito Whether the {@link CustomTabProfileType} is incognito.
      */
     public static boolean isOpenInBrowserDisallowed(int type, boolean incognito) {
         return !isOpenInBrowserAllowedForType(type)
@@ -1068,14 +1067,13 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         switch (type) {
             case CustomTabsUiType.MEDIA_VIEWER:
             case CustomTabsUiType.READER_MODE:
-            case CustomTabsUiType.MINIMAL_UI_WEBAPP:
             case CustomTabsUiType.OFFLINE_PAGE:
             case CustomTabsUiType.AUTH_TAB:
             case CustomTabsUiType.NETWORK_BOUND_TAB:
+            case CustomTabsUiType.TRUSTED_WEB_ACTIVITY:
             case CustomTabsUiType.POPUP:
                 return false;
-            case CustomTabsUiType.TRUSTED_WEB_ACTIVITY:
-                return !ChromeFeatureList.sAndroidWebAppMenuButton.isEnabled();
+            case CustomTabsUiType.MINIMAL_UI_WEBAPP:
             case CustomTabsUiType.DEFAULT:
             default:
                 return true;
@@ -1322,6 +1320,18 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         }
         if (IntentUtils.safeHasExtra(intent, EXTRA_CUSTOM_CONTENT_ACTIONS)) {
             featureUsage.log(CustomTabsFeature.EXTRA_CUSTOM_CONTENT_ACTIONS);
+        }
+        if (IntentUtils.safeHasExtra(
+                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_MINUTES)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_MINUTES);
+        }
+        if (IntentUtils.safeHasExtra(
+                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_MINUTES_ALLOWED)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_MINUTES_ALLOWED);
+        }
+        if (IntentUtils.safeHasExtra(
+                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_PENDING_INTENT)) {
+            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_PENDING_INTENT);
         }
     }
 
@@ -1822,7 +1832,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         return mResolvedDisplayMode;
     }
 
-    @ExperimentalOpenInBrowser
     @Override
     public @OpenInBrowserState int getOpenInBrowserButtonState() {
         return mOpenInBrowserState;

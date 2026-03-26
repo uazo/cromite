@@ -12,6 +12,7 @@
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/accessibility/accessibility_labels_service.h"
 #include "chrome/browser/accessibility/accessibility_labels_service_factory.h"
+#include "chrome/browser/actor/actor_script_tool_receiver.h"
 #include "chrome/browser/buildflags.h"
 #include "chrome/browser/dom_distiller/dom_distiller_service_factory.h"
 #include "chrome/browser/navigation_predictor/navigation_predictor.h"
@@ -86,7 +87,7 @@
     BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/screen_ai/screen_ai_service_router.h"
 #include "chrome/browser/screen_ai/screen_ai_service_router_factory.h"
-#include "chrome/browser/ui/web_applications/sub_apps_service_impl.h"
+#include "chrome/browser/web_applications/sub_apps_service_impl.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID)
@@ -438,6 +439,9 @@ void PopulateChromeFrameBinders(
     content::RenderFrameHost* render_frame_host) {
   map->Add<image_annotation::mojom::Annotator>(&BindImageAnnotator);
 
+  map->Add<blink::mojom::ScriptToolHost>(
+      &actor::ActorScriptToolReceiver::Create);
+
   map->Add<blink::mojom::AnchorElementMetricsHost>(
       &NavigationPredictor::Create);
 
@@ -542,7 +546,7 @@ void PopulateChromeFrameBinders(
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
-  if (base::FeatureList::IsEnabled(blink::features::kDesktopPWAsSubApps) &&
+  if (base::FeatureList::IsEnabled(blink::features::kSubApps) &&
       !render_frame_host->GetParentOrOuterDocument()) {
     // The service binder will reject non-primary main frames, but we still need
     // to register it for them because a non-primary main frame could become a
