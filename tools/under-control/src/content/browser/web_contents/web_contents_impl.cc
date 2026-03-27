@@ -21,7 +21,6 @@
 #include "base/base_switches.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/containers/contains.h"
 #include "base/containers/flat_set.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
@@ -73,7 +72,6 @@
 #include "content/browser/browser_plugin/browser_plugin_embedder.h"
 #include "content/browser/browser_plugin/browser_plugin_guest.h"
 #include "content/browser/btm/btm_bounce_detector.h"
-#include "content/browser/btm/btm_navigation_flow_detector.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/closewatcher/close_listener_manager.h"
 #include "content/browser/compositor/surface_utils.h"
@@ -93,6 +91,7 @@
 #include "content/browser/host_zoom_map_impl.h"
 #include "content/browser/media/audio_stream_monitor.h"
 #include "content/browser/media/media_web_contents_observer.h"
+#include "content/browser/memory/scheduler_loop_quarantine_web_contents_observer.h"
 #include "content/browser/permissions/permission_controller_impl.h"
 #include "content/browser/permissions/permission_util.h"
 #include "content/browser/preloading/prefetch/prefetch_request.h"
@@ -1052,7 +1051,7 @@ void WebContentsImpl::WebContentsTreeNode::DetachInnerWebContents(
 bool WebContentsImpl::WebContentsTreeNode::IsUnownedInnerWebContents(
     WebContents* inner_web_contents) const {
   CHECK_EQ(inner_web_contents->GetOuterWebContents(), current_web_contents_);
-  return base::Contains(unowned_inner_web_contents_, inner_web_contents);
+  return std::ranges::contains(unowned_inner_web_contents_, inner_web_contents);
 }
 
 void WebContentsImpl::WebContentsTreeNode::DetachUnownedInnerWebContents(
@@ -3135,8 +3134,6 @@ void WebContentsImpl::SetPrimaryPageImportance(
   base::android::ScopedServiceBindingBatch scoped_service_binding_batch;
 
   if (base::FeatureList::IsEnabled(features::kSubframeImportance)) {
-    CHECK(
-        base::FeatureList::IsEnabled(features::kSubframePriorityContribution));
     if (subframe_importance != primary_subframe_importance_) {
       primary_subframe_importance_ = subframe_importance;
       ApplyPrimaryPageSubframeImportance();
@@ -3796,9 +3793,6 @@ const blink::web_pref::WebPreferences WebContentsImpl::ComputeWebPreferences(
   prefs.strict_mixed_content_checking =
       command_line.HasSwitch(switches::kEnableStrictMixedContentChecking);
 
-  prefs.strict_powerful_feature_restrictions = command_line.HasSwitch(
-      switches::kEnableStrictPowerfulFeatureRestrictions);
-
   const std::string blockable_mixed_content_group =
       base::FieldTrialList::FindFullName("BlockableMixedContent");
   prefs.strictly_block_blockable_mixed_content =
@@ -4086,16 +4080,6 @@ void WebContentsImpl::OnVibrate(RenderFrameHostImpl* rfh) {
   observers_.NotifyObservers(&WebContentsObserver::VibrationRequested);
 }
 
-std::optional<network::ParsedPermissionsPolicy>
-WebContentsImpl::GetPermissionsPolicyForIsolatedWebApp(
-    RenderFrameHostImpl* source) {
-  WebExposedIsolationInfo weii =
-      source->GetSiteInstance()->GetWebExposedIsolationInfo();
-  CHECK(weii.is_isolated_application());
-  return GetContentClient()->browser()->GetPermissionsPolicyForIsolatedWebApp(
-      this, weii.origin());
-}
-
 void WebContentsImpl::Stop() {
   TRACE_EVENT0("content", "WebContentsImpl::Stop");
   ForEachFrameTree([](FrameTree& frame_tree) { frame_tree.StopLoading(); });
@@ -4231,9 +4215,9 @@ void WebContentsImpl::Init(const WebContents::CreateParams& params,
     AttributionHost::CreateForWebContents(this);
   }
 
+  SchedulerLoopQuarantineWebContentsObserver::MaybeCreateForWebContents(this);
   RedirectChainDetector::CreateForWebContents(this);
   BtmWebContentsObserver::MaybeCreateForWebContents(this);
-  BtmNavigationFlowDetector::CreateForWebContents(this);
   RedirectHeuristicTabHelper::CreateForWebContents(this);
   OpenerHeuristicTabHelper::CreateForWebContents(this);
 
@@ -4567,6 +4551,23 @@ bool WebContentsImpl::PreHandleGestureEvent(
     const blink::WebGestureEvent& event) {
   OPTIONAL_TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("content.verbose"),
                         "WebContentsImpl::PreHandleGestureEvent");
+  if (ignore_zoom_gestures_) {
+    if (event.GetType() == blink::WebInputEvent::Type::kGestureDoubleTap) {
+      return true;
+    }
+
+    // Disable pinch zooming in app windows.
+    if (blink::WebInputEvent::IsPinchGestureEventType(event.GetType())) {
+      // Only suppress pinch events that cause a scale change. We still
+      // allow synthetic wheel events for touchpad pinch to go to the page.
+      return !(event.SourceDevice() == blink::WebGestureDevice::kTouchpad &&
+               event.NeedsWheelEvent());
+    }
+  }
+
+  // TODO(crbug.com/475836809)
+  // Remove this delegate method. It exposes Blink types to the embedder. Since
+  // zoom blocking is now handled natively, we should audit remaining consumers.
   return delegate_ && delegate_->PreHandleGestureEvent(this, event);
 }
 
@@ -4819,6 +4820,13 @@ void WebContentsImpl::Restore() {
     return;
   }
   GetDelegate()->RestoreFromWebAPI();
+}
+
+void WebContentsImpl::SetResizable(bool resizable) {
+  if (!GetDelegate()) {
+    return;
+  }
+  GetDelegate()->SetResizableFromWebAPI(resizable);
 }
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
@@ -5521,8 +5529,7 @@ FrameTree* WebContentsImpl::CreateNewWindow(
             ? NavigationController::UA_OVERRIDE_TRUE
             : NavigationController::UA_OVERRIDE_FALSE;
     load_params->download_policy = params.download_policy;
-    load_params->initiator_activation_and_ad_status =
-        params.initiator_activation_and_ad_status;
+    load_params->started_by_ad = params.started_by_ad;
 
     if (delegate_ && !is_guest &&
         !delegate_->ShouldResumeRequestsForCreatedWindow()) {
@@ -6025,7 +6032,7 @@ std::string WebContentsImpl::DumpAccessibilityTree(
   // This only runs during integration tests, or if a developer is
   // using an inspection tool, e.g. chrome://accessibility.
   ui::AXTreeManager::AlwaysFailFast();
-  DCHECK(base::Contains(AXInspectFactory::SupportedApis(), api_type));
+  DCHECK(std::ranges::contains(AXInspectFactory::SupportedApis(), api_type));
   std::unique_ptr<ui::AXTreeFormatter> formatter =
       AXInspectFactory::CreateFormatter(api_type);
 
@@ -6060,7 +6067,7 @@ void WebContentsImpl::RecordAccessibilityEvents(
         ax_mgr->GetBrowserAccessibilityRoot()
             ->GetTargetForNativeAccessibilityEvent();
 
-    DCHECK(base::Contains(AXInspectFactory::SupportedApis(), api_type));
+    DCHECK(std::ranges::contains(AXInspectFactory::SupportedApis(), api_type));
     event_recorder_ = content::AXInspectFactory::CreateRecorder(
         api_type, ax_mgr, pid, ui::AXTreeSelector(widget));
     event_recorder_->ListenToEvents(*callback);
@@ -6944,6 +6951,10 @@ void WebContentsImpl::SetPageScale(float scale_factor) {
                         "scale_factor", scale_factor);
   GetPrimaryMainFrame()->GetAssociatedLocalMainFrame()->SetScaleFactor(
       scale_factor);
+}
+
+void WebContentsImpl::SetIgnoreZoomGestures(bool ignore) {
+  ignore_zoom_gestures_ = ignore;
 }
 
 gfx::Size WebContentsImpl::GetPreferredSize() {
@@ -11903,10 +11914,6 @@ void WebContentsImpl::CancelPreviewByMojoBinderPolicy(
     delegate_->CancelPreview(
         PreviewCancelReason::BlockedByMojoBinderPolicy(interface_name));
   }
-}
-
-void WebContentsImpl::OnWebApiWindowResizableChanged() {
-  delegate_->OnWebApiWindowResizableChanged();
 }
 
 FrameTreeNodeId WebContentsImpl::GetOuterDelegateFrameTreeNodeId() {

@@ -190,6 +190,7 @@
 #include "third_party/blink/renderer/platform/weborigin/known_ports.h"
 #include "third_party/blink/renderer/platform/widget/widget_base.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
+#include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/icu/source/common/unicode/uscript.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/skia_conversions.h"
@@ -361,48 +362,26 @@ void ApplyCommandLineToSettings(WebSettings* settings) {
   WebString network_quiet_timeout = WebString::FromUTF8(
       command_line.GetSwitchValueASCII(switches::kNetworkQuietTimeout));
   if (!network_quiet_timeout.IsEmpty()) {
-    bool ok;
-    double network_quiet_timeout_seconds =
-        String(network_quiet_timeout).ToDouble(&ok);
-    if (ok)
-      settings->SetNetworkQuietTimeout(network_quiet_timeout_seconds);
+    auto network_quiet_timeout_seconds =
+        StringToDouble(String(network_quiet_timeout));
+    if (network_quiet_timeout_seconds) {
+      settings->SetNetworkQuietTimeout(*network_quiet_timeout_seconds);
+    }
   }
 
   if (command_line.HasSwitch(switches::kBlinkSettings)) {
-    Vector<String> blink_settings;
     String command_line_settings =
         command_line.GetSwitchValueASCII(switches::kBlinkSettings).c_str();
-    command_line_settings.Split(",", blink_settings);
-    for (const String& setting : blink_settings) {
+    Vector<StringView> blink_settings =
+        StringView(command_line_settings).SplitSkippingEmpty(',');
+    for (const StringView& setting : blink_settings) {
       wtf_size_t pos = setting.find('=');
       settings->SetFromStrings(
-          WebString(setting.Substring(0, pos)),
-          WebString(pos == kNotFound ? "" : setting.Substring(pos + 1)));
+          WebString(setting.substr(0, pos).ToString()),
+          WebString(pos == kNotFound ? ""
+                                     : setting.substr(pos + 1).ToString()));
     }
   }
-}
-
-ui::mojom::blink::WindowOpenDisposition NavigationPolicyToDisposition(
-    NavigationPolicy policy) {
-  switch (policy) {
-    case kNavigationPolicyDownload:
-      return ui::mojom::blink::WindowOpenDisposition::SAVE_TO_DISK;
-    case kNavigationPolicyCurrentTab:
-      return ui::mojom::blink::WindowOpenDisposition::CURRENT_TAB;
-    case kNavigationPolicyNewBackgroundTab:
-      return ui::mojom::blink::WindowOpenDisposition::NEW_BACKGROUND_TAB;
-    case kNavigationPolicyNewForegroundTab:
-      return ui::mojom::blink::WindowOpenDisposition::NEW_FOREGROUND_TAB;
-    case kNavigationPolicyNewWindow:
-      return ui::mojom::blink::WindowOpenDisposition::NEW_WINDOW;
-    case kNavigationPolicyNewPopup:
-      return ui::mojom::blink::WindowOpenDisposition::NEW_POPUP;
-    case kNavigationPolicyPictureInPicture:
-      return ui::mojom::blink::WindowOpenDisposition::NEW_PICTURE_IN_PICTURE;
-    case kNavigationPolicyLinkPreview:
-      NOTREACHED();
-  }
-  NOTREACHED() << "Unexpected NavigationPolicy";
 }
 
 // Records the queuing duration for activation IPC.
@@ -1711,8 +1690,6 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
   settings->SetStrictMixedContentCheckingForPlugin(
       prefs.block_mixed_plugin_content);
 
-  settings->SetStrictPowerfulFeatureRestrictions(
-      prefs.strict_powerful_feature_restrictions);
   settings->SetAllowGeolocationOnInsecureOrigins(
       prefs.allow_geolocation_on_insecure_origins);
   settings->SetPasswordEchoEnabledPhysical(
@@ -3038,7 +3015,9 @@ void WebViewImpl::UpdatePageDefinedViewportConstraints(
 
   Settings& page_settings = GetPage()->GetSettings();
   GetPageScaleConstraintsSet().AdjustForAndroidWebViewQuirks(
-      description, default_min_width.IntValue(),
+      description,
+      default_min_width.IsFixed() ? static_cast<int>(default_min_width.Pixels())
+                                  : 0,
       SettingsImpl()->SupportDeprecatedTargetDensityDPI(),
       page_settings.GetWideViewportQuirkEnabled(),
       page_settings.GetUseWideViewport(),
@@ -3170,30 +3149,6 @@ void WebViewImpl::TakeFocus(bool reverse) {
   }
 }
 
-void WebViewImpl::Show(const LocalFrameToken& opener_frame_token,
-                       NavigationPolicy policy,
-                       const gfx::Rect& requested_rect,
-                       const gfx::Rect& adjusted_rect,
-                       bool opened_by_user_gesture) {
-  // This is only called on local main frames.
-  DCHECK(local_main_frame_host_remote_);
-  DCHECK(web_widget_);
-  web_widget_->SetPendingWindowRect(adjusted_rect);
-  const WebWindowFeatures& web_window_features = page_->GetWindowFeatures();
-  mojom::blink::WindowFeaturesPtr window_features =
-      mojom::blink::WindowFeatures::New();
-  window_features->bounds = requested_rect;
-  window_features->has_x = web_window_features.x_set;
-  window_features->has_y = web_window_features.y_set;
-  window_features->has_width = web_window_features.width_set;
-  window_features->has_height = web_window_features.height_set;
-  window_features->is_popup = web_window_features.is_popup;
-  local_main_frame_host_remote_->ShowCreatedWindow(
-      opener_frame_token, NavigationPolicyToDisposition(policy),
-      std::move(window_features), opened_by_user_gesture,
-      BindOnce(&WebViewImpl::DidShowCreatedWindow, Unretained(this)));
-}
-
 void WebViewImpl::DidShowCreatedWindow() {
   web_widget_->AckPendingWindowRect();
 }
@@ -3213,7 +3168,7 @@ void WebViewImpl::DidAccessInitialMainDocument() {
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 // TODO(https://crbug.com/40946306): Add timeouts to the callbacks and consider
 // queuing requests instead of rejecting them.
-void WebViewImpl::Minimize(WindowShowStateChangeCallback callback) {
+void WebViewImpl::Minimize(WindowingControlsChangeCallback callback) {
   DCHECK(local_main_frame_host_remote_);
   if (window_show_state_change_callback_.has_value()) {
     std::move(callback).Run(/*succeeded=*/false);
@@ -3224,7 +3179,7 @@ void WebViewImpl::Minimize(WindowShowStateChangeCallback callback) {
   }
 }
 
-void WebViewImpl::Maximize(WindowShowStateChangeCallback callback) {
+void WebViewImpl::Maximize(WindowingControlsChangeCallback callback) {
   DCHECK(local_main_frame_host_remote_);
   if (window_show_state_change_callback_.has_value()) {
     std::move(callback).Run(/*succeeded=*/false);
@@ -3235,7 +3190,7 @@ void WebViewImpl::Maximize(WindowShowStateChangeCallback callback) {
   }
 }
 
-void WebViewImpl::Restore(WindowShowStateChangeCallback callback) {
+void WebViewImpl::Restore(WindowingControlsChangeCallback callback) {
   DCHECK(local_main_frame_host_remote_);
   if (window_show_state_change_callback_.has_value()) {
     std::move(callback).Run(/*succeeded=*/false);
@@ -3246,9 +3201,25 @@ void WebViewImpl::Restore(WindowShowStateChangeCallback callback) {
   }
 }
 
-void WebViewImpl::SetResizable(bool resizable) {
+void WebViewImpl::SetResizable(bool resizable,
+                               WindowingControlsChangeCallback callback) {
   DCHECK(local_main_frame_host_remote_);
-  local_main_frame_host_remote_->SetResizable(resizable);
+  if (set_resizable_change_callback_.has_value()) {
+    // Reject the current request if there's already a pending request.
+    std::move(callback).Run(/*succeeded=*/false);
+  } else {
+    if (web_widget_->Resizable() == resizable) {
+      // The desired resizable property is already set. We still need to mark
+      // what resizable value has been requested by the page.
+      local_main_frame_host_remote_->SetResizable(resizable);
+      std::move(callback).Run(/*succeeded=*/true);
+    } else {
+      // We need to wait for the window resizable property to be changed by the
+      // operating system.
+      set_resizable_change_callback_.emplace(resizable, std::move(callback));
+      local_main_frame_host_remote_->SetResizable(resizable);
+    }
+  }
 }
 
 void WebViewImpl::OnWindowShowStateChanged(
@@ -3259,10 +3230,8 @@ void WebViewImpl::OnWindowShowStateChanged(
     return;
   }
 
+  CHECK_NE(old_state, new_state);
   using ui::mojom::blink::WindowShowState;
-  if (old_state == new_state) {
-    return;
-  }
   switch (new_state) {
     case WindowShowState::kDefault:
     case WindowShowState::kNormal:
@@ -3282,6 +3251,19 @@ void WebViewImpl::OnWindowShowStateChanged(
     case WindowShowState::kFullscreen:
     case WindowShowState::kEnd:
       break;
+  }
+}
+
+void WebViewImpl::OnResizableChanged(bool new_resizable) {
+  if (!RuntimeEnabledFeatures::
+          DesktopPWAsAdditionalWindowingControlsEnabled()) {
+    return;
+  }
+
+  if (set_resizable_change_callback_.has_value() &&
+      set_resizable_change_callback_->first == new_resizable) {
+    std::move(set_resizable_change_callback_->second).Run(/*succeeded=*/true);
+    set_resizable_change_callback_.reset();
   }
 }
 

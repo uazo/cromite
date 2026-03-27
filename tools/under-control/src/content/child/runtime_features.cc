@@ -219,6 +219,8 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kFedCmIdPRegistration), kDefault},
           {wf::EnableFedCmLightweightMode,
            raw_ref(features::kFedCmLightweightMode), kDefault},
+          {wf::EnableFedCmNavigationInterception,
+           raw_ref(features::kFedCmNavigationInterception), kDefault},
           {wf::EnableFedCmErrorAttribute,
            raw_ref(features::kFedCmErrorAttribute), kDefault},
           {wf::EnableFedCmNonStringToken,
@@ -278,8 +280,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(device::kWebAuthnAmbientSignin)},
           {wf::EnableWebAuthenticationImmediateGet,
            raw_ref(device::kWebAuthnImmediateGet), kSetOnlyIfOverridden},
-          {wf::EnableWebAuthenticationConditionalCreate,
-           raw_ref(device::kWebAuthnPasskeyUpgrade)},
           {wf::EnableWebBluetooth, raw_ref(features::kWebBluetooth),
            kSetOnlyIfOverridden},
           {wf::EnableWebBluetoothGetDevices,
@@ -310,12 +310,13 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(device::features::kWebXRIncubations)},
           {wf::EnableWebXRLayers, raw_ref(device::features::kWebXRLayers)},
           {wf::EnableWebXRPlaneDetection,
-           raw_ref(device::features::kWebXRIncubations)},
+           raw_ref(device::features::kWebXRPlaneDetection)},
           {wf::EnableWebXRPoseMotionData,
            raw_ref(device::features::kWebXRIncubations)},
           {wf::EnableWebXRSpecParity,
            raw_ref(device::features::kWebXRIncubations)},
 #endif
+          {wf::EnableXSLT, raw_ref(blink::features::kXSLT)},
           {wf::EnablePermissions, raw_ref(features::kWebPermissionsApi),
            kSetOnlyIfOverridden},
       };
@@ -531,8 +532,6 @@ void SetCustomizedRuntimeFeaturesFromCombinedArgs(
       ui::NativeTheme::GetInstanceForWeb()->use_overlay_scrollbar());
 #endif
   WebRuntimeFeatures::EnableFluentScrollbars(ui::IsFluentScrollbarEnabled());
-  WebRuntimeFeatures::EnableFluentOverlayScrollbars(
-      ui::IsFluentOverlayScrollbarEnabled());
 
   // TODO(rodneyding): This is a rare case for a stable feature
   // Need to investigate more to determine whether to refactor it.
@@ -714,6 +713,12 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
   for (const std::string& feature :
        FeaturesFromSwitch(command_line, switches::kDisableBlinkFeatures)) {
     WebRuntimeFeatures::EnableFeatureFromString(feature, false);
+  }
+
+  if (command_line.HasSwitch(blink::switches::kXSLTEnabledPolicy)) {
+    std::string value =
+        command_line.GetSwitchValueASCII(blink::switches::kXSLTEnabledPolicy);
+    WebRuntimeFeatures::EnableXSLT(value == "true");
   }
 
   ResolveInvalidConfigurations();

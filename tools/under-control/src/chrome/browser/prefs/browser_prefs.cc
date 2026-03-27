@@ -11,6 +11,7 @@
 
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/json/values_util.h"
 #include "base/time/time.h"
 #include "base/trace_event/trace_event.h"
 #include "build/android_buildflags.h"
@@ -24,6 +25,7 @@
 #include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/component_updater/component_updater_prefs.h"
+#include "chrome/browser/contextual_cueing/contextual_cueing_prefs.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/engagement/important_sites_util.h"
 #include "chrome/browser/enterprise/reporting/prefs.h"
@@ -44,7 +46,6 @@
 #include "chrome/browser/metrics/tab_stats/tab_stats_tracker.h"
 #include "chrome/browser/net/net_error_tab_helper.h"
 #include "chrome/browser/net/profile_network_context_service.h"
-#include "chrome/browser/net/secure_dns_util.h"
 #include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/notifications/notification_display_service_impl.h"
 #include "chrome/browser/notifications/notifier_state_tracker.h"
@@ -75,6 +76,7 @@
 #include "chrome/browser/signin/chrome_signin_client.h"
 #include "chrome/browser/ssl/ssl_config_service_manager.h"
 #include "chrome/browser/subscription_eligibility/subscription_eligibility_prefs.h"
+#include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/tracing/chrome_tracing_delegate.h"
 #include "chrome/browser/ui/browser_ui_prefs.h"
 #include "chrome/browser/ui/network_profile_bubble.h"
@@ -82,6 +84,7 @@
 #include "chrome/browser/ui/prefs/prefs_tab_helper.h"
 #include "chrome/browser/ui/safety_hub/safety_hub_prefs.h"
 #include "chrome/browser/ui/search_engines/keyword_editor_controller.h"
+#include "chrome/browser/ui/tabs/projects/projects_prefs.h"
 #include "chrome/browser/ui/toolbar/chrome_labs/chrome_labs_prefs.h"
 #include "chrome/browser/ui/toolbar/chrome_location_bar_model_delegate.h"
 #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
@@ -182,7 +185,7 @@
 #include "components/supervised_user/core/browser/supervised_user_preferences.h"
 #include "components/supervised_user/core/common/pref_names.h"
 #include "components/sync/base/pref_names.h"
-#include "components/sync/service/device_statistics_tracker.h"
+#include "components/sync/service/device_statistics_scheduler.h"
 #include "components/sync/service/glue/sync_transport_data_prefs.h"
 #include "components/sync/service/sync_prefs.h"
 #include "components/sync_device_info/device_info_prefs.h"
@@ -257,7 +260,6 @@
 #include "components/webapps/browser/android/install_prompt_prefs.h"
 #else  // BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/actor/ui/actor_ui_state_manager_prefs.h"
-#include "chrome/browser/contextual_cueing/contextual_cueing_prefs.h"
 #include "chrome/browser/gcm/gcm_product_util.h"
 #include "chrome/browser/hid/hid_policy_allowed_devices.h"
 #include "chrome/browser/intranet_redirect_detector.h"
@@ -533,14 +535,14 @@
 #endif
 
 #if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
-#include "chrome/browser/on_device_translation/pref_names.h"
+#include "components/on_device_translation/public/pref_names.h"
 #endif  // BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
 
 #if BUILDFLAG(ENTERPRISE_DATA_CONTROLS)
 #include "components/enterprise/data_controls/core/browser/prefs.h"
 #endif
 
-#if BUILDFLAG(ENABLE_GLIC) || BUILDFLAG(ENABLE_GLIC_ANDROID)
+#if BUILDFLAG(ENABLE_GLIC)
 #include "chrome/browser/glic/glic_pref_names.h"
 #endif
 
@@ -956,6 +958,28 @@ constexpr char kTPCDExperimentProfileState[] = "tpcd_experiment.profile_state";
 constexpr char kDeviceName[] = "device_name";
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+#if BUILDFLAG(IS_ANDROID)
+// Deprecated 01/2026.
+constexpr char kDSEGeolocationSettingDeprecated[] = "dse_geolocation_setting";
+constexpr char kDSEPermissionsSettings[] = "dse_permissions_settings";
+constexpr char kDSEWasDisabledByPolicy[] = "dse_was_disabled_by_policy";
+#endif  // BUILDFLAG(IS_ANDROID)
+
+// Deprecated 01/2026.
+constexpr char kCookieClearOnExitMigrationNoticeComplete[] =
+    "signin.cookie_clear_on_exit_migration_notice_complete";
+
+// Deprecated 02/2026.
+// Note that these were replaced by local state prefs of the same names and
+// functions: those should not be removed. Only the profile prefs registered
+// here are deprecated.
+constexpr char kGlicGuestUrlPresetAutopush[] = "glic.guest_url_preset_autopush";
+constexpr char kGlicGuestUrlPresetPreprod[] = "glic.guest_url_preset_preprod";
+constexpr char kGlicGuestUrlPresetProd[] = "glic.guest_url_preset_prod";
+
+// Deprecated 02/2026.
+constexpr char kProfilesDeletedOld[] = "profiles.profiles_deleted";
+
 // Register local state used only for migration (clearing or moving to a new
 // key).
 void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
@@ -1077,13 +1101,14 @@ void RegisterLocalStatePrefsForMigration(PrefRegistrySimple* registry) {
   // Deprecated 01/2026.
   registry->RegisterStringPref(kDeviceName, "");
 #endif  // BUILDFLAG(IS_CHROMEOS)
+
+  // Deprecated 02/2026.
+  registry->RegisterListPref(kProfilesDeletedOld);
 }
 
 // Register prefs used only for migration (clearing or moving to a new key).
 void RegisterProfilePrefsForMigration(
     user_prefs::PrefRegistrySyncable* registry) {
-  chrome_browser_net::secure_dns::RegisterProbesSettingBackupPref(registry);
-
   // Deprecated 01/2025.
   registry->RegisterBooleanPref(kCompactModeEnabled, false);
 
@@ -1318,6 +1343,22 @@ void RegisterProfilePrefsForMigration(
   // Deprecated 12/2025.
   registry->RegisterBooleanPref(kCloudPrintProxyEnabled, true);
   registry->RegisterStringPref(kCloudPrintEmail, std::string());
+
+#if BUILDFLAG(IS_ANDROID)
+  // Deprecated 01/2026.
+  registry->RegisterDictionaryPref(kDSEGeolocationSettingDeprecated);
+  registry->RegisterDictionaryPref(kDSEPermissionsSettings);
+  registry->RegisterBooleanPref(kDSEWasDisabledByPolicy, false);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  // Deprecated 01/2026.
+  registry->RegisterBooleanPref(kCookieClearOnExitMigrationNoticeComplete,
+                                false);
+
+  // Deprecated 02/2026.
+  registry->RegisterStringPref(kGlicGuestUrlPresetAutopush, std::string());
+  registry->RegisterStringPref(kGlicGuestUrlPresetPreprod, std::string());
+  registry->RegisterStringPref(kGlicGuestUrlPresetProd, std::string());
 }
 
 }  // namespace
@@ -1447,6 +1488,10 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(prefs::kLastWhatsNewVersion, 0);
 #endif  // BUILDFLAG(IS_ANDROID)
 
+#if BUILDFLAG(ENABLE_EXTENSIONS)
+  extensions::ExtensionPrefs::RegisterBrowserPrefs(registry);
+#endif
+
 #if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
   on_device_translation::RegisterLocalStatePrefs(registry);
 #endif  // BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
@@ -1561,6 +1606,11 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   MediaFoundationServiceMonitor::RegisterPrefs(registry);
   os_crypt_async::AppBoundEncryptionProviderWin::RegisterLocalPrefs(registry);
   webnn::RegisterLocalPrefs(registry);
+  registry->RegisterBooleanPref(prefs::kForegroundLaunchOnLogin, false);
+  registry->RegisterBooleanPref(prefs::kStartupLaunchInfobarAccepted, false);
+  registry->RegisterTimePref(prefs::kStartupLaunchInfobarLastDeclinedTime,
+                             base::Time());
+  registry->RegisterIntegerPref(prefs::kStartupLaunchInfobarDeclinedCount, 0);
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
@@ -1619,7 +1669,7 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
 
   registry->RegisterIntegerPref(prefs::kChromeDataRegionSetting, 0);
 
-#if BUILDFLAG(ENABLE_GLIC) || BUILDFLAG(ENABLE_GLIC_ANDROID)
+#if BUILDFLAG(ENABLE_GLIC)
   glic::prefs::RegisterLocalStatePrefs(registry);
 #endif
 
@@ -1629,6 +1679,12 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
   registry->RegisterStringPref(prefs::kNonMilestoneUpdateToastVersion, "");
   registry->RegisterBooleanPref(prefs::kSilentPrintingEnabled, false);
 #endif  // !BUILDFLAG(IS_ANDROID)
+
+  registry->RegisterListPref(
+      prefs::kManagedLocalNetworkAccessIpAddressSpaceOverrides);
+  registry->RegisterBooleanPref(
+      policy::policy_prefs::kLocalNetworkAccessPermissionsPolicyDefaultEnabled,
+      false);
 
   // This is intentionally last.
   RegisterLocalStatePrefsForMigration(registry);
@@ -1655,6 +1711,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   chrome_browser_net::NetErrorTabHelper::RegisterProfilePrefs(registry);
   chrome_prefs::RegisterProfilePrefs(registry);
   collaboration::prefs::RegisterProfilePrefs(registry);
+  contextual_cueing::prefs::RegisterProfilePrefs(registry);
   commerce::RegisterProfilePrefs(registry);
   contextual_search::ContextualSearchService::RegisterProfilePrefs(registry);
   registry->RegisterIntegerPref(prefs::kContextualTasksNextPanelOpenCount, 0);
@@ -1665,7 +1722,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   enterprise_reporting::RegisterProfilePrefs(registry);
   dom_distiller::DistilledPagePrefs::RegisterProfilePrefs(registry);
   DownloadPrefs::RegisterProfilePrefs(registry);
-#if BUILDFLAG(ENABLE_GLIC) || BUILDFLAG(ENABLE_GLIC_ANDROID)
+#if BUILDFLAG(ENABLE_GLIC)
   glic::prefs::RegisterProfilePrefs(registry);
 #endif
   permissions::PermissionHatsTriggerHelper::RegisterProfilePrefs(registry);
@@ -1688,6 +1745,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   NotifierStateTracker::RegisterProfilePrefs(registry);
   ntp_tiles::CustomLinksManagerImpl::RegisterProfilePrefs(registry);
   ntp_tiles::MostVisitedSites::RegisterProfilePrefs(registry);
+#if BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
+  on_device_translation::RegisterProfilePrefs(registry);
+#endif  // BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
   optimization_guide::prefs::RegisterProfilePrefs(registry);
   optimization_guide::model_execution::prefs::RegisterProfilePrefs(registry);
   PageColorsController::RegisterProfilePrefs(registry);
@@ -1743,7 +1803,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   supervised_user::RegisterProfilePrefs(registry);
   sync_sessions::SessionSyncPrefs::RegisterProfilePrefs(registry);
   syncer::DeviceInfoPrefs::RegisterProfilePrefs(registry);
-  syncer::DeviceStatisticsTracker::RegisterProfilePrefs(registry);
+  syncer::DeviceStatisticsScheduler::RegisterProfilePrefs(registry);
   syncer::SyncPrefs::RegisterProfilePrefs(registry);
   syncer::SyncTransportDataPrefs::RegisterProfilePrefs(registry);
   TemplateURLPrepopulateData::RegisterProfilePrefs(registry);
@@ -1785,7 +1845,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
 
 #if BUILDFLAG(ENABLE_PDF)
   registry->RegisterListPref(prefs::kPdfLocalFileAccessAllowedForDomains,
-                             base::Value::List());
+                             base::ListValue());
   registry->RegisterBooleanPref(prefs::kPdfUseSkiaRendererEnabled, true);
 #if BUILDFLAG(IS_CHROMEOS)
   registry->RegisterBooleanPref(prefs::kPdfXfaFormsEnabled, false);
@@ -1826,7 +1886,6 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   captions::LiveTranslateController::RegisterProfilePrefs(registry);
   ChromeAuthenticatorRequestDelegate::RegisterProfilePrefs(registry);
   commerce::CommerceUiTabHelper::RegisterProfilePrefs(registry);
-  contextual_cueing::prefs::RegisterProfilePrefs(registry);
   DriveService::RegisterProfilePrefs(registry);
   first_run::RegisterProfilePrefs(registry);
   gcm::RegisterProfilePrefs(registry);
@@ -1857,6 +1916,7 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   tab_organization_prefs::RegisterProfilePrefs(registry);
   tab_search_prefs::RegisterProfilePrefs(registry);
   ThemeColorPickerHandler::RegisterProfilePrefs(registry);
+  ThemeService::RegisterProfilePrefs(registry);
   toolbar::RegisterProfilePrefs(registry);
   UnifiedAutoplayConfig::RegisterProfilePrefs(registry);
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -2039,6 +2099,8 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   CertificateManagerPageHandler::RegisterProfilePrefs(registry);
 
   actor::ui::RegisterProfilePrefs(registry);
+
+  projects::RegisterProfilePrefs(registry);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
   registry->RegisterBooleanPref(webauthn::pref_names::kAllowWithBrokenCerts,
@@ -2083,8 +2145,6 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
   registry->RegisterIntegerPref(prefs::kChromeDataRegionSetting, 0);
 
   registry->RegisterIntegerPref(prefs::kLensOverlayStartCount, 0);
-
-  registry->RegisterDictionaryPref(prefs::kReportingEndpoints);
 
   registry->RegisterBooleanPref(prefs::kViewSourceLineWrappingEnabled, false);
 
@@ -2279,6 +2339,26 @@ void MigrateObsoleteLocalStatePrefs(PrefService* local_state) {
   local_state->ClearPref(kDeviceName);
 #endif  // BUILDFLAG(IS_CHROMEOS)
 
+  // Added 02/2026.
+  if (local_state->HasPrefPath(kProfilesDeletedOld)) {
+    const base::ListValue& old_list = local_state->GetList(kProfilesDeletedOld);
+    if (!old_list.empty()) {
+      ScopedListPrefUpdate update(local_state, prefs::kProfilesDeleted);
+      for (const auto& value : old_list) {
+        std::optional<base::FilePath> path = base::ValueToFilePath(value);
+        if (path) {
+          base::FilePath basename = path->BaseName();
+          // Avoid the edge case where the base name is the root, e.g `/` on
+          // linux.
+          if (!basename.IsAbsolute()) {
+            update->Append(base::FilePathToValue(basename));
+          }
+        }
+      }
+    }
+    local_state->ClearPref(kProfilesDeletedOld);
+  }
+
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_LOCAL_STATE_PREFS
 
@@ -2328,23 +2408,11 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
   // Check MigrateDeprecatedAutofillPrefs() to see if this is safe to remove.
   autofill::prefs::MigrateDeprecatedAutofillPrefs(profile_prefs);
 
-  // Added 3/2020.
-  // TODO(crbug.com/40122991): Remove this once the privacy settings redesign
-  // is fully launched.
-  chrome_browser_net::secure_dns::MigrateProbesSettingToOrFromBackup(
-      profile_prefs);
-
   // TODO(326079444): After experiment is over, update the deprecated date and
   // allow this to be cleaned up.
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
   MigrateDefaultBrowserLastDeclinedPref(profile_prefs);
 #endif
-
-#if !BUILDFLAG(IS_ANDROID)
-  // Added 01/2025.
-  password_manager::features_util::MigrateDefaultProfileStorePref(
-      profile_prefs);
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   // Added 01/2025.
   profile_prefs->ClearPref(kCompactModeEnabled);
@@ -2562,6 +2630,21 @@ void MigrateObsoleteProfilePrefs(PrefService* profile_prefs,
   // Added 12/2025.
   profile_prefs->ClearPref(kCloudPrintProxyEnabled);
   profile_prefs->ClearPref(kCloudPrintEmail);
+
+#if BUILDFLAG(IS_ANDROID)
+  // Added 01/2026.
+  profile_prefs->ClearPref(kDSEGeolocationSettingDeprecated);
+  profile_prefs->ClearPref(kDSEPermissionsSettings);
+  profile_prefs->ClearPref(kDSEWasDisabledByPolicy);
+#endif  // BUILDFLAG(IS_ANDROID)
+
+  // Added 01/2026.
+  profile_prefs->ClearPref(kCookieClearOnExitMigrationNoticeComplete);
+
+  // Added 02/2026.
+  profile_prefs->ClearPref(kGlicGuestUrlPresetAutopush);
+  profile_prefs->ClearPref(kGlicGuestUrlPresetPreprod);
+  profile_prefs->ClearPref(kGlicGuestUrlPresetProd);
 
   // Please don't delete the following line. It is used by PRESUBMIT.py.
   // END_MIGRATE_OBSOLETE_PROFILE_PREFS
