@@ -31,7 +31,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  content/child/BUILD.gn                        |    7 +
  content/renderer/BUILD.gn                     |    4 +
  .../renderer/renderer_blink_platform_impl.cc  |   55 +-
- ...renderer_main_platform_delegate_android.cc |    2 +-
+ content/renderer/renderer_main.cc             |    2 -
  ...ndroid-fonts-fingerprinting-mitigation.inc |   12 +
  ...ndroid-fonts-fingerprinting-mitigation.inc |    7 +
  ...ndroid-fonts-fingerprinting-mitigation.inc |    5 +
@@ -48,7 +48,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../skia/src/ports/SkFontMgr_android_ndk.cpp  |    2 +-
  .../src/ports/SkFontMgr_android_parser.cpp    |   66 +-
  .../skia/src/ports/SkFontMgr_android_parser.h |    5 +-
- 42 files changed, 2448 insertions(+), 85 deletions(-)
+ 42 files changed, 2447 insertions(+), 86 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Android-fonts-fingerprinting-mitigation.grdp
  create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.cc
  create mode 100644 components/component_updater/installer_policies/fonts_pack_component_installer.h
@@ -60,7 +60,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 diff --git a/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java b/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java
 --- a/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java
 +++ b/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java
-@@ -929,6 +929,9 @@ public final class ProductionSupportedFlagList {
+@@ -970,6 +970,9 @@ public final class ProductionSupportedFlagList {
                  "Hides user preference on the system keyboard by setting the standard "
                   + "eng layout and removing the layout information from the "
                   + "javascript keyboard events."),
@@ -122,7 +122,7 @@ diff --git a/chrome/android/java/res/xml/developer_preferences.xml b/chrome/andr
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -7999,6 +7999,13 @@ static_library("browser") {
+@@ -8000,6 +8000,13 @@ static_library("browser") {
      ]
    }
  
@@ -139,7 +139,7 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
 --- a/chrome/browser/component_updater/registration.cc
 +++ b/chrome/browser/component_updater/registration.cc
-@@ -111,10 +111,20 @@
+@@ -101,6 +101,11 @@
  #include "chrome/browser/component_updater/file_type_policies_component_installer.h"
  #endif
  
@@ -149,6 +149,9 @@ diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/c
 +#endif
 +
  namespace component_updater {
+ 
+ namespace {
+@@ -134,6 +139,11 @@ void DeleteOldComponents(const base::FilePath& user_data_dir) {
  
  void RegisterComponentsForUpdate() {
    auto* const cus = g_browser_process->component_updater();
@@ -203,7 +206,7 @@ diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/pre
 diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
 --- a/chrome/renderer/BUILD.gn
 +++ b/chrome/renderer/BUILD.gn
-@@ -267,6 +267,10 @@ static_library("renderer") {
+@@ -270,6 +270,10 @@ static_library("renderer") {
      deps += [ "//components/strings" ]
    }
  
@@ -217,7 +220,7 @@ diff --git a/chrome/renderer/BUILD.gn b/chrome/renderer/BUILD.gn
 diff --git a/components/component_updater/installer_policies/BUILD.gn b/components/component_updater/installer_policies/BUILD.gn
 --- a/components/component_updater/installer_policies/BUILD.gn
 +++ b/components/component_updater/installer_policies/BUILD.gn
-@@ -32,6 +32,13 @@ static_library("installer_policies_no_content_deps") {
+@@ -28,6 +28,13 @@ static_library("installer_policies_no_content_deps") {
      "trust_token_key_commitments_component_installer_policy.h",
    ]
  
@@ -282,7 +285,7 @@ new file mode 100644
 +
 +update_client::CrxInstaller::Result
 +FontsPackComponentInstallerPolicy::OnCustomInstall(
-+    const base::Value::Dict& manifest,
++    const base::DictValue& manifest,
 +    const base::FilePath& install_dir) {
 +  return update_client::CrxInstaller::Result(0);  // Nothing custom here.
 +}
@@ -292,14 +295,14 @@ new file mode 100644
 +void FontsPackComponentInstallerPolicy::ComponentReady(
 +    const base::Version& version,
 +    const base::FilePath& install_dir,
-+    base::Value::Dict manifest) {
++    base::DictValue manifest) {
 +  DCHECK(!install_dir.empty());
 +  LOG(INFO) << "Fonts Pack Version Ready: " << install_dir.value();
 +}
 +
 +// Called during startup and installation before ComponentReady().
 +bool FontsPackComponentInstallerPolicy::VerifyInstallation(
-+    const base::Value::Dict& manifest,
++    const base::DictValue& manifest,
 +    const base::FilePath& install_dir) const {
 +  return base::PathExists(install_dir);
 +}
@@ -378,14 +381,14 @@ new file mode 100644
 +  bool SupportsGroupPolicyEnabledComponentUpdates() const override;
 +  bool RequiresNetworkEncryption() const override;
 +  update_client::CrxInstaller::Result OnCustomInstall(
-+      const base::Value::Dict& manifest,
++      const base::DictValue& manifest,
 +      const base::FilePath& install_dir) override;
 +  void OnCustomUninstall() override;
-+  bool VerifyInstallation(const base::Value::Dict& manifest,
++  bool VerifyInstallation(const base::DictValue& manifest,
 +                          const base::FilePath& install_dir) const override;
 +  void ComponentReady(const base::Version& version,
 +                      const base::FilePath& install_dir,
-+                      base::Value::Dict manifest) override;
++                      base::DictValue manifest) override;
 +  base::FilePath GetRelativeInstallDir() const override;
 +  void GetHash(std::vector<uint8_t>* hash) const override;
 +  std::string GetName() const override;
@@ -667,7 +670,7 @@ diff --git a/components/services/font/public/mojom/font_service.mojom b/componen
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -2602,6 +2602,17 @@ source_set("browser") {
+@@ -2611,6 +2611,17 @@ source_set("browser") {
      ]
    }
  
@@ -685,7 +688,7 @@ diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
    if (is_linux || is_chromeos) {
      sources -=
          [ "file_system_access/file_path_watcher/file_path_watcher_stub.cc" ]
-@@ -2648,6 +2659,13 @@ source_set("browser") {
+@@ -2657,6 +2668,13 @@ source_set("browser") {
      deps += [ "//components/services/font_data:lib" ]
    }
  
@@ -714,7 +717,7 @@ diff --git a/content/browser/renderer_host/render_process_host_impl_receiver_bin
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
  #include "components/services/font/public/mojom/font_service.mojom.h"  // nogncheck
  #include "content/browser/font_service.h"  // nogncheck
-@@ -351,6 +356,13 @@ void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceiver(
+@@ -352,6 +357,13 @@ void RenderProcessHostImpl::IOThreadHostImpl::BindHostReceiver(
    }
  #endif
  
@@ -731,7 +734,7 @@ diff --git a/content/browser/renderer_host/render_process_host_impl_receiver_bin
 diff --git a/content/child/BUILD.gn b/content/child/BUILD.gn
 --- a/content/child/BUILD.gn
 +++ b/content/child/BUILD.gn
-@@ -135,6 +135,13 @@ target(link_target_type, "child") {
+@@ -139,6 +139,13 @@ target(link_target_type, "child") {
      ]
    }
  
@@ -748,7 +751,7 @@ diff --git a/content/child/BUILD.gn b/content/child/BUILD.gn
 diff --git a/content/renderer/BUILD.gn b/content/renderer/BUILD.gn
 --- a/content/renderer/BUILD.gn
 +++ b/content/renderer/BUILD.gn
-@@ -350,6 +350,10 @@ target(link_target_type, "renderer") {
+@@ -351,6 +351,10 @@ target(link_target_type, "renderer") {
      deps += [ "//services/screen_ai/public/mojom" ]
    }
  
@@ -848,18 +851,18 @@ diff --git a/content/renderer/renderer_blink_platform_impl.cc b/content/renderer
  #endif
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
-diff --git a/content/renderer/renderer_main_platform_delegate_android.cc b/content/renderer/renderer_main_platform_delegate_android.cc
---- a/content/renderer/renderer_main_platform_delegate_android.cc
-+++ b/content/renderer/renderer_main_platform_delegate_android.cc
-@@ -35,7 +35,7 @@ void RendererMainPlatformDelegate::PlatformInitialize() {
-   // Android 14+ user devices with updated system fonts will call statx and
-   // possibly other system calls that are not allowed in the sandbox.
-   // See https://crbug.com/40618213 for details.
--  [[maybe_unused]] auto mgr = skia::DefaultFontMgr();
-+  // [[maybe_unused]] auto mgr = skia::DefaultFontMgr();
- }
+diff --git a/content/renderer/renderer_main.cc b/content/renderer/renderer_main.cc
+--- a/content/renderer/renderer_main.cc
++++ b/content/renderer/renderer_main.cc
+@@ -200,8 +200,6 @@ int RendererMain(MainFunctionParams parameters) {
+   // On Linux, Windows, and ChromeOS, the font manager is overridden or
+   // specially handled in RendererBlinkPlatformImpl(). On other platforms,
+   // initialise the default one on a thread pool, to avoid blocking on it later.
+-  base::ThreadPool::PostTask(FROM_HERE,
+-                             base::BindOnce([] { skia::DefaultFontMgr(); }));
+ #endif
  
- void RendererMainPlatformDelegate::PlatformUninitialize() {
+   // This function allows pausing execution using the --renderer-startup-dialog
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/Android-fonts-fingerprinting-mitigation.inc b/cromite_flags/chrome/browser/about_flags_cc/Android-fonts-fingerprinting-mitigation.inc
 new file mode 100644
 --- /dev/null
@@ -902,7 +905,7 @@ new file mode 100644
 diff --git a/skia/BUILD.gn b/skia/BUILD.gn
 --- a/skia/BUILD.gn
 +++ b/skia/BUILD.gn
-@@ -443,6 +443,18 @@ component("skia") {
+@@ -446,6 +446,18 @@ component("skia") {
      sources += skia_ports_fci_sources
    }
  
@@ -3149,7 +3152,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_ndk.cpp b/third_party/
 diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
 --- a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
 +++ b/third_party/skia/src/ports/SkFontMgr_android_parser.cpp
-@@ -654,14 +654,27 @@ static const XML_Memory_Handling_Suite sk_XML_alloc = {
+@@ -650,14 +650,27 @@ static const XML_Memory_Handling_Suite sk_XML_alloc = {
   */
  static int parse_config_file(const char* filename,
                               std::vector<std::unique_ptr<FontFamily>>& families,
@@ -3183,7 +3186,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
          return -1;
      }
  
-@@ -693,8 +706,8 @@ static int parse_config_file(const char* filename,
+@@ -689,8 +702,8 @@ static int parse_config_file(const char* filename,
              SkDebugf(SK_FONTMGR_ANDROID_PARSER_PREFIX "could not buffer enough to continue\n");
              return -1;
          }
@@ -3194,7 +3197,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
          XML_Status status = XML_ParseBuffer(parser, len, done);
          if (XML_STATUS_ERROR == status) {
              XML_Error error = XML_GetErrorCode(parser);
-@@ -706,6 +719,23 @@ static int parse_config_file(const char* filename,
+@@ -702,6 +715,23 @@ static int parse_config_file(const char* filename,
              return -1;
          }
      }
@@ -3218,7 +3221,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
      return self.fVersion;
  }
  
-@@ -768,8 +798,10 @@ static void append_fallback_font_families_for_locale(
+@@ -764,8 +794,10 @@ static void append_fallback_font_families_for_locale(
  
  static void append_system_fallback_font_families(
      std::vector<std::unique_ptr<FontFamily>>& fallbackFonts,
@@ -3230,7 +3233,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
      parse_config_file(FALLBACK_FONTS_FILE, fallbackFonts, basePath, true);
      append_fallback_font_families_for_locale(fallbackFonts,
                                               LOCALE_FALLBACK_FONTS_SYSTEM_DIR,
-@@ -778,8 +810,10 @@ static void append_system_fallback_font_families(
+@@ -774,8 +806,10 @@ static void append_system_fallback_font_families(
  
  static void mixin_vendor_fallback_font_families(
          std::vector<std::unique_ptr<FontFamily>>& fallbackFonts,
@@ -3242,17 +3245,17 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
      std::vector<std::unique_ptr<FontFamily>> vendorFonts;
      parse_config_file(VENDOR_FONTS_FILE, vendorFonts, basePath, true);
      append_fallback_font_families_for_locale(vendorFonts,
-@@ -811,7 +845,8 @@ static void mixin_vendor_fallback_font_families(
+@@ -807,7 +841,8 @@ static void mixin_vendor_fallback_font_families(
  }
  
  void SkFontMgr_Android_Parser::GetSystemFontFamilies(
--        std::vector<std::unique_ptr<FontFamily>>& fontFamilies)
+-        std::vector<std::unique_ptr<FontFamily>>& fontFamilies) {
 +        std::vector<std::unique_ptr<FontFamily>>& fontFamilies,
-+        const SkFontMgr_Android_CustomFonts* custom)
- {
++        const SkFontMgr_Android_CustomFonts* custom) {
+     static constexpr char kFontFilePrefix[] = "/fonts/";
+ 
      // Version 21 of the system font configuration does not need any fallback configuration files.
-     SkString basePath(getenv("ANDROID_ROOT"));
-@@ -823,8 +858,8 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
+@@ -820,8 +855,8 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
  
      // Append all the fallback fonts to system fonts
      std::vector<std::unique_ptr<FontFamily>> fallbackFonts;
@@ -3263,7 +3266,7 @@ diff --git a/third_party/skia/src/ports/SkFontMgr_android_parser.cpp b/third_par
      fontFamilies.insert(fontFamilies.end(),
                          std::make_move_iterator(fallbackFonts.begin()),
                          std::make_move_iterator(fallbackFonts.end()));
-@@ -833,15 +868,16 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
+@@ -830,15 +865,16 @@ void SkFontMgr_Android_Parser::GetSystemFontFamilies(
  void SkFontMgr_Android_Parser::GetCustomFontFamilies(
          std::vector<std::unique_ptr<FontFamily>>& fontFamilies,
          const SkString& basePath,
