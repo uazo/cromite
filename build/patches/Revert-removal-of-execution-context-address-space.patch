@@ -39,19 +39,19 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../core/workers/shared_worker_global_scope.h    |  1 +
  .../workers/threaded_worklet_messaging_proxy.cc  |  5 ++++-
  .../core/workers/threaded_worklet_test.cc        |  1 +
- .../core/workers/worker_classic_script_loader.cc |  5 ++++-
+ .../core/workers/worker_classic_script_loader.cc |  6 +++++-
  .../core/workers/worker_classic_script_loader.h  |  6 ++++++
  .../renderer/core/workers/worker_global_scope.h  |  2 ++
  .../renderer/core/workers/worker_thread_test.cc  |  2 ++
  .../core/workers/worker_thread_test_helper.h     |  6 ++++++
  .../csspaint/paint_worklet_global_scope_proxy.cc |  2 +-
- .../modules/exported/web_embedded_worker_impl.cc |  4 +++-
+ .../modules/exported/web_embedded_worker_impl.cc |  1 +
  .../service_worker_global_scope.cc               | 13 +++++++++++--
  .../service_worker/service_worker_global_scope.h |  2 ++
  .../webaudio/audio_worklet_global_scope_test.cc  |  1 +
  .../webaudio/audio_worklet_thread_test.cc        |  1 +
  .../worklet/worklet_thread_test_common.cc        |  2 +-
- 34 files changed, 145 insertions(+), 9 deletions(-)
+ 34 files changed, 144 insertions(+), 8 deletions(-)
 
 diff --git a/third_party/blink/renderer/core/execution_context/execution_context.cc b/third_party/blink/renderer/core/execution_context/execution_context.cc
 --- a/third_party/blink/renderer/core/execution_context/execution_context.cc
@@ -96,7 +96,7 @@ diff --git a/third_party/blink/renderer/core/execution_context/execution_context
 diff --git a/third_party/blink/renderer/core/exported/web_shared_worker_impl.cc b/third_party/blink/renderer/core/exported/web_shared_worker_impl.cc
 --- a/third_party/blink/renderer/core/exported/web_shared_worker_impl.cc
 +++ b/third_party/blink/renderer/core/exported/web_shared_worker_impl.cc
-@@ -276,6 +276,7 @@ void WebSharedWorkerImpl::StartWorkerContext(
+@@ -278,6 +278,7 @@ void WebSharedWorkerImpl::StartWorkerContext(
        MakeGarbageCollected<WorkerClients>(),
        std::make_unique<SharedWorkerContentSettingsProxy>(
            std::move(content_settings)),
@@ -107,7 +107,7 @@ diff --git a/third_party/blink/renderer/core/exported/web_shared_worker_impl.cc 
 diff --git a/third_party/blink/renderer/core/frame/policy_container.cc b/third_party/blink/renderer/core/frame/policy_container.cc
 --- a/third_party/blink/renderer/core/frame/policy_container.cc
 +++ b/third_party/blink/renderer/core/frame/policy_container.cc
-@@ -60,12 +60,22 @@ network::mojom::blink::ReferrerPolicy PolicyContainer::GetReferrerPolicy()
+@@ -45,12 +45,22 @@ network::mojom::blink::ReferrerPolicy PolicyContainer::GetReferrerPolicy()
    return policies_->referrer_policy;
  }
  
@@ -162,8 +162,8 @@ diff --git a/third_party/blink/renderer/core/layout/custom/layout_worklet_global
 --- a/third_party/blink/renderer/core/layout/custom/layout_worklet_global_scope_proxy.cc
 +++ b/third_party/blink/renderer/core/layout/custom/layout_worklet_global_scope_proxy.cc
 @@ -49,6 +49,7 @@ LayoutWorkletGlobalScopeProxy::LayoutWorkletGlobalScopeProxy(
-       window->IsSecureContext(), window->GetHttpsState(),
-       nullptr /* worker_clients */,
+       window->GetSecurityOrigin(), window->IsSecureContext(),
+       window->GetHttpsState(), nullptr /* worker_clients */,
        frame_client->CreateWorkerContentSettingsClient(),
 +      window->AddressSpace(),
        OriginTrialContext::GetInheritedTrialFeatures(window).get(),
@@ -179,12 +179,12 @@ diff --git a/third_party/blink/renderer/core/loader/modulescript/installed_servi
 +        script_data->GetResponseAddressSpace(),
          ParseContentSecurityPolicyHeaders(
              script_data->GetContentSecurityPolicyResponseHeaders()),
-         script_data->CreateOriginTrialTokens().get());
+         // TODO(crbug.com/488089240): Plumb Document Policy in Service Workers.
 diff --git a/third_party/blink/renderer/core/loader/modulescript/module_script_loader_test.cc b/third_party/blink/renderer/core/loader/modulescript/module_script_loader_test.cc
 --- a/third_party/blink/renderer/core/loader/modulescript/module_script_loader_test.cc
 +++ b/third_party/blink/renderer/core/loader/modulescript/module_script_loader_test.cc
-@@ -226,6 +226,7 @@ void ModuleScriptLoaderTest::InitializeForWorklet() {
-       network::mojom::ReferrerPolicy::kDefault, security_origin_.get(),
+@@ -227,6 +227,7 @@ void ModuleScriptLoaderTest::InitializeForWorklet() {
+       DocumentPolicy::DocumentPolicyBundle{}, security_origin_.get(),
        true /* is_secure_context */, HttpsState::kModern,
        nullptr /* worker_clients */, nullptr /* content_settings_client */,
 +      network::mojom::IPAddressSpace::kLocal,
@@ -210,76 +210,76 @@ diff --git a/third_party/blink/renderer/core/loader/modulescript/worker_module_s
 +        response_url, response_referrer_policy, response.AddressSpace(),
          ParseContentSecurityPolicyHeaders(
              ContentSecurityPolicyResponseHeaders(response)),
-         response_origin_trial_tokens.get());
+         // TODO(crbug.com/488090079): Plumb Document Policy in Module Workers.
 diff --git a/third_party/blink/renderer/core/workers/dedicated_worker.cc b/third_party/blink/renderer/core/workers/dedicated_worker.cc
 --- a/third_party/blink/renderer/core/workers/dedicated_worker.cc
 +++ b/third_party/blink/renderer/core/workers/dedicated_worker.cc
-@@ -362,6 +362,7 @@ void DedicatedWorker::OnScriptLoadStarted(
-   ContinueStart(script_request_url_, std::move(worker_main_script_load_params),
+@@ -363,6 +363,7 @@ void DedicatedWorker::OnScriptLoadStarted(
                  network::mojom::ReferrerPolicy::kDefault,
                  Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+                 DocumentPolicy::DocumentPolicyBundle{},
 +                std::nullopt /* response_address_space */,
                  std::move(back_forward_cache_controller_host),
                  std::move(coep_reporting_observer),
                  std::move(dip_reporting_observer));
-@@ -428,6 +429,7 @@ void DedicatedWorker::OnFinished(
-             ? mojo::Clone(classic_script_loader_->GetContentSecurityPolicy()
+@@ -430,6 +431,7 @@ void DedicatedWorker::OnFinished(
                                ->GetParsedPolicies())
              : Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
+         classic_script_loader_->GetDocumentPolicy(),
 +        classic_script_loader_->ResponseAddressSpace(),
          std::move(back_forward_cache_controller_host),
          /*coep_reporting_observer=*/mojo::NullReceiver(),
          /*dip_reporting_observer=*/mojo::NullReceiver());
-@@ -445,6 +447,7 @@ void DedicatedWorker::ContinueStart(
-     network::mojom::ReferrerPolicy referrer_policy,
+@@ -448,6 +450,7 @@ void DedicatedWorker::ContinueStart(
      Vector<network::mojom::blink::ContentSecurityPolicyPtr>
          response_content_security_policies,
+     DocumentPolicy::DocumentPolicyBundle response_document_policy,
 +    std::optional<network::mojom::IPAddressSpace> response_address_space,
      mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
          back_forward_cache_controller_host,
      mojo::PendingReceiver<mojom::blink::ReportingObserver>
-@@ -469,6 +472,7 @@ void DedicatedWorker::ContinueStart(
-                      std::move(worker_main_script_load_params),
+@@ -473,6 +476,7 @@ void DedicatedWorker::ContinueStart(
                       std::move(referrer_policy),
                       std::move(response_content_security_policies),
+                      std::move(response_document_policy),
 +                     response_address_space,
                       std::move(back_forward_cache_controller_host),
                       std::move(coep_reporting_observer),
                       std::move(dip_reporting_observer)),
-@@ -478,6 +482,7 @@ void DedicatedWorker::ContinueStart(
-   ContinueStartInternal(
+@@ -483,6 +487,7 @@ void DedicatedWorker::ContinueStart(
        script_url, std::move(worker_main_script_load_params),
        std::move(referrer_policy), std::move(response_content_security_policies),
+       std::move(response_document_policy),
 +      response_address_space,
        std::move(back_forward_cache_controller_host),
        std::move(coep_reporting_observer), std::move(dip_reporting_observer));
  }
-@@ -489,6 +494,7 @@ void DedicatedWorker::ContinueStartInternal(
-     network::mojom::ReferrerPolicy referrer_policy,
+@@ -495,6 +500,7 @@ void DedicatedWorker::ContinueStartInternal(
      Vector<network::mojom::blink::ContentSecurityPolicyPtr>
          response_content_security_policies,
+     DocumentPolicy::DocumentPolicyBundle document_policy,
 +    std::optional<network::mojom::IPAddressSpace> response_address_space,
      mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
          back_forward_cache_controller_host,
      mojo::PendingReceiver<mojom::blink::ReportingObserver>
-@@ -503,6 +509,7 @@ void DedicatedWorker::ContinueStartInternal(
+@@ -509,6 +515,7 @@ void DedicatedWorker::ContinueStartInternal(
        CreateGlobalScopeCreationParams(
            script_url, referrer_policy,
            std::move(response_content_security_policies),
 +          response_address_space,
-           std::move(coep_reporting_observer),
+           std::move(document_policy), std::move(coep_reporting_observer),
            std::move(dip_reporting_observer)),
        std::move(worker_main_script_load_params), options_, script_url,
-@@ -541,6 +548,7 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
-     network::mojom::ReferrerPolicy referrer_policy,
+@@ -548,6 +555,7 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
      Vector<network::mojom::blink::ContentSecurityPolicyPtr>
          response_content_security_policies,
+     DocumentPolicy::DocumentPolicyBundle document_policy,
 +    std::optional<network::mojom::IPAddressSpace> response_address_space,
      mojo::PendingReceiver<mojom::blink::ReportingObserver>
          coep_reporting_observer,
      mojo::PendingReceiver<mojom::blink::ReportingObserver>
-@@ -593,6 +601,7 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
-       execution_context->GetSecurityOrigin(),
+@@ -600,6 +608,7 @@ DedicatedWorker::CreateGlobalScopeCreationParams(
+       std::move(document_policy), execution_context->GetSecurityOrigin(),
        execution_context->IsSecureContext(), execution_context->GetHttpsState(),
        MakeGarbageCollected<WorkerClients>(), CreateWebContentSettingsClient(),
 +      response_address_space,
@@ -289,26 +289,26 @@ diff --git a/third_party/blink/renderer/core/workers/dedicated_worker.cc b/third
 diff --git a/third_party/blink/renderer/core/workers/dedicated_worker.h b/third_party/blink/renderer/core/workers/dedicated_worker.h
 --- a/third_party/blink/renderer/core/workers/dedicated_worker.h
 +++ b/third_party/blink/renderer/core/workers/dedicated_worker.h
-@@ -158,6 +158,7 @@ class CORE_EXPORT DedicatedWorker final
-       network::mojom::ReferrerPolicy,
+@@ -160,6 +160,7 @@ class CORE_EXPORT DedicatedWorker final
        Vector<network::mojom::blink::ContentSecurityPolicyPtr>
            response_content_security_policies,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
 +      std::optional<network::mojom::IPAddressSpace> response_address_space,
        mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
            back_forward_cache_controller_host,
        mojo::PendingReceiver<mojom::blink::ReportingObserver>
-@@ -171,6 +172,7 @@ class CORE_EXPORT DedicatedWorker final
-       network::mojom::ReferrerPolicy,
+@@ -174,6 +175,7 @@ class CORE_EXPORT DedicatedWorker final
        Vector<network::mojom::blink::ContentSecurityPolicyPtr>
            response_content_security_policies,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
 +      std::optional<network::mojom::IPAddressSpace> response_address_space,
        mojo::PendingRemote<mojom::blink::BackForwardCacheControllerHost>
            back_forward_cache_controller_host,
        mojo::PendingReceiver<mojom::blink::ReportingObserver>
-@@ -182,6 +184,7 @@ class CORE_EXPORT DedicatedWorker final
-       network::mojom::ReferrerPolicy,
+@@ -186,6 +188,7 @@ class CORE_EXPORT DedicatedWorker final
        Vector<network::mojom::blink::ContentSecurityPolicyPtr>
            response_content_security_policies,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
 +      std::optional<network::mojom::IPAddressSpace> response_address_space,
        mojo::PendingReceiver<mojom::blink::ReportingObserver>
            coep_reporting_observer,
@@ -316,33 +316,33 @@ diff --git a/third_party/blink/renderer/core/workers/dedicated_worker.h b/third_
 diff --git a/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc b/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc
 --- a/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc
 +++ b/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc
-@@ -92,6 +92,8 @@ DedicatedWorkerGlobalScope* DedicatedWorkerGlobalScope::Create(
-   KURL response_script_url = creation_params->script_url;
-   network::mojom::ReferrerPolicy response_referrer_policy =
+@@ -95,6 +95,8 @@ DedicatedWorkerGlobalScope* DedicatedWorkerGlobalScope::Create(
        creation_params->referrer_policy;
+   DocumentPolicy::DocumentPolicyBundle response_document_policy =
+       std::move(creation_params->document_policy);
 +  std::optional<network::mojom::IPAddressSpace> response_address_space =
 +      creation_params->response_address_space;
    const bool parent_is_isolated_context =
        creation_params->parent_is_isolated_context;
    base::TimeTicks start_time;
-@@ -118,7 +120,7 @@ DedicatedWorkerGlobalScope* DedicatedWorkerGlobalScope::Create(
+@@ -121,7 +123,7 @@ DedicatedWorkerGlobalScope* DedicatedWorkerGlobalScope::Create(
      // Pass dummy origin trial tokens here as it is already set to outside's
      // origin trial tokens in DedicatedWorkerGlobalScope's constructor.
      global_scope->Initialize(response_script_url, response_referrer_policy,
 -                             std::move(response_csp),
 +                             *response_address_space, std::move(response_csp),
+                              std::move(response_document_policy),
                               nullptr /* response_origin_trial_tokens */);
      return global_scope;
-   } else {
-@@ -234,6 +236,7 @@ const AtomicString& DedicatedWorkerGlobalScope::InterfaceName() const {
+@@ -238,6 +240,7 @@ const AtomicString& DedicatedWorkerGlobalScope::InterfaceName() const {
  void DedicatedWorkerGlobalScope::Initialize(
      const KURL& response_url,
      network::mojom::ReferrerPolicy response_referrer_policy,
 +    network::mojom::IPAddressSpace response_address_space,
      Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+     DocumentPolicy::DocumentPolicyBundle response_document_policy,
      const Vector<String>* /* response_origin_trial_tokens */) {
-   TRACE_EVENT("blink.worker", "DedicatedWorkerGlobalScope::Initialize",
-@@ -249,6 +252,9 @@ void DedicatedWorkerGlobalScope::Initialize(
+@@ -254,6 +257,9 @@ void DedicatedWorkerGlobalScope::Initialize(
    // parsing the `Referrer-Policy` header of response."
    SetReferrerPolicy(response_referrer_policy);
  
@@ -352,7 +352,7 @@ diff --git a/third_party/blink/renderer/core/workers/dedicated_worker_global_sco
    // The following is the Content-Security-Policy part of "Initialize worker
    // global scope's policy container"
    // https://html.spec.whatwg.org/#initialize-worker-policy-container
-@@ -476,6 +482,7 @@ void DedicatedWorkerGlobalScope::DidFetchClassicScript(
+@@ -502,6 +508,7 @@ void DedicatedWorkerGlobalScope::DidFetchClassicScript(
    // Pass dummy origin trial tokens here as it is already set to outside's
    // origin trial tokens in DedicatedWorkerGlobalScope's constructor.
    Initialize(classic_script_loader->ResponseURL(), response_referrer_policy,
@@ -369,12 +369,12 @@ diff --git a/third_party/blink/renderer/core/workers/dedicated_worker_global_sco
        network::mojom::ReferrerPolicy response_referrer_policy,
 +      network::mojom::IPAddressSpace response_address_space,
        Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
        const Vector<String>* response_origin_trial_tokens) override;
-   void FetchAndRunClassicScript(
 diff --git a/third_party/blink/renderer/core/workers/global_scope_creation_params.cc b/third_party/blink/renderer/core/workers/global_scope_creation_params.cc
 --- a/third_party/blink/renderer/core/workers/global_scope_creation_params.cc
 +++ b/third_party/blink/renderer/core/workers/global_scope_creation_params.cc
-@@ -33,6 +33,7 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
+@@ -34,6 +34,7 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
      HttpsState starter_https_state,
      WorkerClients* worker_clients,
      std::unique_ptr<WebContentSettingsClient> content_settings_client,
@@ -382,7 +382,7 @@ diff --git a/third_party/blink/renderer/core/workers/global_scope_creation_param
      const Vector<mojom::blink::OriginTrialFeature>* inherited_trial_features,
      const base::UnguessableToken& parent_devtools_token,
      std::unique_ptr<WorkerSettings> worker_settings,
-@@ -77,6 +78,7 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
+@@ -79,6 +80,7 @@ GlobalScopeCreationParams::GlobalScopeCreationParams(
        starter_https_state(starter_https_state),
        worker_clients(worker_clients),
        content_settings_client(std::move(content_settings_client)),
@@ -399,9 +399,9 @@ diff --git a/third_party/blink/renderer/core/workers/global_scope_creation_param
  #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 +#include "services/network/public/mojom/ip_address_space.mojom-blink-forward.h"
  #include "services/network/public/mojom/referrer_policy.mojom-blink-forward.h"
+ #include "third_party/blink/public/common/permissions_policy/document_policy.h"
  #include "third_party/blink/public/common/tokens/tokens.h"
- #include "third_party/blink/public/common/user_agent/user_agent_metadata.h"
-@@ -63,6 +64,7 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
+@@ -65,6 +66,7 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
        HttpsState starter_https_state,
        WorkerClients*,
        std::unique_ptr<WebContentSettingsClient>,
@@ -409,7 +409,7 @@ diff --git a/third_party/blink/renderer/core/workers/global_scope_creation_param
        const Vector<mojom::blink::OriginTrialFeature>* inherited_trial_features,
        const base::UnguessableToken& parent_devtools_token,
        std::unique_ptr<WorkerSettings>,
-@@ -185,6 +187,11 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
+@@ -189,6 +191,11 @@ struct CORE_EXPORT GlobalScopeCreationParams final {
  
    std::unique_ptr<WebContentSettingsClient> content_settings_client;
  
@@ -486,10 +486,10 @@ diff --git a/third_party/blink/renderer/core/workers/installed_scripts_manager.h
 diff --git a/third_party/blink/renderer/core/workers/main_thread_worklet_test.cc b/third_party/blink/renderer/core/workers/main_thread_worklet_test.cc
 --- a/third_party/blink/renderer/core/workers/main_thread_worklet_test.cc
 +++ b/third_party/blink/renderer/core/workers/main_thread_worklet_test.cc
-@@ -72,6 +72,7 @@ class MainThreadWorkletTest : public PageTestBase {
-         window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-         window->IsSecureContext(), window->GetHttpsState(),
-         nullptr /* worker_clients */, nullptr /* content_settings_client */,
+@@ -73,6 +73,7 @@ class MainThreadWorkletTest : public PageTestBase {
+         window->GetSecurityOrigin(), window->IsSecureContext(),
+         window->GetHttpsState(), nullptr /* worker_clients */,
+         nullptr /* content_settings_client */,
 +        window->AddressSpace(),
          OriginTrialContext::GetInheritedTrialFeatures(window).get(),
          base::UnguessableToken::Create(), nullptr /* worker_settings */,
@@ -497,15 +497,15 @@ diff --git a/third_party/blink/renderer/core/workers/main_thread_worklet_test.cc
 diff --git a/third_party/blink/renderer/core/workers/shared_worker_global_scope.cc b/third_party/blink/renderer/core/workers/shared_worker_global_scope.cc
 --- a/third_party/blink/renderer/core/workers/shared_worker_global_scope.cc
 +++ b/third_party/blink/renderer/core/workers/shared_worker_global_scope.cc
-@@ -81,6 +81,7 @@ const AtomicString& SharedWorkerGlobalScope::InterfaceName() const {
+@@ -82,6 +82,7 @@ const AtomicString& SharedWorkerGlobalScope::InterfaceName() const {
  void SharedWorkerGlobalScope::Initialize(
      const KURL& response_url,
      network::mojom::ReferrerPolicy response_referrer_policy,
 +    network::mojom::IPAddressSpace response_address_space,
      Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+     DocumentPolicy::DocumentPolicyBundle response_document_policy,
      const Vector<String>* response_origin_trial_tokens) {
-   // Step 12.3. "Set worker global scope's url to response's url."
-@@ -94,6 +95,9 @@ void SharedWorkerGlobalScope::Initialize(
+@@ -96,6 +97,9 @@ void SharedWorkerGlobalScope::Initialize(
    // parsing the `Referrer-Policy` header of response."
    SetReferrerPolicy(response_referrer_policy);
  
@@ -515,7 +515,7 @@ diff --git a/third_party/blink/renderer/core/workers/shared_worker_global_scope.
    // Step 12.6. "Execute the Initialize a global object's CSP list algorithm
    // on worker global scope and response. [CSP]"
    // SharedWorkerGlobalScope inherits the outside's CSP instead of the response
-@@ -103,6 +107,8 @@ void SharedWorkerGlobalScope::Initialize(
+@@ -105,6 +109,8 @@ void SharedWorkerGlobalScope::Initialize(
    // https://fetch.spec.whatwg.org/#local-scheme
    //
    // https://w3c.github.io/webappsec-csp/#initialize-global-object-csp
@@ -524,7 +524,7 @@ diff --git a/third_party/blink/renderer/core/workers/shared_worker_global_scope.
    Vector<network::mojom::blink::ContentSecurityPolicyPtr> csp_headers =
        response_url.ProtocolIsAbout() || response_url.ProtocolIsData() ||
                response_url.ProtocolIs("blob")
-@@ -247,6 +253,7 @@ void SharedWorkerGlobalScope::DidFetchClassicScript(
+@@ -251,6 +257,7 @@ void SharedWorkerGlobalScope::DidFetchClassicScript(
  
    // Step 12.3-12.6 are implemented in Initialize().
    Initialize(classic_script_loader->ResponseURL(), response_referrer_policy,
@@ -541,12 +541,12 @@ diff --git a/third_party/blink/renderer/core/workers/shared_worker_global_scope.
        network::mojom::ReferrerPolicy response_referrer_policy,
 +      network::mojom::IPAddressSpace response_address_space,
        Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
        const Vector<String>* response_origin_trial_tokens) override;
-   void FetchAndRunClassicScript(
 diff --git a/third_party/blink/renderer/core/workers/threaded_worklet_messaging_proxy.cc b/third_party/blink/renderer/core/workers/threaded_worklet_messaging_proxy.cc
 --- a/third_party/blink/renderer/core/workers/threaded_worklet_messaging_proxy.cc
 +++ b/third_party/blink/renderer/core/workers/threaded_worklet_messaging_proxy.cc
-@@ -93,7 +93,9 @@ void ThreadedWorkletMessagingProxy::Initialize(
+@@ -94,7 +94,9 @@ void ThreadedWorkletMessagingProxy::Initialize(
          starter_secure_context,
          /*starter_https_state=*/HttpsState::kNone,
          /*worker_clients=*/nullptr,
@@ -557,9 +557,9 @@ diff --git a/third_party/blink/renderer/core/workers/threaded_worklet_messaging_
          /*parent_devtools_token=*/
          client_provided_global_scope_creation_params->devtools_token,
          /*worker_settings=*/nullptr,
-@@ -144,6 +146,7 @@ void ThreadedWorkletMessagingProxy::Initialize(
-           window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-           window->IsSecureContext(), window->GetHttpsState(), worker_clients,
+@@ -146,6 +148,7 @@ void ThreadedWorkletMessagingProxy::Initialize(
+           window->GetSecurityOrigin(), window->IsSecureContext(),
+           window->GetHttpsState(), worker_clients,
            frame_client->CreateWorkerContentSettingsClient(),
 +          window->AddressSpace(),
            OriginTrialContext::GetInheritedTrialFeatures(window).get(),
@@ -568,7 +568,7 @@ diff --git a/third_party/blink/renderer/core/workers/threaded_worklet_messaging_
 diff --git a/third_party/blink/renderer/core/workers/threaded_worklet_test.cc b/third_party/blink/renderer/core/workers/threaded_worklet_test.cc
 --- a/third_party/blink/renderer/core/workers/threaded_worklet_test.cc
 +++ b/third_party/blink/renderer/core/workers/threaded_worklet_test.cc
-@@ -219,6 +219,7 @@ class ThreadedWorkletMessagingProxyForTest
+@@ -220,6 +220,7 @@ class ThreadedWorkletMessagingProxyForTest
              GetExecutionContext()->IsSecureContext(),
              GetExecutionContext()->GetHttpsState(), worker_clients,
              nullptr /* content_settings_client */,
@@ -579,15 +579,16 @@ diff --git a/third_party/blink/renderer/core/workers/threaded_worklet_test.cc b/
 diff --git a/third_party/blink/renderer/core/workers/worker_classic_script_loader.cc b/third_party/blink/renderer/core/workers/worker_classic_script_loader.cc
 --- a/third_party/blink/renderer/core/workers/worker_classic_script_loader.cc
 +++ b/third_party/blink/renderer/core/workers/worker_classic_script_loader.cc
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,8 @@
  #include <memory>
  
  #include "base/memory/scoped_refptr.h"
 +#include "services/network/public/mojom/ip_address_space.mojom-blink.h"
- #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
  #include "third_party/blink/renderer/core/execution_context/execution_context.h"
-@@ -100,7 +101,8 @@ String CheckSameOriginEnforcement(const KURL& request_url,
+ #include "third_party/blink/renderer/core/frame/csp/content_security_policy.h"
+@@ -101,7 +103,8 @@ String CheckSameOriginEnforcement(const KURL& request_url,
  
  }  // namespace
  
@@ -597,7 +598,7 @@ diff --git a/third_party/blink/renderer/core/workers/worker_classic_script_loade
  
  void WorkerClassicScriptLoader::LoadSynchronously(
      ExecutionContext& execution_context,
-@@ -234,6 +236,7 @@ void WorkerClassicScriptLoader::DidReceiveResponse(
+@@ -235,6 +238,7 @@ void WorkerClassicScriptLoader::DidReceiveResponse(
    identifier_ = identifier;
    response_url_ = response.ResponseUrl();
    response_encoding_ = response.TextEncodingName();
@@ -614,11 +615,11 @@ diff --git a/third_party/blink/renderer/core/workers/worker_classic_script_loade
  #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
 +#include "services/network/public/mojom/ip_address_space.mojom-blink-forward.h"
  #include "services/network/public/mojom/url_loader_factory.mojom-blink.h"
+ #include "third_party/blink/public/common/permissions_policy/document_policy.h"
  #include "third_party/blink/public/mojom/loader/resource_load_info_notifier.mojom-shared.h"
- #include "third_party/blink/public/platform/cross_variant_mojo_util.h"
-@@ -119,6 +120,10 @@ class CORE_EXPORT WorkerClassicScriptLoader final
- 
-   const String& GetReferrerPolicy() const { return referrer_policy_; }
+@@ -124,6 +125,10 @@ class CORE_EXPORT WorkerClassicScriptLoader final
+     return document_policy_;
+   }
  
 +  network::mojom::IPAddressSpace ResponseAddressSpace() const {
 +    return response_address_space_;
@@ -627,33 +628,33 @@ diff --git a/third_party/blink/renderer/core/workers/worker_classic_script_loade
    const Vector<String>* OriginTrialTokens() const {
      return origin_trial_tokens_.get();
    }
-@@ -173,6 +178,7 @@ class CORE_EXPORT WorkerClassicScriptLoader final
+@@ -179,6 +184,7 @@ class CORE_EXPORT WorkerClassicScriptLoader final
    uint64_t identifier_ = 0;
    std::unique_ptr<Vector<uint8_t>> cached_metadata_;
    Member<ContentSecurityPolicy> content_security_policy_;
 +  network::mojom::IPAddressSpace response_address_space_;
    std::unique_ptr<Vector<String>> origin_trial_tokens_;
    String referrer_policy_;
- 
+   DocumentPolicy::DocumentPolicyBundle document_policy_;
 diff --git a/third_party/blink/renderer/core/workers/worker_global_scope.h b/third_party/blink/renderer/core/workers/worker_global_scope.h
 --- a/third_party/blink/renderer/core/workers/worker_global_scope.h
 +++ b/third_party/blink/renderer/core/workers/worker_global_scope.h
-@@ -32,6 +32,7 @@
- #include "base/task/single_thread_task_runner.h"
+@@ -33,6 +33,7 @@
  #include "base/time/time.h"
  #include "services/network/public/mojom/fetch_api.mojom-blink-forward.h"
+ #include "third_party/blink/public/common/permissions_policy/document_policy.h"
 +#include "services/network/public/mojom/ip_address_space.mojom-blink-forward.h"
  #include "third_party/blink/public/common/tokens/tokens.h"
  #include "third_party/blink/public/mojom/loader/code_cache.mojom-blink-forward.h"
  #include "third_party/blink/public/mojom/script/script_type.mojom-blink-forward.h"
-@@ -174,6 +175,7 @@ class CORE_EXPORT WorkerGlobalScope
+@@ -175,6 +176,7 @@ class CORE_EXPORT WorkerGlobalScope
    virtual void Initialize(
        const KURL& response_url,
        network::mojom::ReferrerPolicy response_referrer_policy,
 +      network::mojom::IPAddressSpace response_address_space,
        Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
        const Vector<String>* response_origin_trial_tokens) = 0;
- 
 diff --git a/third_party/blink/renderer/core/workers/worker_thread_test.cc b/third_party/blink/renderer/core/workers/worker_thread_test.cc
 --- a/third_party/blink/renderer/core/workers/worker_thread_test.cc
 +++ b/third_party/blink/renderer/core/workers/worker_thread_test.cc
@@ -665,7 +666,7 @@ diff --git a/third_party/blink/renderer/core/workers/worker_thread_test.cc b/thi
  #include "testing/gmock/include/gmock/gmock.h"
  #include "testing/gtest/include/gtest/gtest.h"
  #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
-@@ -386,6 +387,7 @@ TEST_F(WorkerThreadTest, Terminate_WhileDebuggerTaskIsRunningOnInitialization) {
+@@ -387,6 +388,7 @@ TEST_F(WorkerThreadTest, Terminate_WhileDebuggerTaskIsRunningOnInitialization) {
            CalculateHttpsState(security_origin_.get()),
            MakeGarbageCollected<WorkerClients>(),
            nullptr /* content_settings_client */,
@@ -684,12 +685,13 @@ diff --git a/third_party/blink/renderer/core/workers/worker_thread_test_helper.h
  #include "testing/gmock/include/gmock/gmock.h"
  #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
  #include "third_party/blink/public/mojom/v8_cache_options.mojom-blink.h"
-@@ -78,11 +79,15 @@ class FakeWorkerGlobalScope : public WorkerGlobalScope {
+@@ -79,12 +80,16 @@ class FakeWorkerGlobalScope : public WorkerGlobalScope {
    void Initialize(
        const KURL& response_url,
        network::mojom::ReferrerPolicy response_referrer_policy,
 +      network::mojom::IPAddressSpace response_address_space,
        Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
        const Vector<String>* response_origin_trial_tokens) override {
      InitializeURL(response_url);
      SetReferrerPolicy(response_referrer_policy);
@@ -700,7 +702,7 @@ diff --git a/third_party/blink/renderer/core/workers/worker_thread_test_helper.h
      InitContentSecurityPolicyFromVector(std::move(response_csp));
      BindContentSecurityPolicyToExecutionContext();
  
-@@ -158,6 +163,7 @@ class WorkerThreadForTest : public WorkerThread {
+@@ -167,6 +172,7 @@ class WorkerThreadForTest : public WorkerThread {
          false /* starter_secure_context */,
          CalculateHttpsState(security_origin), worker_clients,
          nullptr /* content_settings_client */,
@@ -712,9 +714,9 @@ diff --git a/third_party/blink/renderer/modules/csspaint/paint_worklet_global_sc
 --- a/third_party/blink/renderer/modules/csspaint/paint_worklet_global_scope_proxy.cc
 +++ b/third_party/blink/renderer/modules/csspaint/paint_worklet_global_scope_proxy.cc
 @@ -47,7 +47,7 @@ PaintWorkletGlobalScopeProxy::PaintWorkletGlobalScopeProxy(
-       window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-       window->IsSecureContext(), window->GetHttpsState(),
-       nullptr /* worker_clients */,
+       window->GetReferrerPolicy(), DocumentPolicy::DocumentPolicyBundle{},
+       window->GetSecurityOrigin(), window->IsSecureContext(),
+       window->GetHttpsState(), nullptr /* worker_clients */,
 -      frame_client->CreateWorkerContentSettingsClient(),
 +      frame_client->CreateWorkerContentSettingsClient(), window->AddressSpace(),
        OriginTrialContext::GetInheritedTrialFeatures(window).get(),
@@ -723,21 +725,18 @@ diff --git a/third_party/blink/renderer/modules/csspaint/paint_worklet_global_sc
 diff --git a/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc b/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc
 --- a/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc
 +++ b/third_party/blink/renderer/modules/exported/web_embedded_worker_impl.cc
-@@ -214,7 +214,9 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
-       Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-       network::mojom::ReferrerPolicy::kDefault, starter_origin.get(),
-       starter_secure_context, starter_https_state, nullptr /* worker_clients */,
--      std::move(content_settings_proxy), nullptr /* inherited_trial_features */,
-+      std::move(content_settings_proxy),
+@@ -222,6 +222,7 @@ void WebEmbeddedWorkerImpl::StartWorkerThread(
+       DocumentPolicy::DocumentPolicyBundle{}, starter_origin.get(),
+       starter_secure_context, starter_https_state,
+       /*worker_clients=*/nullptr, std::move(content_settings_proxy),
 +      std::nullopt /* response_address_space */,
-+      nullptr /* inherited_trial_features */,
+       /*inherited_trial_features=*/nullptr,
        worker_start_data->devtools_worker_token, std::move(worker_settings),
        // Generate the full code cache in the first execution of the script.
-       mojom::blink::V8CacheOptions::kFullCodeWithoutHeatCheck,
 diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
 --- a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
 +++ b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.cc
-@@ -473,6 +473,7 @@ void ServiceWorkerGlobalScope::DidFetchClassicScript(
+@@ -472,6 +472,7 @@ void ServiceWorkerGlobalScope::DidFetchClassicScript(
    // is set, and with the following callback steps given evaluationStatus:"
    RunClassicScript(
        classic_script_loader->ResponseURL(), referrer_policy,
@@ -751,9 +750,9 @@ diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_gl
      network::mojom::ReferrerPolicy response_referrer_policy,
 +    network::mojom::IPAddressSpace response_address_space,
      Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+     DocumentPolicy::DocumentPolicyBundle response_document_policy,
      const Vector<String>* response_origin_trial_tokens) {
-   // Step 4.5. "Set workerGlobalScope's url to serviceWorker's script url."
-@@ -499,6 +501,9 @@ void ServiceWorkerGlobalScope::Initialize(
+@@ -500,6 +502,9 @@ void ServiceWorkerGlobalScope::Initialize(
    // script resource's referrer policy."
    SetReferrerPolicy(response_referrer_policy);
  
@@ -763,7 +762,7 @@ diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_gl
    // This is quoted from the "Content Security Policy" algorithm in the service
    // workers spec:
    // "Whenever a user agent invokes Run Service Worker algorithm with a service
-@@ -509,6 +514,9 @@ void ServiceWorkerGlobalScope::Initialize(
+@@ -510,6 +515,9 @@ void ServiceWorkerGlobalScope::Initialize(
    // - If serviceWorker's script resource was delivered with a
    //   Content-Security-Policy-Report-Only HTTP header containing the value
    //   policy, the user agent must monitor policy for serviceWorker."
@@ -773,29 +772,30 @@ diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_gl
    InitContentSecurityPolicyFromVector(std::move(response_csp));
    BindContentSecurityPolicyToExecutionContext();
  
-@@ -551,7 +559,7 @@ void ServiceWorkerGlobalScope::LoadAndRunInstalledClassicScript(
-         kDoNotSupportReferrerPolicyLegacyKeywords, &referrer_policy);
+@@ -555,7 +563,7 @@ void ServiceWorkerGlobalScope::LoadAndRunInstalledClassicScript(
    }
  
--  RunClassicScript(script_url, referrer_policy,
-+  RunClassicScript(script_url, referrer_policy, script_data->GetResponseAddressSpace(),
-                    ParseContentSecurityPolicyHeaders(
-                        script_data->GetContentSecurityPolicyResponseHeaders()),
-                    script_data->CreateOriginTrialTokens().get(),
-@@ -563,13 +571,14 @@ void ServiceWorkerGlobalScope::LoadAndRunInstalledClassicScript(
+   RunClassicScript(
+-      script_url, referrer_policy,
++      script_url, referrer_policy, script_data->GetResponseAddressSpace(),
+       ParseContentSecurityPolicyHeaders(
+           script_data->GetContentSecurityPolicyResponseHeaders()),
+       // TODO(crbug.com/488089240): Plumb Document Policy in Service Workers.
+@@ -568,6 +576,7 @@ void ServiceWorkerGlobalScope::LoadAndRunInstalledClassicScript(
  void ServiceWorkerGlobalScope::RunClassicScript(
      const KURL& response_url,
      network::mojom::ReferrerPolicy response_referrer_policy,
 +    network::mojom::IPAddressSpace response_address_space,
      Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+     DocumentPolicy::DocumentPolicyBundle response_document_policy,
      const Vector<String>* response_origin_trial_tokens,
-     const String& source_code,
+@@ -575,7 +584,7 @@ void ServiceWorkerGlobalScope::RunClassicScript(
      std::unique_ptr<Vector<uint8_t>> cached_meta_data,
      const v8_inspector::V8StackTraceId& stack_id) {
    // Step 4.5-4.11 are implemented in Initialize().
 -  Initialize(response_url, response_referrer_policy, std::move(response_csp),
 +  Initialize(response_url, response_referrer_policy, response_address_space, std::move(response_csp),
-              response_origin_trial_tokens);
+              std::move(response_document_policy), response_origin_trial_tokens);
  
    // Step 4.12. "Let evaluationStatus be the result of running the classic
 diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.h b/third_party/blink/renderer/modules/service_worker/service_worker_global_scope.h
@@ -807,23 +807,23 @@ diff --git a/third_party/blink/renderer/modules/service_worker/service_worker_gl
        network::mojom::ReferrerPolicy response_referrer_policy,
 +      network::mojom::IPAddressSpace response_address_space,
        Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
        const Vector<String>* response_origin_trial_tokens) override;
-   // Fetches and runs the top-level classic worker script.
-@@ -409,6 +410,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
+@@ -410,6 +411,7 @@ class MODULES_EXPORT ServiceWorkerGlobalScope final
    void RunClassicScript(
        const KURL& response_url,
        network::mojom::ReferrerPolicy response_referrer_policy,
 +      network::mojom::IPAddressSpace response_address_space,
        Vector<network::mojom::blink::ContentSecurityPolicyPtr> response_csp,
+       DocumentPolicy::DocumentPolicyBundle response_document_policy,
        const Vector<String>* response_origin_trial_tokens,
-       const String& source_code,
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_worklet_global_scope_test.cc b/third_party/blink/renderer/modules/webaudio/audio_worklet_global_scope_test.cc
 --- a/third_party/blink/renderer/modules/webaudio/audio_worklet_global_scope_test.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_worklet_global_scope_test.cc
-@@ -88,6 +88,7 @@ class AudioWorkletGlobalScopeTest : public PageTestBase, public ModuleTestBase {
-             window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-             window->IsSecureContext(), window->GetHttpsState(),
-             nullptr /* worker_clients */, nullptr /* content_settings_client */,
+@@ -90,6 +90,7 @@ class AudioWorkletGlobalScopeTest : public PageTestBase, public ModuleTestBase {
+             window->GetSecurityOrigin(), window->IsSecureContext(),
+             window->GetHttpsState(), nullptr /* worker_clients */,
+             nullptr /* content_settings_client */,
 +            window->AddressSpace(),
              OriginTrialContext::GetInheritedTrialFeatures(window).get(),
              base::UnguessableToken::Create(), nullptr /* worker_settings */,
@@ -831,10 +831,10 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_worklet_global_sc
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_worklet_thread_test.cc b/third_party/blink/renderer/modules/webaudio/audio_worklet_thread_test.cc
 --- a/third_party/blink/renderer/modules/webaudio/audio_worklet_thread_test.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_worklet_thread_test.cc
-@@ -108,6 +108,7 @@ class AudioWorkletThreadTest : public PageTestBase, public ModuleTestBase {
-             window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-             window->IsSecureContext(), window->GetHttpsState(),
-             nullptr /* worker_clients */, nullptr /* content_settings_client */,
+@@ -109,6 +109,7 @@ class AudioWorkletThreadTest : public PageTestBase, public ModuleTestBase {
+             window->GetSecurityOrigin(), window->IsSecureContext(),
+             window->GetHttpsState(), nullptr /* worker_clients */,
+             nullptr /* content_settings_client */,
 +            window->AddressSpace(),
              OriginTrialContext::GetInheritedTrialFeatures(window).get(),
              base::UnguessableToken::Create(), nullptr /* worker_settings */,
@@ -842,10 +842,10 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_worklet_thread_te
 diff --git a/third_party/blink/renderer/modules/worklet/worklet_thread_test_common.cc b/third_party/blink/renderer/modules/worklet/worklet_thread_test_common.cc
 --- a/third_party/blink/renderer/modules/worklet/worklet_thread_test_common.cc
 +++ b/third_party/blink/renderer/modules/worklet/worklet_thread_test_common.cc
-@@ -38,7 +38,7 @@ CreateAnimationAndPaintWorkletThread(
-           Vector<network::mojom::blink::ContentSecurityPolicyPtr>(),
-           window->GetReferrerPolicy(), window->GetSecurityOrigin(),
-           window->IsSecureContext(), window->GetHttpsState(), clients,
+@@ -39,7 +39,7 @@ CreateAnimationAndPaintWorkletThread(
+           window->GetReferrerPolicy(), DocumentPolicy::DocumentPolicyBundle{},
+           window->GetSecurityOrigin(), window->IsSecureContext(),
+           window->GetHttpsState(), clients,
 -          nullptr /* content_settings_client */,
 +          nullptr /* content_settings_client */, window->AddressSpace(),
            OriginTrialContext::GetInheritedTrialFeatures(window).get(),
