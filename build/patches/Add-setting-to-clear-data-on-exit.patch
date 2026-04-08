@@ -10,7 +10,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../browsing_data/BrowsingDataBridge.java     | 12 +--
  .../ClearBrowsingDataFragment.java            | 37 +++++++--
  .../ClearBrowsingDataFragmentAtStart.java     | 79 +++++++++++++++++++
- chrome/app/settings_strings.grdp              | 10 +++
+ chrome/app/settings_strings.grdp              |  8 ++
  chrome/browser/about_flags.cc                 |  1 +
  .../browsing_data/browsing_data_bridge.cc     | 17 +++-
  .../chrome_browsing_data_lifetime_manager.cc  | 22 +++++-
@@ -20,16 +20,24 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../profiles/android/profile_manager_utils.cc |  5 ++
  chrome/browser/profiles/profile_manager.cc    | 17 +++-
  chrome/browser/profiles/profile_manager.h     |  2 +
+ .../clear_browsing_data_browser_proxy.ts      |  1 +
+ .../clear_browsing_data_dialog_v2.html        | 20 ++++-
+ .../clear_browsing_data_dialog_v2.ts          | 62 ++++++++++++++-
+ .../clear_browsing_data_time_picker.ts        |  6 +-
+ .../settings/privacy_page/privacy_page.html   | 12 +++
+ .../settings/privacy_page/privacy_page.ts     | 10 +++
+ .../privacy_page/privacy_page_index.ts        |  2 +-
+ chrome/browser/resources/settings/route.ts    |  2 +
+ chrome/browser/resources/settings/router.ts   |  1 +
  .../strings/android_chrome_strings.grd        |  3 +
  .../Add-setting-to-clear-data-on-exit.grdp    |  9 +++
- .../settings_localized_strings_provider.cc    |  1 +
+ .../settings_localized_strings_provider.cc    |  4 +
  .../content/browsing_data_helper.cc           |  9 ++-
  components/browsing_data/core/BUILD.gn        |  5 ++
  .../core/browsing_data_policies_utils.cc      | 20 ++---
  .../core/browsing_data_policies_utils.h       | 11 +++
  .../browsing_data/core/browsing_data_utils.cc | 31 ++++++++
  .../core/clear_browsing_data_tab.h            |  3 +-
- components/browsing_data/core/features.h      |  1 +
  components/browsing_data/core/pref_names.cc   | 17 ++++
  components/browsing_data/core/pref_names.h    | 10 +++
  components/favicon/core/favicon_database.cc   |  9 +++
@@ -39,7 +47,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  content/browser/storage_partition_impl.cc     |  2 +
  .../public/browser/browsing_data_remover.h    |  7 +-
  .../Add-setting-to-clear-data-on-exit.inc     |  8 ++
- 35 files changed, 369 insertions(+), 35 deletions(-)
+ 43 files changed, 473 insertions(+), 47 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Add-setting-to-clear-data-on-exit.inc
@@ -346,18 +354,16 @@ new file mode 100644
 diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
 --- a/chrome/app/settings_strings.grdp
 +++ b/chrome/app/settings_strings.grdp
-@@ -2222,6 +2222,16 @@
+@@ -2222,6 +2222,14 @@
    <message name="IDS_SETTINGS_CLEAR_BROWSING_DATA" desc="Text for delete browsing data button in Privacy options">
      Delete browsing data
    </message>
 +  <if expr="is_win or is_linux">
-+    <message name="IDS_CLEAR_BROWSING_DATA_ATSTART_TAB_TITLE" desc="The title of the tab showing the at start clear browsing data options.">
-+      At Close
++    <message name="IDS_SETTINGS_CLEAR_BROWSING_DATA_AT_CLOSE" desc="The title of the tab showing the at close clear browsing data options.">
++      Clear browsing data when closing Cromite
 +    </message>
-+  </if>
-+  <if expr="is_android">
-+    <message name="IDS_CLEAR_BROWSING_DATA_ATSTART_TAB_TITLE" desc="The title of the tab showing the at start clear browsing data options.">
-+      At Startup
++    <message name="IDS_SETTINGS_CLEAR_DATA_AT_CLOSE_DESCRIPTION" desc="Description for delete browsing data button at close in Privacy options. 'History' refers to browsing history. 'Cookies' refers to the technical meaning of a cookie, i.e. data saved by a website on the user's computer, as in when a website saves your preferences.">
++      Choose what to automatically delete when you close Cromite
 +    </message>
 +  </if>
    <message name="IDS_SETTINGS_CLEAR_DATA_DESCRIPTION" desc="Description for delete browsing data button in Privacy options. 'History' refers to browsing history. 'Cookies' refers to the technical meaning of a cookie, i.e. data saved by a website on the user's computer, as in when a website saves your preferences.">
@@ -631,6 +637,352 @@ diff --git a/chrome/browser/profiles/profile_manager.h b/chrome/browser/profiles
    // If a profile with the given path is currently managed by this object and
    // fully initialized, return a pointer to the corresponding Profile object;
    // otherwise return null.
+diff --git a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_browser_proxy.ts b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_browser_proxy.ts
+--- a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_browser_proxy.ts
++++ b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_browser_proxy.ts
+@@ -42,6 +42,7 @@ export enum BrowsingDataType {
+   SITE_SETTINGS = 5,
+   DOWNLOADS = 6,
+   HOSTED_APPS_DATA = 7,
++  PASSWORDS = 8,
+   // TABS = 8, Not used on Desktop.
+ }
+ // LINT.ThenChange(/components/browsing_data/core/browsing_data_utils.h:BrowsingDataType)
+diff --git a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.html b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.html
+--- a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.html
++++ b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.html
+@@ -40,6 +40,8 @@
+ 
+   #deleteBrowsingDataDialog::part(dialog) {
+     max-height: var(--dbd-dialog-max-height);
++    top: 300px;
++    width: 590px;
+   }
+ 
+   #deletingDataAlert {
+@@ -99,18 +101,25 @@
+ <cr-dialog id="deleteBrowsingDataDialog" close-text="$i18n{close}"
+     show-on-attach ignore-popstate ignore-enter-key
+     hidden="[[showOtherGoogleDataDialog_]]">
++<template is="dom-if" if="[[!clearBrowsingDialogAtClose]]">
+   <div slot="title" class="dialog-title">$i18n{clearBrowsingData}</div>
++</template>
++<template is="dom-if" if="[[clearBrowsingDialogAtClose]]">
++  <div slot="title" class="dialog-title">$i18n{clearBrowsingDataAtClose}</div>
++</template>
+   <div slot="header">
++<template is="dom-if" if="[[!clearBrowsingDialogAtClose]]">
+     <settings-clear-browsing-data-time-picker id="timePicker" prefs="{{prefs}}"
+         on-selected-time-period-change="onTimePeriodChanged_">
+     </settings-clear-browsing-data-time-picker>
++</template>
+   </div>
+   <div slot="body">
+     <div id="checkboxContainer">
+       <template is="dom-repeat"
+           items="[[expandedBrowsingDataTypeOptionsList_]]">
+-        <settings-checkbox pref="{{item.pref}}" no-set-pref
+-            sub-label-html="[[item.subLabel]]"
++        <settings-checkbox pref="{{item.pref}}" no-set-pref="[[!clearBrowsingDialogAtClose]]"
++            sub-label-html="[[shouldShowSubLabel_(item.subLabel)]]"
+             disabled="[[isDeletionInProgress_]]"
+             on-sub-label-link-clicked="onCheckboxSubLabelLinkClick_">
+           <div class="checkbox-title">[[item.label]]</div>
+@@ -137,12 +146,14 @@
+       <cr-icon icon="cr:expand-more" aria-hidden="true" role="presentation">
+       </cr-icon>
+     </cr-button>
++<template is="dom-if" if="[[!clearBrowsingDialogAtClose]]">
+     <cr-link-row id="manageOtherGoogleDataRow"
+         label="[[otherGoogleDataRowLabel_]]"
+         sub-label="[[otherGoogleDataRowSubLabel_]]"
+         on-click="onManageOtherGoogleDataRowClick_"
+         role-description="$i18n{subpageArrowRoleDescription}">
+     </cr-link-row>
++</template>
+   </div>
+   <div slot="button-container" class="row-aligned">
+ <if expr="not is_chromeos">
+@@ -152,9 +163,10 @@
+     <div id="spinner" class="spinner" hidden="[[!isDeletionInProgress_]]"></div>
+     <cr-button id="cancelButton" class="cancel-button" on-click="onCancelClick_"
+         disabled="[[isDeletionInProgress_]]" autofocus>
+-      $i18n{cancel}
++      $i18n{close}
+     </cr-button>
+     <cr-button id="deleteButton" class="action-button"
++        hidden="[[clearBrowsingDialogAtClose]]"
+         on-click="onDeleteBrowsingDataClick_"
+         disabled="[[shouldDisableDeleteButton_(
+             isDeletionInProgress_, isNoDatatypeSelected_)]]">
+@@ -177,4 +189,4 @@
+ <template is="dom-if" if="[[showOtherGoogleDataDialog_]]" restamp>
+   <settings-other-google-data-dialog on-cancel="onOtherGoogleDataDialogClose_">
+   </settings-other-google-data-dialog>
+-</template>
+\ No newline at end of file
++</template>
+diff --git a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.ts b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.ts
+--- a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.ts
++++ b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_dialog_v2.ts
+@@ -91,6 +91,17 @@ const ALL_BROWSING_DATATYPES_LIST: BrowsingDataType[] = [
+   BrowsingDataType.HOSTED_APPS_DATA,
+ ];
+ 
++const ALL_BROWSING_DATATYPES_LIST_AT_CLOSE: BrowsingDataType[] = [
++  BrowsingDataType.HISTORY,
++  BrowsingDataType.SITE_DATA,
++  BrowsingDataType.CACHE,
++  BrowsingDataType.DOWNLOADS,
++  BrowsingDataType.FORM_DATA,
++  BrowsingDataType.SITE_SETTINGS,
++  BrowsingDataType.PASSWORDS,
++  BrowsingDataType.HOSTED_APPS_DATA,
++];
++
+ /** The list of Browsing Data types that should be expanded by default. */
+ const DEFAULT_BROWSING_DATATYPES_LIST: BrowsingDataType[] = [
+   BrowsingDataType.HISTORY,
+@@ -120,12 +131,36 @@ function getDataTypeLabel(datatypes: BrowsingDataType) {
+       return loadTimeData.getString('clearDownloadHistory');
+     case BrowsingDataType.HOSTED_APPS_DATA:
+       return loadTimeData.getString('clearHostedAppData');
++    case BrowsingDataType.PASSWORDS:
++      return loadTimeData.getString('clearPasswords');
+     default:
+       assertNotReachedCase(datatypes);
+   }
+ }
+ 
+-export function getDataTypePrefName(datatypes: BrowsingDataType) {
++export function getDataTypePrefName(datatypes: BrowsingDataType, atclose: boolean) {
++  if (atclose) {
++    switch (datatypes) {
++      case BrowsingDataType.HISTORY:
++        return 'browser.clear_data.browsing_history_at_start';
++      case BrowsingDataType.CACHE:
++        return 'browser.clear_data.cache_at_start';
++      case BrowsingDataType.SITE_DATA:
++        return 'browser.clear_data.cookies_at_start';
++      case BrowsingDataType.FORM_DATA:
++        return 'browser.clear_data.form_data_at_start';
++      case BrowsingDataType.SITE_SETTINGS:
++        return 'browser.clear_data.site_settings_at_start';
++      case BrowsingDataType.DOWNLOADS:
++        return 'browser.clear_data.download_history_at_start';
++      case BrowsingDataType.HOSTED_APPS_DATA:
++        return 'browser.clear_data.hosted_apps_data_at_start';
++      case BrowsingDataType.PASSWORDS:
++        return 'browser.clear_data.passwords_at_start';
++      default:
++        assertNotReachedCase(datatypes);
++    }
++  }
+   switch (datatypes) {
+     case BrowsingDataType.HISTORY:
+       return 'browser.clear_data.browsing_history';
+@@ -141,6 +176,8 @@ export function getDataTypePrefName(datatypes: BrowsingDataType) {
+       return 'browser.clear_data.download_history';
+     case BrowsingDataType.HOSTED_APPS_DATA:
+       return 'browser.clear_data.hosted_apps_data';
++    case BrowsingDataType.PASSWORDS:
++      return 'browser.clear_data.passwords';
+     default:
+       assertNotReachedCase(datatypes);
+   }
+@@ -161,6 +198,12 @@ export class SettingsClearBrowsingDataDialogV2Element extends
+ 
+   static get properties() {
+     return {
++      clearBrowsingDialogAtClose: {
++        type: Boolean,
++        value: '',
++        reflectToAttribute: true,
++      },
++
+       dataTypesExpanded_: {
+         type: Boolean,
+         value: false,
+@@ -224,6 +267,8 @@ export class SettingsClearBrowsingDataDialogV2Element extends
+     };
+   }
+ 
++  declare private clearBrowsingDialogAtClose: boolean;
++
+   declare private dataTypesExpanded_: boolean;
+   declare private deleteButtonLabel_: string;
+   declare private deletingDataAlertString_: string;
+@@ -310,10 +355,14 @@ export class SettingsClearBrowsingDataDialogV2Element extends
+     const expandedOptionsList: BrowsingDataTypeOption[] = [];
+     const moreOptionsList: BrowsingDataTypeOption[] = [];
+ 
+-    ALL_BROWSING_DATATYPES_LIST.forEach((datatype) => {
++    var list = ALL_BROWSING_DATATYPES_LIST;
++    if (this.clearBrowsingDialogAtClose)
++      list = ALL_BROWSING_DATATYPES_LIST_AT_CLOSE;
++
++    list.forEach((datatype) => {
+       const datatypeOption = {
+         label: getDataTypeLabel(datatype),
+-        pref: this.getPref(getDataTypePrefName(datatype)),
++        pref: this.getPref(getDataTypePrefName(datatype, this.clearBrowsingDialogAtClose)),
+       };
+ 
+       if (this.shouldDataTypeBeExpanded_(datatype)) {
+@@ -362,7 +411,12 @@ export class SettingsClearBrowsingDataDialogV2Element extends
+ 
+   private shouldDataTypeBeExpanded_(datatype: BrowsingDataType) {
+     return DEFAULT_BROWSING_DATATYPES_LIST.includes(datatype) ||
+-        this.getPref(getDataTypePrefName(datatype)).value;
++        this.getPref(getDataTypePrefName(datatype, this.clearBrowsingDialogAtClose)).value ||
++        this.clearBrowsingDialogAtClose;
++  }
++
++  private shouldShowSubLabel_(value: string) {
++    return this.clearBrowsingDialogAtClose ? '' : value;
+   }
+ 
+   private computeDeleteButtonLabel_() {
+diff --git a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_time_picker.ts b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_time_picker.ts
+--- a/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_time_picker.ts
++++ b/chrome/browser/resources/settings/clear_browsing_data_dialog/clear_browsing_data_time_picker.ts
+@@ -80,7 +80,7 @@ export class SettingsClearBrowsingDataTimePicker extends
+       selectedTimePeriod_: {
+         type: Number,
+         observer: 'onTimePeriodSelectionChanged_',
+-        value: TimePeriod.LAST_HOUR,
++        value: TimePeriod.ALL_TIME,
+       },
+ 
+       /**
+@@ -91,12 +91,12 @@ export class SettingsClearBrowsingDataTimePicker extends
+         readOnly: true,
+         type: Array,
+         value: [
++          TimePeriod.ALL_TIME,
+           TimePeriod.LAST_15_MINUTES,
+           TimePeriod.LAST_HOUR,
+           TimePeriod.LAST_DAY,
+           TimePeriod.LAST_WEEK,
+           TimePeriod.FOUR_WEEKS,
+-          TimePeriod.ALL_TIME,
+         ],
+       },
+ 
+@@ -125,7 +125,7 @@ export class SettingsClearBrowsingDataTimePicker extends
+        */
+       maxChipsShown_: {
+         type: Number,
+-        value: 4,
++        value: 6,
+       },
+     };
+   }
+diff --git a/chrome/browser/resources/settings/privacy_page/privacy_page.html b/chrome/browser/resources/settings/privacy_page/privacy_page.html
+--- a/chrome/browser/resources/settings/privacy_page/privacy_page.html
++++ b/chrome/browser/resources/settings/privacy_page/privacy_page.html
+@@ -6,6 +6,13 @@
+           on-browsing-data-deleted="onBrowsingDataDeleted_">
+       </settings-clear-browsing-data-dialog-v2>
+     </template>
++    <template is="dom-if" if="[[showClearBrowsingAtCloseDataDialog_]]" restamp>
++      <settings-clear-browsing-data-dialog-v2 prefs="{{prefs}}"
++          clear-browsing-dialog-at-close="true"
++          on-close="onCbdDialogClosed_"
++          on-browsing-data-deleted="onBrowsingDataDeleted_">
++      </settings-clear-browsing-data-dialog-v2>
++    </template>
+     <template is="dom-if" if="[[showPrivacyGuideDialog_]]" restamp>
+       <settings-privacy-guide-dialog id="privacyGuideDialog" prefs="{{prefs}}"
+           on-close="onPrivacyGuideDialogClosed_">
+@@ -16,6 +23,11 @@
+         label="$i18n{clearBrowsingData}"
+         sub-label="$i18n{clearBrowsingDataDescription}"
+         on-click="onClearBrowsingDataClick_"></cr-link-row>
++    <cr-link-row id="clearBrowsingDataAtClose"
++        start-icon="cr:delete"
++        label="$i18n{clearBrowsingDataAtClose}"
++        sub-label="$i18n{clearBrowsingDataAtCloseDescription}"
++        on-click="onClearBrowsingDataAtCloseClick_"></cr-link-row>
+     <template is="dom-if" if="[[isPrivacyGuideAvailable]]">
+       <cr-link-row id="privacyGuideLinkRow" class="hr"
+           start-icon="privacy20:signpost"
+diff --git a/chrome/browser/resources/settings/privacy_page/privacy_page.ts b/chrome/browser/resources/settings/privacy_page/privacy_page.ts
+--- a/chrome/browser/resources/settings/privacy_page/privacy_page.ts
++++ b/chrome/browser/resources/settings/privacy_page/privacy_page.ts
+@@ -81,6 +81,7 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
+       },
+ 
+       showClearBrowsingDataDialog_: Boolean,
++      showClearBrowsingAtCloseDataDialog_: Boolean,
+       showPrivacyGuideDialog_: Boolean,
+ 
+       isPrivacySandboxRestricted_: {
+@@ -121,6 +122,7 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
+ 
+   declare private historyExpireDaysThresholdOptions_: object[];
+   declare private showClearBrowsingDataDialog_: boolean;
++  declare private showClearBrowsingAtCloseDataDialog_: boolean;
+   declare private showPrivacyGuideDialog_: boolean;
+   declare private referersPolicyOptions_: object[];
+   declare private isPrivacySandboxRestricted_: boolean;
+@@ -136,6 +138,8 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
+ 
+     this.showClearBrowsingDataDialog_ =
+         Router.getInstance().getCurrentRoute() === routes.CLEAR_BROWSER_DATA;
++    this.showClearBrowsingAtCloseDataDialog_ =
++        Router.getInstance().getCurrentRoute() === routes.CLEAR_BROWSER_DATA_AT_CLOSE;
+     this.showPrivacyGuideDialog_ =
+         Router.getInstance().getCurrentRoute() === routes.PRIVACY_GUIDE &&
+         this.isPrivacyGuideAvailable;
+@@ -147,6 +151,12 @@ export class SettingsPrivacyPageElement extends SettingsPrivacyPageElementBase {
+     Router.getInstance().navigateTo(routes.CLEAR_BROWSER_DATA);
+   }
+ 
++  private onClearBrowsingDataAtCloseClick_() {
++    this.interactedWithPage_();
++
++    Router.getInstance().navigateTo(routes.CLEAR_BROWSER_DATA_AT_CLOSE);
++  }
++
+   private onCookiesClick_() {
+     this.interactedWithPage_();
+ 
+diff --git a/chrome/browser/resources/settings/privacy_page/privacy_page_index.ts b/chrome/browser/resources/settings/privacy_page/privacy_page_index.ts
+--- a/chrome/browser/resources/settings/privacy_page/privacy_page_index.ts
++++ b/chrome/browser/resources/settings/privacy_page/privacy_page_index.ts
+@@ -253,7 +253,7 @@ export class SettingsPrivacyPageIndexElement extends
+   }
+ 
+   private isRouteHostedWithinPrivacyView_(route: Route): boolean {
+-    const nestedRoutes = [routes.CLEAR_BROWSER_DATA];
++    const nestedRoutes = [routes.CLEAR_BROWSER_DATA, routes.CLEAR_BROWSER_DATA_AT_CLOSE];
+     if (loadTimeData.getBoolean('showPrivacyGuide')) {
+       nestedRoutes.push(routes.PRIVACY_GUIDE);
+     }
+diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
+--- a/chrome/browser/resources/settings/route.ts
++++ b/chrome/browser/resources/settings/route.ts
+@@ -17,6 +17,8 @@ function addPrivacyChildRoutes(r: Partial<SettingsRoutes>) {
+   assert(r.PRIVACY);
+   r.CLEAR_BROWSER_DATA = r.PRIVACY.createChild('/clearBrowserData');
+   r.CLEAR_BROWSER_DATA.isNavigableDialog = true;
++  r.CLEAR_BROWSER_DATA_AT_CLOSE = r.PRIVACY.createChild('/clearBrowserDataAtClose');
++  r.CLEAR_BROWSER_DATA_AT_CLOSE.isNavigableDialog = true;
+ 
+   const visibility = pageVisibility || {};
+ 
+diff --git a/chrome/browser/resources/settings/router.ts b/chrome/browser/resources/settings/router.ts
+--- a/chrome/browser/resources/settings/router.ts
++++ b/chrome/browser/resources/settings/router.ts
+@@ -24,6 +24,7 @@ export interface SettingsRoutes {
+   BASIC: Route;
+   CAPTIONS: Route;
+   CLEAR_BROWSER_DATA: Route;
++  CLEAR_BROWSER_DATA_AT_CLOSE: Route;
+   COMPARE: Route;
+   COOKIES: Route;
+   DEFAULT_BROWSER: Route;
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
@@ -661,11 +1013,14 @@ new file mode 100644
 diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 --- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
-@@ -2303,6 +2303,7 @@ void AddPrivacyStrings(content::WebUIDataSource* html_source,
+@@ -2303,6 +2303,10 @@ void AddPrivacyStrings(content::WebUIDataSource* html_source,
        {"clearedData", IDS_SETTINGS_CLEARED_DATA},
        {"clearBrowsingData", IDS_SETTINGS_CLEAR_BROWSING_DATA},
        {"clearBrowsingDataDescription", IDS_SETTINGS_CLEAR_DATA_DESCRIPTION},
-+      {"atStartPageTitle", IDS_CLEAR_BROWSING_DATA_ATSTART_TAB_TITLE},
++#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
++      {"clearBrowsingDataAtClose", IDS_SETTINGS_CLEAR_BROWSING_DATA_AT_CLOSE},
++      {"clearBrowsingDataAtCloseDescription", IDS_SETTINGS_CLEAR_DATA_AT_CLOSE_DESCRIPTION},
++#endif
        {"titleAndCount", IDS_SETTINGS_TITLE_AND_COUNT},
        {"safeBrowsingEnableExtendedReportingDesc",
         IDS_SETTINGS_SAFEBROWSING_ENABLE_REPORTING_DESC},
@@ -820,17 +1175,6 @@ diff --git a/components/browsing_data/core/clear_browsing_data_tab.h b/component
  
  }  // namespace browsing_data
  
-diff --git a/components/browsing_data/core/features.h b/components/browsing_data/core/features.h
---- a/components/browsing_data/core/features.h
-+++ b/components/browsing_data/core/features.h
-@@ -19,6 +19,7 @@ BASE_DECLARE_FEATURE(kBrowsingDataModel);
- // updates to history counter logic and removal of the bulk password deletion
- // option from the dialog.
- BASE_DECLARE_FEATURE(kDbdRevampDesktop);
-+SET_CROMITE_FEATURE_DISABLED(kDbdRevampDesktop);
- 
- // When enabled, calls to browsingData.removePasswords extension API would
- // result in an error response instead of a console warning.
 diff --git a/components/browsing_data/core/pref_names.cc b/components/browsing_data/core/pref_names.cc
 --- a/components/browsing_data/core/pref_names.cc
 +++ b/components/browsing_data/core/pref_names.cc
