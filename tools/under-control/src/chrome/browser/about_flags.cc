@@ -4528,28 +4528,50 @@ const FeatureEntry::FeatureVariation kAndroidDesktopZoomScalingVariations[] = {
      nullptr}};
 #endif  // BUILDFLAG(IS_ANDROID)
 
-const FeatureEntry::FeatureParam kContextualTaskPermanentButton[] = {
-    {"ContextualTasksEntryPoint", "toolbar-permanent"}};
-const FeatureEntry::FeatureParam kContextualTaskEphemeralButton[] = {
-    {"ContextualTasksEntryPoint", "toolbar-revisit"}};
-const FeatureEntry::FeatureParam kContextualTaskPageAction[] = {
-    {"ContextualTasksEntryPoint", "page-action-revisit"}};
-const FeatureEntry::FeatureParam kContextualTaskDisableSidePanel[] = {
-    {"ContextualTasksEntryPoint", "toolbar-revisit"},
-    {"ContextualTasksOpenSidePanelOnLinkClicked", "false"}};
-const FeatureEntry::FeatureParam kContextualTaskDisableLens[] = {
-    {"ContextualTasksEntryPoint", "toolbar-revisit"},
-    {"ContextualTasksEnableLensInContextualTasks", "false"}};
+// LINT.IfChange(ContextualTasksArms)
+const FeatureEntry::FeatureParam kArm1FullBundleWithExpandoButton[] = {
+    {"ContextualTasksExpandButtonOptions", "side-panel-expand-button"}};
+const FeatureEntry::FeatureParam
+    kArm2FullBundleNoAutoSidePanelOpenWithExpandoButton[] = {
+        {"ContextualTasksExpandButtonOptions", "side-panel-expand-button"},
+        {"ContextualTasksOpenSidePanelOnLinkClicked", "false"}};
+const FeatureEntry::FeatureParam
+    kArm3FullBundleWithoutLensMigrationWithExpandoButton[] = {
+        {"ContextualTasksExpandButtonOptions", "side-panel-expand-button"},
+        {"ContextualTasksEnableLensInContextualTasks", "false"}};
+const FeatureEntry::FeatureParam
+    kArm4FullBundleNoAutoAddedContextInSidePanelWithExpandoButton[] = {
+        {"ContextualTasksExpandButtonOptions", "side-panel-expand-button"},
+        {"ContextualTasksTabAutoSuggestionChipEnabled", "false"}};
+const FeatureEntry::FeatureParam kArm5FullBundleWithCloseToExpandButton[] = {
+    {"ContextualTasksExpandButtonOptions", "toolbar-close-button"}};
+const FeatureEntry::FeatureParam
+    kArm6FullBundleWithoutLensMigrationWithCloseToExpandButton[] = {
+        {"ContextualTasksExpandButtonOptions", "toolbar-close-button"},
+        {"ContextualTasksEnableLensInContextualTasks", "false"}};
+const FeatureEntry::FeatureParam
+    kArm7FullBundleNoAutoAddedContextInSidePanelWithCloseToExpandButton[] = {
+        {"ContextualTasksExpandButtonOptions", "toolbar-close-button"},
+        {"ContextualTasksTabAutoSuggestionChipEnabled", "false"}};
 
-const FeatureEntry::FeatureVariation kContextualTaskEntryPointVariations[] = {
-    {"Arm 1: Full bundle with ephemeral toolbar button",
-     kContextualTaskEphemeralButton, nullptr},
-    {"Arm 2: Full bundle, without AIM link clicks opening side panel",
-     kContextualTaskDisableSidePanel, nullptr},
-    {"Arm 3: Full bundle, without Lens migration", kContextualTaskDisableLens,
+const FeatureEntry::FeatureVariation kContextualTasksVariations[] = {
+    {"Arm 1: Full bundle with expando button", kArm1FullBundleWithExpandoButton,
      nullptr},
-    {"permanent toolbar button", kContextualTaskPermanentButton, nullptr},
-    {"page action chip", kContextualTaskPageAction, nullptr}};
+    {"Arm 2: Full bundle, no auto side panel open, expando button",
+     kArm2FullBundleNoAutoSidePanelOpenWithExpandoButton, nullptr},
+    {"Arm 3: Full bundle, without Lens migration, expando button",
+     kArm3FullBundleWithoutLensMigrationWithExpandoButton, nullptr},
+    {"Arm 4: Full bundle, No auto added context in side panel, expando button",
+     kArm4FullBundleNoAutoAddedContextInSidePanelWithExpandoButton, nullptr},
+    {"Arm 5: Full bundle with close to expand button",
+     kArm5FullBundleWithCloseToExpandButton, nullptr},
+    {"Arm 6: Full bundle, without Lens migration, close to expand button",
+     kArm6FullBundleWithoutLensMigrationWithCloseToExpandButton, nullptr},
+    {"Arm 7: Full bundle, No auto added context in side panel, close to expand "
+     "button",
+     kArm7FullBundleNoAutoAddedContextInSidePanelWithCloseToExpandButton,
+     nullptr}};
+// LINT.ThenChange(chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.cc)
 
 const FeatureEntry::FeatureParam kTaskScopedSidePanel[] = {
     {"ContextualTasksTaskScopedSidePanel", "true"}};
@@ -7723,6 +7745,11 @@ const FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kShowForceRespectUiGainsToggleName,
      flag_descriptions::kShowForceRespectUiGainsToggleDescription, kOsCrOS,
      FEATURE_VALUE_TYPE(media::kShowForceRespectUiGainsToggle)},
+    {"audio-flexible-loopback-for-system-loopback",
+     flag_descriptions::kAudioFlexibleLoopbackForSystemLoopbackName,
+     flag_descriptions::kAudioFlexibleLoopbackForSystemLoopbackDescription,
+     kOsCrOS,
+     FEATURE_VALUE_TYPE(media::kAudioFlexibleLoopbackForSystemLoopback)},
     {"show-spatial-audio-toggle",
      flag_descriptions::kShowSpatialAudioToggleName,
      flag_descriptions::kShowSpatialAudioToggleDescription, kOsCrOS,
@@ -9517,6 +9544,12 @@ const FeatureEntry kFeatureEntries[] = {
      FEATURE_WITH_PARAMS_VALUE_TYPE(omnibox::kWebUIOmniboxPopupDebug,
                                     kWebUIOmniboxPopupDebugVariations,
                                     "WebUIOmniboxPopupDebugVariations")},
+
+    {"webui-omnibox-popup-selection-control",
+     flag_descriptions::kWebUIOmniboxPopupSelectionControlName,
+     flag_descriptions::kWebUIOmniboxPopupSelectionControlDescription,
+     kOsDesktop,
+     FEATURE_VALUE_TYPE(omnibox::kWebUIOmniboxPopupSelectionControl)},
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
@@ -10736,7 +10769,7 @@ const FeatureEntry kFeatureEntries[] = {
      FEATURE_VALUE_TYPE(features::kGlicActorAutofill)},
     {"glic-actor-cursor", flag_descriptions::kGlicActorCursorName,
      flag_descriptions::kGlicActorCursorDescription, kOsDesktop,
-     FEATURE_VALUE_TYPE(features::kGlicActorUiOverlayMagicCursor)},
+     FEATURE_VALUE_TYPE(features::kGlicActorUiMagicCursor)},
     {"glic-detached", flag_descriptions::kGlicDetachedName,
      flag_descriptions::kGlicDetachedDescription, kOsDesktop,
      FEATURE_VALUE_TYPE(features::kGlicDetached)},
@@ -10810,6 +10843,9 @@ const FeatureEntry kFeatureEntries[] = {
     {"glic-capture-region", flag_descriptions::kGlicCaptureRegionName,
      flag_descriptions::kGlicCaptureRegionDescription, kOsAll,
      FEATURE_VALUE_TYPE(features::kGlicCaptureRegion)},
+    {"glic-chrome-status-icon", flag_descriptions::kGlicChromeStatusIconName,
+     flag_descriptions::kGlicChromeStatusIconDescription, kOsMac,
+     FEATURE_VALUE_TYPE(features::kGlicChromeStatusIcon)},
     {"glic-daisy-chain-new-tabs", flag_descriptions::kGlicDaisyChainNewTabsName,
      flag_descriptions::kGlicDaisyChainNewTabsDescription, kOsDesktop,
      FEATURE_VALUE_TYPE(features::kGlicDaisyChainNewTabs)},
@@ -12202,7 +12238,7 @@ const FeatureEntry kFeatureEntries[] = {
      contextual_tasks::flag_descriptions::kContextualTasksDescription,
      kOsDesktop,
      FEATURE_WITH_PARAMS_VALUE_TYPE(contextual_tasks::kContextualTasks,
-                                    kContextualTaskEntryPointVariations,
+                                    kContextualTasksVariations,
                                     "ContextualTasks")},
 
     {"omnibox-debug-logs", omnibox::flag_descriptions::kOmniboxDebugLogsName,
