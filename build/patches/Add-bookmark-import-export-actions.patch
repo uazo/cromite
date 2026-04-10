@@ -14,9 +14,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/android/java/AndroidManifest.xml       |   1 -
  .../menu/bookmark_toolbar_menu_improved.xml   |  14 +
  .../browser/TabbedModeTabDelegateFactory.java |   5 +-
- .../app/bookmarks/BookmarkActivity.java       |  21 ++
+ .../app/bookmarks/BookmarkActivity.java       |  20 ++
  .../native_page/NativePageFactory.java        |   7 +-
- chrome/browser/BUILD.gn                       |  11 +-
+ chrome/browser/BUILD.gn                       |   7 +
  .../bookmarks/android/bookmark_bridge.cc      | 193 ++++++++++++
  .../bookmarks/android/bookmark_bridge.h       |  30 +-
  .../browser/bookmarks/BookmarkBridge.java     |  39 +++
@@ -51,7 +51,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  ui/shell_dialogs/select_file_dialog_linux.cc  |   4 +
  ui/shell_dialogs/select_file_dialog_linux.h   |   2 +
  ui/shell_dialogs/select_file_dialog_win.cc    |   5 +
- 40 files changed, 793 insertions(+), 23 deletions(-)
+ 40 files changed, 790 insertions(+), 21 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/add-bookmark-import-export-actions.inc
  create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_h/add-bookmark-import-export-actions.inc
@@ -110,7 +110,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/TabbedModeTabDe
 +    private final ChromeActivity mActivity;
      private final BrowserControlsVisibilityDelegate mAppBrowserControlsVisibilityDelegate;
      private final Supplier<@Nullable ShareDelegate> mShareDelegateSupplier;
-     private final Supplier<EphemeralTabCoordinator> mEphemeralTabCoordinatorSupplier;
+     private final Supplier<@Nullable EphemeralTabCoordinator> mEphemeralTabCoordinatorSupplier;
 @@ -97,7 +98,7 @@ public class TabbedModeTabDelegateFactory implements TabDelegateFactory {
      private final RecentlyClosedEntriesManager mRecentlyClosedEntriesManager;
  
@@ -119,7 +119,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/TabbedModeTabDe
 +            ChromeActivity activity,
              BrowserControlsVisibilityDelegate appBrowserControlsVisibilityDelegate,
              Supplier<@Nullable ShareDelegate> shareDelegateSupplier,
-             Supplier<EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
+             Supplier<@Nullable EphemeralTabCoordinator> ephemeralTabCoordinatorSupplier,
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/BookmarkActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/BookmarkActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/BookmarkActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/BookmarkActivity.java
@@ -132,7 +132,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/B
  import android.content.ComponentName;
  import android.content.Intent;
  import android.text.TextUtils;
-@@ -131,6 +133,9 @@ public class BookmarkActivity extends SnackbarActivity {
+@@ -133,6 +135,9 @@ public class BookmarkActivity extends SnackbarActivity {
          mOnKeyDownHandler =
                  BackPressHelper.create(
                          this, getOnBackPressedDispatcher(), mBookmarkManagerCoordinator);
@@ -142,15 +142,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/bookmarks/B
      }
  
      @Override
-@@ -163,6 +168,7 @@ public class BookmarkActivity extends SnackbarActivity {
-     @Override
-     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
-         super.onActivityResult(requestCode, resultCode, data);
-+        mWindowAndroid.getIntentRequestTracker().onActivityResult(requestCode, resultCode, data);
-         if (requestCode == EDIT_BOOKMARK_REQUEST_CODE && resultCode == RESULT_OK) {
-             assumeNonNull(data);
-             BookmarkId bookmarkId =
-@@ -172,6 +178,21 @@ public class BookmarkActivity extends SnackbarActivity {
+@@ -179,6 +184,21 @@ public class BookmarkActivity extends SnackbarActivity {
          }
      }
  
@@ -213,17 +205,8 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -209,6 +209,8 @@ static_library("browser") {
-     "bad_message.h",
-     "bookmarks/bookmark_model_factory.cc",
-     "bookmarks/bookmark_model_factory.h",
-+    "bookmarks/bookmark_html_writer.cc",
-+    "bookmarks/bookmark_html_writer.h",
-     "bookmarks/chrome_bookmark_client.cc",
-     "bookmarks/chrome_bookmark_client.h",
-     "bookmarks/managed_bookmark_service_factory.cc",
-@@ -1507,6 +1509,13 @@ static_library("browser") {
-     "webdata_services/web_data_service_factory.cc",
+@@ -1327,6 +1327,13 @@ static_library("browser") {
+     "webauthn/webauthn_switches.cc",
    ]
  
 +  if (is_android) {
@@ -236,15 +219,6 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
    configs += [
      "//build/config/compiler:wexit_time_destructors",
      "//build/config:precompiled_headers",
-@@ -3684,8 +3693,6 @@ static_library("browser") {
-       "bookmarks/bookmark_expanded_state_tracker.h",
-       "bookmarks/bookmark_expanded_state_tracker_factory.cc",
-       "bookmarks/bookmark_expanded_state_tracker_factory.h",
--      "bookmarks/bookmark_html_writer.cc",
--      "bookmarks/bookmark_html_writer.h",
-       "bookmarks/bookmark_merged_surface_ordering_storage.cc",
-       "bookmarks/bookmark_merged_surface_ordering_storage.h",
-       "bookmarks/bookmark_merged_surface_service.cc",
 diff --git a/chrome/browser/bookmarks/android/bookmark_bridge.cc b/chrome/browser/bookmarks/android/bookmark_bridge.cc
 --- a/chrome/browser/bookmarks/android/bookmark_bridge.cc
 +++ b/chrome/browser/bookmarks/android/bookmark_bridge.cc
@@ -670,7 +644,7 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
 diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerMediator.java b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerMediator.java
 --- a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerMediator.java
 +++ b/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/browser/bookmarks/BookmarkManagerMediator.java
-@@ -67,6 +67,8 @@ import org.chromium.components.commerce.core.ShoppingService;
+@@ -68,6 +68,8 @@ import org.chromium.components.commerce.core.ShoppingService;
  import org.chromium.components.commerce.core.SubscriptionsObserver;
  import org.chromium.components.power_bookmarks.PowerBookmarkMeta;
  import org.chromium.components.power_bookmarks.PowerBookmarkType;
@@ -679,7 +653,7 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
  import org.chromium.ui.accessibility.AccessibilityState;
  import org.chromium.ui.base.Clipboard;
  import org.chromium.ui.base.DeviceFormFactor;
-@@ -89,6 +91,47 @@ import java.util.function.BooleanSupplier;
+@@ -91,6 +93,47 @@ import java.util.function.BooleanSupplier;
  import java.util.function.Consumer;
  import java.util.function.Predicate;
  
@@ -727,7 +701,7 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
  /** Responsible for BookmarkManager business logic. */
  // TODO(crbug.com/40256938): Remove BookmarkDelegate if possible.
  @NullMarked
-@@ -99,6 +142,9 @@ class BookmarkManagerMediator
+@@ -101,6 +144,9 @@ class BookmarkManagerMediator
  
      private static boolean sPreventLoadingForTesting;
  
@@ -737,7 +711,7 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
      /** Keeps track of whether drag is enabled / active for bookmark lists. */
      private class BookmarkDragStateDelegate implements DragStateDelegate {
          private BookmarkDelegate mBookmarkDelegate;
-@@ -641,6 +687,14 @@ class BookmarkManagerMediator
+@@ -643,6 +689,14 @@ class BookmarkManagerMediator
          mNativePage = nativePage;
      }
  
@@ -752,7 +726,7 @@ diff --git a/chrome/browser/bookmarks/android/java/src/org/chromium/chrome/brows
      /** See BookmarkManager(Coordinator)#updateForUrl */
      void updateForUrl(String url) {
          // Bookmark model is null if the manager has been destroyed.
-@@ -809,6 +863,235 @@ class BookmarkManagerMediator
+@@ -811,6 +865,235 @@ class BookmarkManagerMediator
          }
      }
  
@@ -1212,10 +1186,10 @@ diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browse
 diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browser/flags/android/chrome_feature_list.cc
 --- a/chrome/browser/flags/android/chrome_feature_list.cc
 +++ b/chrome/browser/flags/android/chrome_feature_list.cc
-@@ -264,6 +264,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
-     &kAvoidDoubleMultiwindowChanges,
+@@ -265,6 +265,7 @@ const base::Feature* const kFeaturesExposedToJava[] = {
      &kBlockIntentsWhileLocked,
      &kBookmarkPaneAndroid,
+     &kBottomSheetAsBrowserControls,
 +    &kBookmarksExportUseSaf,
      &kBrowserControlsDebugging,
      &kBrowserControlsEarlyResize,
@@ -1223,7 +1197,7 @@ diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browse
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
 --- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
 +++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
-@@ -700,6 +700,7 @@ public abstract class ChromeFeatureList {
+@@ -707,6 +707,7 @@ public abstract class ChromeFeatureList {
              "UseLibunwindstackNativeUnwinderAndroid";
      public static final String VERIFY_QWACS = "VerifyQWACs";
      public static final String VISITED_URL_RANKING_SERVICE = "VisitedURLRankingService";
@@ -1286,7 +1260,7 @@ diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/bro
  
      /** Whether Chrome is set as the default browser. Default value is false. */
      public static final String CHROME_DEFAULT_BROWSER = "applink.chrome_default_browser";
-@@ -1191,6 +1193,7 @@ public final class ChromePreferenceKeys {
+@@ -1208,6 +1210,7 @@ public final class ChromePreferenceKeys {
                  AUXILIARY_SEARCH_SCHEMA_VERSION,
                  APP_LAUNCH_LAST_KNOWN_ACTIVE_TAB_STATE,
                  APP_LAUNCH_SEARCH_ENGINE_HAD_LOGO,
@@ -1297,7 +1271,7 @@ diff --git a/chrome/browser/preferences/android/java/src/org/chromium/chrome/bro
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
-@@ -267,6 +267,24 @@ CHAR_LIMIT guidelines:
+@@ -271,6 +271,24 @@ CHAR_LIMIT guidelines:
        <message name="IDS_NOTIFICATION_CATEGORY_SITES" desc="Label for notifications from websites, within a list of notification categories. [CHAR_LIMIT=32]">
          Sites
        </message>
@@ -1427,7 +1401,7 @@ new file mode 100644
 diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java
 --- a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java
 +++ b/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java
-@@ -51,6 +51,7 @@ import org.chromium.build.annotations.Initializer;
+@@ -52,6 +52,7 @@ import org.chromium.build.annotations.Initializer;
  import org.chromium.build.annotations.NullMarked;
  import org.chromium.build.annotations.Nullable;
  import org.chromium.ui.R;
@@ -1435,7 +1409,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
  import org.chromium.ui.UiUtils;
  
  import java.io.File;
-@@ -74,6 +75,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -75,6 +76,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
      private static final String TAG = "SelectFileDialog";
      private static final String IMAGE_TYPE = "image";
      private static final String VIDEO_TYPE = "video";
@@ -1443,7 +1417,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
      private static final String AUDIO_TYPE = "audio";
      private static final String ALL_TYPES = "*/*";
      private static final String GENERIC_TYPE = "application/octet-stream";
-@@ -323,6 +325,17 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -324,6 +326,17 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
          mMimeTypes = convertToSupportedMimeTypes(mFileTypes);
      }
  
@@ -1461,7 +1435,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
      /**
       * Creates and starts an intent based on the passed fileTypes and capture value.
       *
-@@ -407,7 +420,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -408,7 +421,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
          List<String> missingPermissions = new ArrayList<>();
          String storagePermission = Manifest.permission.READ_EXTERNAL_STORAGE;
          boolean shouldUsePhotoPicker = shouldUsePhotoPicker();
@@ -1470,7 +1444,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
              // The permission scenario for accessing media has evolved a bit over the years:
              // Early on, READ_EXTERNAL_STORAGE was required to access media, but that permission was
              // later deprecated. In its place (starting with Android T) READ_MEDIA_IMAGES and
-@@ -460,7 +473,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -461,7 +474,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
  
                                  // TODO(finnur): Remove once we figure out the cause of
                                  // crbug.com/950024.
@@ -1479,7 +1453,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
                                      if (permissions.length != requestPermissions.length) {
                                          throw new RuntimeException(
                                                  String.format(
-@@ -477,7 +490,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -478,7 +491,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
                                      }
                                  }
  
@@ -1488,7 +1462,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
                                      if (permissions[i].equals(storagePermission)
                                              || permissions[i].equals(
                                                      Manifest.permission.READ_MEDIA_IMAGES)
-@@ -783,6 +796,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -789,6 +802,7 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
                  mimeTypes.add(mimeType);
              }
          }
@@ -1496,7 +1470,7 @@ diff --git a/ui/android/java/src/org/chromium/ui/base/SelectFileDialog.java b/ui
          return mimeTypes;
      }
  
-@@ -1168,6 +1182,10 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
+@@ -1174,6 +1188,10 @@ public class SelectFileDialog implements WindowAndroid.IntentCallback, PhotoPick
          return countAcceptTypesFor(superType) == mMimeTypes.size();
      }
  
@@ -1535,8 +1509,8 @@ diff --git a/ui/shell_dialogs/select_file_dialog.h b/ui/shell_dialogs/select_fil
 diff --git a/ui/shell_dialogs/select_file_dialog_android.cc b/ui/shell_dialogs/select_file_dialog_android.cc
 --- a/ui/shell_dialogs/select_file_dialog_android.cc
 +++ b/ui/shell_dialogs/select_file_dialog_android.cc
-@@ -196,6 +196,12 @@ void SelectFileDialogImpl::SelectFileImpl(Type type,
-       suggested_name.value(), owning_window->GetJavaObject());
+@@ -171,6 +171,12 @@ void SelectFileDialogImpl::SelectFileImpl(Type type,
+       owning_window->GetJavaObject());
  }
  
 +void SelectFileDialogImpl::ShowToast(const std::string& message) {
