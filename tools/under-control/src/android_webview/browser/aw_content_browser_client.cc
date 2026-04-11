@@ -39,6 +39,7 @@
 #include "android_webview/browser/network_service/aw_url_loader_throttle.h"
 #include "android_webview/browser/network_service/net_helpers.h"
 #include "android_webview/browser/prefetch/aw_prefetch_service_delegate.h"
+#include "android_webview/browser/safe_browsing/aw_advanced_protection_status_manager_bridge.h"
 #include "android_webview/browser/safe_browsing/aw_safe_browsing_navigation_throttle.h"
 #include "android_webview/browser/safe_browsing/aw_url_checker_delegate_impl.h"
 #include "android_webview/browser/supervised_user/aw_supervised_user_throttle.h"
@@ -200,7 +201,14 @@ base::WeakPtr<AsyncCheckTracker> GetAsyncCheckTracker(
 }  // anonymous namespace
 
 std::string GetProduct() {
-  return embedder_support::GetProductAndVersion();
+  // We cannot use `embedder_support::GetProductAndVersion()` here because that
+  // relies on base::FeatureList, which need not be initialized at this point -
+  // GetDefaultUserAgent can call this before browser startup is completed.
+  return base::CommandLine::ForCurrentProcess()->HasSwitch(
+             switches::kWebViewReduceUserAgentMinorVersion)
+             ? version_info::GetProductNameAndVersionForReducedUserAgent()
+             : std::string(
+                   version_info::GetProductNameAndVersionForUserAgent());
 }
 
 std::string GetUserAgent() {
@@ -211,14 +219,14 @@ std::string GetUserAgent() {
     product += " Mobile";
   }
 
-  if (base::FeatureList::IsEnabled(
-          features::kWebViewReduceUAAndroidVersionDeviceModel)) {
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWebViewReduceUAAndroidVersionDeviceModel)) {
     // The user-agent reduction feature for WebView, when enabled, should
     // produce a consistent, unified platform string to ensure predictable
-    // behavior. This hardcoded value prevents device-specific platform details
-    // (e.g., "X11; Linux" on desktop devices) from appearing in the reduced
-    // User-Agent. The "Linux; Android 10; K; wv" string matches the expected
-    // format for a reduced WebView User-Agent.
+    // behavior. This hardcoded value prevents device-specific platform
+    // details (e.g., "X11; Linux" on desktop devices) from appearing in the
+    // reduced User-Agent. The "Linux; Android 10; K; wv" string matches the
+    // expected format for a reduced WebView User-Agent.
     constexpr char kUnifiedPlatformOsInfoWebview[] = "Linux; Android 10; K; wv";
     return embedder_support::BuildUserAgentFromOSAndProduct(
         kUnifiedPlatformOsInfoWebview, product);
@@ -309,8 +317,21 @@ void AwContentBrowserClient::ConfigureNetworkContextParams(
   // Pass the mojo::PendingRemote<network::mojom::CookieManager> to
   // android_webview::CookieManager, so it can implement its APIs with this mojo
   // CookieManager.
-  aw_context->GetCookieManager()->SetMojoCookieManager(
-      std::move(cookie_manager_remote));
+  if (base::FeatureList::IsEnabled(
+          features::kWebViewNonBlockingCookieStoreHandoff)) {
+    // New non-blocking path with proper close before handoff.
+    mojo::PendingRemote<network::mojom::CookieStoreReadyCallback>
+        ready_callback;
+    network_context_params->cookie_store_ready_callback =
+        ready_callback.InitWithNewPipeAndPassReceiver();
+
+    aw_context->GetCookieManager()->SetMojoCookieManagerNonBlocking(
+        std::move(cookie_manager_remote), std::move(ready_callback));
+  } else {
+    // Original blocking path (for A/B comparison).
+    aw_context->GetCookieManager()->SetMojoCookieManager(
+        std::move(cookie_manager_remote));
+  }
 }
 
 void AwContentBrowserClient::InitBrowserContextStore() {
@@ -1523,6 +1544,10 @@ bool AwContentBrowserClient::ShouldAnimateBackForwardTransitions() {
 bool AwContentBrowserClient::OriginSupportsConcreteCrossOriginIsolation(
     const url::Origin& origin) {
   return false;
+}
+
+bool AwContentBrowserClient::IsAndroidAdvancedProtectionEnabled() {
+  return AwAdvancedProtectionStatusManagerBridge::IsUnderAdvancedProtection();
 }
 
 }  // namespace android_webview

@@ -75,31 +75,6 @@ void SetRuntimeFeatureDefaultsForPlatform(
   WebRuntimeFeatures::EnableCompositedSelectionUpdate(true);
 #endif
 
-#if BUILDFLAG(IS_APPLE)
-  const bool enable_canvas_2d_image_chromium =
-      command_line.HasSwitch(
-          blink::switches::kEnableGpuMemoryBufferCompositorResources) &&
-      !command_line.HasSwitch(switches::kDisable2dCanvasImageChromium) &&
-      !command_line.HasSwitch(switches::kDisableGpu) &&
-      base::FeatureList::IsEnabled(features::kCanvas2DImageChromium);
-#else
-  constexpr bool enable_canvas_2d_image_chromium = false;
-#endif
-  WebRuntimeFeatures::EnableCanvas2dImageChromium(
-      enable_canvas_2d_image_chromium);
-
-#if BUILDFLAG(IS_APPLE)
-  const bool enable_web_gl_image_chromium =
-      command_line.HasSwitch(
-          blink::switches::kEnableGpuMemoryBufferCompositorResources) &&
-      !command_line.HasSwitch(switches::kDisableWebGLImageChromium) &&
-      !command_line.HasSwitch(switches::kDisableGpu);
-#else
-  const bool enable_web_gl_image_chromium =
-      command_line.HasSwitch(switches::kEnableWebGLImageChromium);
-#endif
-  WebRuntimeFeatures::EnableWebGLImageChromium(enable_web_gl_image_chromium);
-
 #if BUILDFLAG(IS_ANDROID)
   if (command_line.HasSwitch(switches::kDisableMediaSessionAPI)) {
     WebRuntimeFeatures::EnableMediaSession(false);
@@ -412,9 +387,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(webnn::mojom::features::
                        kExperimentalWebMachineLearningNeuralNetwork),
            kSetOnlyIfOverridden},
-#if BUILDFLAG(IS_ANDROID)
-          {"WebAppLaunchQueue", raw_ref(features::kAndroidWebAppLaunchHandler)},
-#endif
           {"LocalNetworkAccessPermissionPolicy",
            raw_ref(network::features::kLocalNetworkAccessChecks)},
           {"LocalNetworkAccessSplitPermissions",
@@ -532,6 +504,8 @@ void SetCustomizedRuntimeFeaturesFromCombinedArgs(
       ui::NativeTheme::GetInstanceForWeb()->use_overlay_scrollbar());
 #endif
   WebRuntimeFeatures::EnableFluentScrollbars(ui::IsFluentScrollbarEnabled());
+  WebRuntimeFeatures::EnableDesktopAndroidScrollbars(
+      command_line.HasSwitch(blink::switches::kEnableDesktopAndroidScrollbars));
 
   // TODO(rodneyding): This is a rare case for a stable feature
   // Need to investigate more to determine whether to refactor it.
@@ -634,17 +608,6 @@ void ResolveInvalidConfigurations() {
         << network::features::kInterestGroupStorage.name << " in addition.";
     WebRuntimeFeatures::EnableAdInterestGroupAPI(false);
     WebRuntimeFeatures::EnableFledge(false);
-  }
-
-  // PermissionElement cannot be enabled without the support of the
-  // browser process.
-  if (!base::FeatureList::IsEnabled(blink::features::kPermissionElement)) {
-    LOG_IF(WARNING,
-           WebRuntimeFeatures::IsPermissionElementEnabledByRuntimeFlag())
-        << "PermissionElement cannot be enabled in this configuration. Use --"
-        << switches::kEnableFeatures << "="
-        << blink::features::kPermissionElement.name << " instead.";
-    WebRuntimeFeatures::EnablePermissionElement(false);
   }
 
   // UserMediaElement cannot be enabled without the support of the
