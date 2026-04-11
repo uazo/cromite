@@ -196,6 +196,8 @@
 #include "components/feed/content/renderer/rss_link_reader.h"
 #include "components/feed/feed_feature_list.h"
 #else
+#include "chrome/common/record_replay/record_replay_features.h"
+#include "chrome/renderer/record_replay/record_replay_agent.h"
 #include "chrome/renderer/searchbox/searchbox.h"
 #include "chrome/renderer/searchbox/searchbox_extension.h"
 #include "components/search/ntp_features.h"  // nogncheck
@@ -521,6 +523,10 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   // processes can't display it or read it. (see http://crbug.com/40309067 for
   // more context on why chrome-search scheme registration is skipped for the
   // instant process).
+  // TODO(crbug.com/40309067): When kInstantUsesSpareRenderer is shipped, the
+  // kInstantProcess command-line switch and all code that depends on it will be
+  // removed. Remove this display-isolation policy block as part of that
+  // cleanup.
   bool should_restrict_chrome_search_scheme =
       !command_line->HasSwitch(switches::kInstantProcess);
 
@@ -694,6 +700,13 @@ void ChromeContentRendererClient::RenderFrameCreated(
                       associated_interfaces);
   }
 
+#if !BUILDFLAG(IS_ANDROID)
+  if (base::FeatureList::IsEnabled(
+          record_replay::features::kRecordReplayBase)) {
+    new record_replay::RecordReplayAgent(render_frame, associated_interfaces);
+  }
+#endif
+
   if (content_capture::features::IsContentCaptureEnabled()) {
     new content_capture::ContentCaptureSender(render_frame,
                                               associated_interfaces);
@@ -759,7 +772,8 @@ void ChromeContentRendererClient::RenderFrameCreated(
   }
 #endif
 
-  if (base::FeatureList::IsEnabled(wallet::kWalletablePassDetection) &&
+  if (base::FeatureList::IsEnabled(
+          wallet::features::kWalletablePassDetection) &&
       render_frame->IsMainFrame()) {
     wallet::ImageExtractor::Create(render_frame, registry);
   }
@@ -1223,44 +1237,6 @@ ChromeContentRendererClient::GetProtocolHandlerSecurityLevel(
 #endif
 }
 
-void ChromeContentRendererClient::WaitForProcessReady() {
-#if !BUILDFLAG(IS_ANDROID)
-  if (!base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
-    return;
-  }
-
-  bool process_was_ready = chrome_observer_->IsProcessReady();
-  bool is_extension = IsStandaloneContentExtensionProcess();
-  base::UmaHistogramBoolean(
-      is_extension ? "Renderer.ProcessReadyWaitRequired.ExtensionProcess"
-                   : "Renderer.ProcessReadyWaitRequired.RegularProcess",
-      !process_was_ready);
-  if (process_was_ready) {
-    return;
-  }
-
-  base::TimeTicks start_time = base::TimeTicks::Now();
-  base::ScopedAllowBaseSyncPrimitivesOutsideBlockingScope allow_wait;
-  bool ready_within_timeout =
-      chrome_observer_->WaitForProcessReady(base::Seconds(5));
-  // Add DumpWithoutCrashing() if the process did not become ready after 5
-  // seconds. After the timeout, the wait is skipped and execution continues.
-  // TODO(http://crbug.com/434977609): Determine whether a crash should be
-  // triggered after a timeout, as this may pose a security risk.
-  if (!ready_within_timeout) {
-    SCOPED_CRASH_KEY_BOOL("WaitForProcessReady", "IsExtensionProcess",
-                          is_extension);
-    base::debug::DumpWithoutCrashing();
-  }
-
-  base::TimeDelta wait_duration = base::TimeTicks::Now() - start_time;
-  base::UmaHistogramTimes(
-      is_extension ? "Renderer.WaitTimeForProcessReady.ExtensionProcess"
-                   : "Renderer.WaitTimeForProcessReady.RegularProcess",
-      wait_duration);
-#endif  // !BUILDFLAG(IS_ANDROID)
-}
-
 void ChromeContentRendererClient::WillSendRequest(
     WebLocalFrame* frame,
     ui::PageTransition transition_type,
@@ -1482,6 +1458,8 @@ void ChromeContentRendererClient::
     blink::WebRuntimeFeatures::EnableAIWriterAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableLanguageDetectionAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableTranslationAPIForWorkers(true);
+    blink::WebRuntimeFeatures::EnableLanguageModelLegacyParamsAndAttributes(
+        true);
   }
 }
 
@@ -1533,12 +1511,14 @@ void ChromeContentRendererClient::WillEvaluateServiceWorkerOnWorkerThread(
 void ChromeContentRendererClient::DidStartServiceWorkerContextOnWorkerThread(
     int64_t service_worker_version_id,
     const GURL& service_worker_scope,
-    const GURL& script_url) {
+    const GURL& script_url,
+    const blink::ServiceWorkerToken& service_worker_token) {
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extensions::ExtensionsRendererClient::Get()
       ->dispatcher()
       ->DidStartServiceWorkerContextOnWorkerThread(
-          service_worker_version_id, service_worker_scope, script_url);
+          service_worker_version_id, service_worker_scope, script_url,
+          service_worker_token);
 #endif
 }
 
@@ -1546,12 +1526,14 @@ void ChromeContentRendererClient::WillDestroyServiceWorkerContextOnWorkerThread(
     v8::Local<v8::Context> context,
     int64_t service_worker_version_id,
     const GURL& service_worker_scope,
-    const GURL& script_url) {
+    const GURL& script_url,
+    const blink::ServiceWorkerToken& service_worker_token) {
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   extensions::ExtensionsRendererClient::Get()
       ->dispatcher()
       ->WillDestroyServiceWorkerContextOnWorkerThread(
-          context, service_worker_version_id, service_worker_scope, script_url);
+          context, service_worker_version_id, service_worker_scope, script_url,
+          service_worker_token);
 #endif
 }
 
@@ -1595,8 +1577,8 @@ bool ChromeContentRendererClient::IsSafeRedirectTarget(
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
   if (target_url.SchemeIs(extensions::kExtensionScheme)) {
     const extensions::Extension* extension =
-        extensions::RendererExtensionRegistry::Get()->GetByID(
-            target_url.GetHost());
+        extensions::RendererExtensionRegistry::Get()->GetExtensionOrAppByURL(
+            target_url, /*include_guid=*/true);
     if (!extension) {
       return false;
     }
