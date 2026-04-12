@@ -33,6 +33,7 @@
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/sequence_checker.h"
+#include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -565,7 +566,7 @@ bool GetFullDataFilePath(
 // processes.
 mojom::URLLoaderFactoryParamsPtr CreateURLLoaderFactoryParamsForPrefetch() {
   auto params = mojom::URLLoaderFactoryParams::New();
-  params->process_id = OriginatingProcess::browser();
+  params->process_id = OriginatingProcessId::browser();
   // We want to be able to use TrustedParams to set the IsolationInfo for each
   // prefetch separately, so make it trusted.
   // TODO(crbug.com/342445996): Maybe stop using TrustedParams and lock this
@@ -999,7 +1000,7 @@ void NetworkContext::CreateURLLoaderFactoryForCertNetFetcher(
   // TODO(crbug.com/40695068): investigate changing these params.
   auto url_loader_factory_params = mojom::URLLoaderFactoryParams::New();
   url_loader_factory_params->is_trusted = true;
-  url_loader_factory_params->process_id = OriginatingProcess::browser();
+  url_loader_factory_params->process_id = OriginatingProcessId::browser();
   url_loader_factory_params->automatically_assign_isolation_info = true;
   url_loader_factory_params->is_orb_enabled = false;
   if (url_request_context()->bound_network() !=
@@ -1021,6 +1022,12 @@ void NetworkContext::ActivateDohProbes() {
   doh_probes_request_ =
       url_request_context_->host_resolver()->CreateDohProbeRequest();
   doh_probes_request_->Start();
+
+  net::HostResolver* primary_resolver = url_request_context_->host_resolver();
+  canary_domain_service_ = primary_resolver->CreateCanaryDomainService();
+  if (canary_domain_service_) {
+    canary_domain_service_->Start();
+  }
 }
 
 void NetworkContext::SetClient(
@@ -1261,11 +1268,11 @@ void NetworkContext::Remove(WebTransport* transport) {
   }
 }
 
-void NetworkContext::LoaderCreated(const OriginatingProcess& process_id) {
+void NetworkContext::LoaderCreated(const OriginatingProcessId& process_id) {
   loader_count_per_process_[process_id] += 1;
 }
 
-void NetworkContext::LoaderDestroyed(const OriginatingProcess& process_id) {
+void NetworkContext::LoaderDestroyed(const OriginatingProcessId& process_id) {
   auto it = loader_count_per_process_.find(process_id);
   CHECK(it != loader_count_per_process_.end());
   it->second -= 1;
@@ -1274,7 +1281,7 @@ void NetworkContext::LoaderDestroyed(const OriginatingProcess& process_id) {
   }
 }
 
-bool NetworkContext::CanCreateLoader(const OriginatingProcess& process_id) {
+bool NetworkContext::CanCreateLoader(const OriginatingProcessId& process_id) {
   auto it = loader_count_per_process_.find(process_id);
   uint32_t count = (it == loader_count_per_process_.end() ? 0 : it->second);
   return count < max_loaders_per_process_;
@@ -1367,6 +1374,43 @@ void NetworkContext::ClearHttpCache(base::Time start_time,
                                     base::Time end_time,
                                     mojom::ClearDataFilterPtr filter,
                                     ClearHttpCacheCallback callback) {
+  if (base::FeatureList::IsEnabled(net::features::kLogicalClearHttpCache)) {
+    net::HttpCache* cache =
+        url_request_context_->http_transaction_factory()->GetCache();
+    if (cache) {
+      // Step 1: Add a logical filter to the HttpCache. This is near-instant
+      // and ensures that subsequent requests won't see invalidated data.
+      net::HttpCache::InvalidationFilter invalidation_filter;
+      invalidation_filter.begin_time = start_time;
+      // Cap the end_time to Now() so we don't accidentally invalidate future
+      // cache entries if the caller passes Time::Max().
+      invalidation_filter.end_time = std::min(end_time, base::Time::Now());
+      if (filter) {
+        invalidation_filter.filter_type =
+            ConvertClearDataFilterType(filter->type);
+        invalidation_filter.origins = base::flat_set<url::Origin>(
+            filter->origins.begin(), filter->origins.end());
+        invalidation_filter.domains = base::flat_set<std::string>(
+            filter->domains.begin(), filter->domains.end());
+      } else {
+        invalidation_filter.filter_type = net::UrlFilterType::kFalseIfMatches;
+      }
+      cache->AddInvalidationFilter(std::move(invalidation_filter));
+    }
+
+    // Step 2: Trigger the slow physical cleanup in the background. We use a
+    // no-op callback because the logical invalidation already satisfies
+    // the consistency requirements of the caller.
+    http_cache_data_removers_.push_back(HttpCacheDataRemover::CreateAndStart(
+        url_request_context_, std::move(filter), start_time, end_time,
+        base::BindOnce(&NetworkContext::OnHttpCacheCleared,
+                       base::Unretained(this), base::DoNothing())));
+
+    // Step 3: Respond to the caller immediately.
+    std::move(callback).Run();
+    return;
+  }
+
   // It's safe to use Unretained below as the HttpCacheDataRemover is owned by
   // |this| and guarantees it won't call its callback if deleted.
   http_cache_data_removers_.push_back(HttpCacheDataRemover::CreateAndStart(
@@ -1923,11 +1967,10 @@ void NetworkContext::ClearBadProxiesCache(
 void NetworkContext::CreateWebSocket(
     const GURL& url,
     const std::vector<std::string>& requested_protocols,
-    const net::SiteForCookies& site_for_cookies,
     net::StorageAccessApiStatus storage_access_api_status,
     const net::IsolationInfo& isolation_info,
     std::vector<mojom::HttpHeaderPtr> additional_headers,
-    const network::OriginatingProcess& process_id,
+    const network::OriginatingProcessId& process_id,
     const url::Origin& origin,
     network::mojom::ClientSecurityStatePtr client_security_state,
     uint32_t options,
@@ -1946,8 +1989,8 @@ void NetworkContext::CreateWebSocket(
   DCHECK(process_id);
 
   websocket_factory_->CreateWebSocket(
-      url, requested_protocols, site_for_cookies, storage_access_api_status,
-      isolation_info, std::move(additional_headers), process_id, origin,
+      url, requested_protocols, storage_access_api_status, isolation_info,
+      std::move(additional_headers), process_id, origin,
       std::move(client_security_state), options,
       static_cast<net::NetworkTrafficAnnotationTag>(traffic_annotation),
       std::move(handshake_client), std::move(url_loader_network_observer),
@@ -3360,7 +3403,7 @@ void NetworkContext::CreateTrustedUrlLoaderFactoryForNetworkService(
         url_loader_factory_pending_receiver) {
   auto url_loader_factory_params = mojom::URLLoaderFactoryParams::New();
   url_loader_factory_params->is_trusted = true;
-  url_loader_factory_params->process_id = OriginatingProcess::browser();
+  url_loader_factory_params->process_id = OriginatingProcessId::browser();
   CreateURLLoaderFactory(std::move(url_loader_factory_pending_receiver),
                          std::move(url_loader_factory_params));
 }
@@ -3609,7 +3652,8 @@ void NetworkContext::AddQuicHints(
 
 bool NetworkContext::IsNetworkForNonceAndUrlAllowed(
     const base::UnguessableToken& nonce,
-    const GURL& url) const {
+    const GURL& url,
+    bool is_redirect) const {
   // If network hasn't been revoked for the nonce, it's allowed.
   if (!network_revocation_nonces_.contains(nonce)) {
     return true;
@@ -3627,16 +3671,17 @@ bool NetworkContext::IsNetworkForNonceAndUrlAllowed(
     for (const std::unique_ptr<url_pattern::SimpleUrlPatternMatcher>& pattern :
          allowlisted_patterns) {
       if (pattern->Match(url)) {
-        return true;
+        // Redirects are blocked for URLs allowed through connection allowlists.
+        return !is_redirect;
       }
     }
   }
 
   // If network has been revoked for the nonce, but the url is exempted, it's
   // allowed.
-  if (network_revocation_exemptions_.contains(nonce) &&
-      network_revocation_exemptions_.find(nonce)->second.contains(
-          url.GetWithoutFilename())) {
+  if (auto it = network_revocation_exemptions_.find(nonce);
+      it != network_revocation_exemptions_.end() &&
+      it->second.contains(url.GetWithoutFilename())) {
     return true;
   }
   // The nonce was revoked and the url isn't exempted.
@@ -3650,16 +3695,16 @@ bool NetworkContext::IsHostResolutionForNonceAndHostAllowed(
     return true;
   }
 
-  if (!network_revocation_nonces_.contains(nonce)) {
+  auto it = network_revocation_nonces_.find(nonce);
+  if (it == network_revocation_nonces_.end()) {
     return true;
   }
 
   std::string host_fragment = host.is_host_port_pair()
                                   ? host.get_host_port_pair().host()
                                   : host.get_scheme_host_port().host();
-  GURL synthetic_url =
-      GURL(std::string(url::kHttpsScheme) +
-           std::string(url::kStandardSchemeSeparator) + host_fragment);
+  GURL synthetic_url = GURL(base::StrCat(
+      {url::kHttpsScheme, url::kStandardSchemeSeparator, host_fragment}));
   if (!synthetic_url.is_valid()) {
     return false;
   }
@@ -3669,7 +3714,7 @@ bool NetworkContext::IsHostResolutionForNonceAndHostAllowed(
   // we need to match `synthetic_url` against a host-only variant against each
   // URLPattern corresponding to `nonce`.
   const std::set<std::unique_ptr<url_pattern::SimpleUrlPatternMatcher>>&
-      allowlisted_patterns = network_revocation_nonces_.find(nonce)->second;
+      allowlisted_patterns = it->second;
   for (const std::unique_ptr<url_pattern::SimpleUrlPatternMatcher>& pattern :
        allowlisted_patterns) {
     if (pattern->HostOnlyMatch(synthetic_url)) {

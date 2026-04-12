@@ -512,7 +512,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
     if (lens::features::IsLensOverlayTranslateLanguagesFetchEnabled()) {
       profile_->GetDefaultStoragePartition()->ClearDataForOrigin(
           content::StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE,
-          /*quota_storage_remove_mask=*/0,
           GURL(chrome::kChromeUILensOverlayUntrustedURL), base::DoNothing());
     }
 #endif
@@ -698,8 +697,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
 
       profile_->GetDefaultStoragePartition()->ClearDataForOrigin(
           content::StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE,
-          /*quota_storage_remove_mask=*/0, GURL(chrome::kChromeUINewTabPageURL),
-          base::DoNothing());
+          GURL(chrome::kChromeUINewTabPageURL), base::DoNothing());
     }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -1405,10 +1403,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
             ->registrar_unsafe();
     for (const web_app::WebApp& web_app :
          web_app_registrar.GetAppsIncludingStubs()) {
-      if (!web_app_registrar.AppMatches(
-              web_app.app_id(),
-              web_app::WebAppFilter::IsIsolatedWebAppIncludingUninstalling()) ||
-          !filter.Run(web_app.scope())) {
+      if (!filter.Run(web_app.scope())) {
         continue;
       }
       std::vector<content::StoragePartitionConfig> partitions =
