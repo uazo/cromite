@@ -62,7 +62,6 @@ import androidx.browser.customtabs.CustomTabsIntent.CloseButtonPosition;
 import androidx.browser.customtabs.CustomTabsIntent.OpenInBrowserState;
 import androidx.browser.customtabs.CustomTabsSessionToken;
 import androidx.browser.customtabs.ExperimentalCustomContentAction;
-import androidx.browser.customtabs.ExperimentalOpenInBrowser;
 import androidx.browser.customtabs.TrustedWebUtils;
 import androidx.browser.trusted.FileHandlingData;
 import androidx.browser.trusted.LaunchHandlerClientMode;
@@ -94,6 +93,7 @@ import org.chromium.chrome.browser.customtabs.CustomTabsFeatureUsage.CustomTabsF
 import org.chromium.chrome.browser.firstrun.FirstRunStatus;
 import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
+import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.share.ShareUtils;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
@@ -309,7 +309,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         OpenInBrowserButtonState.OPEN_IN_BROWSER_STATE_DEFAULT
     })
     @Retention(RetentionPolicy.SOURCE)
-    @ExperimentalOpenInBrowser
     public @interface OpenInBrowserButtonState {
         int OPEN_IN_BROWSER_STATE_OFF = CustomTabsIntent.OPEN_IN_BROWSER_STATE_OFF;
         int OPEN_IN_BROWSER_STATE_ON = CustomTabsIntent.OPEN_IN_BROWSER_STATE_ON;
@@ -1056,7 +1055,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
      * the UI surface.
      *
      * @param type {@link CustomTabsUiType} value.
-     * @param incognito Whether the {@link CustomTabProfileType} is incongnito.
+     * @param incognito Whether the {@link CustomTabProfileType} is incognito.
      */
     public static boolean isOpenInBrowserDisallowed(int type, boolean incognito) {
         return !isOpenInBrowserAllowedForType(type)
@@ -1833,7 +1832,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         return mResolvedDisplayMode;
     }
 
-    @ExperimentalOpenInBrowser
     @Override
     public @OpenInBrowserState int getOpenInBrowserButtonState() {
         return mOpenInBrowserState;

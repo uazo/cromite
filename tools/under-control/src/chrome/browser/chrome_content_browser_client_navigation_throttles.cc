@@ -9,12 +9,14 @@
 #include "build/build_config.h"
 #include "build/buildflag.h"
 #include "chrome/browser/actor/actor_navigation_throttle.h"
+#include "chrome/browser/autocomplete/aim_eligibility_refresh_navigation_throttle.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/custom_handlers/chrome_protocol_handler_navigation_throttle.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/data_sharing/data_sharing_navigation_throttle.h"
 #include "chrome/browser/enterprise/data_protection/view_source_navigation_throttle.h"
 #include "chrome/browser/first_party_sets/first_party_sets_navigation_throttle.h"
+#include "chrome/browser/glic/glic_navigation_throttle.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/interstitials/enterprise_util.h"
 #include "chrome/browser/lookalikes/lookalike_url_navigation_throttle.h"
@@ -35,6 +37,7 @@
 #include "chrome/browser/ui/passwords/password_manager_navigation_throttle.h"
 #include "chrome/browser/ui/passwords/well_known_change_password_navigation_throttle.h"
 #include "chrome/browser/ui/web_applications/navigation_capturing_redirection_throttle.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "components/captive_portal/content/captive_portal_service.h"
@@ -94,9 +97,11 @@
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_navigation_throttle.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_navigation_throttle.h"
+#include "chrome/browser/ui/search/chrome_search_navigation_throttle.h"
 #include "chrome/browser/ui/search/new_tab_page_navigation_throttle.h"
 #include "chrome/browser/ui/web_applications/tabbed_web_app_navigation_throttle.h"
 #include "chrome/browser/ui/web_applications/webui_web_app_navigation_throttle.h"
+#include "chrome/browser/ui/webui/image/image_navigation_throttle.h"
 #include "chrome/browser/ui/webui/ntp_microsoft_auth/ntp_microsoft_auth_response_capture_navigation_throttle.h"
 #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_throttle.h"
 #endif  // BUILDFLAG(IS_ANDROID)
@@ -453,19 +458,32 @@ void CreateAndAddChromeThrottlesForNavigation(
 #endif  // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) ||
         // BUILDFLAG(IS_CHROMEOS)
 
+  // AimEligibilityRefreshNavigationThrottle must be registered before
+  // ContextualTasksNavigationThrottle so it can detect AIM URL navigations
+  // before ContextualTasksNavigationThrottle intercepts them.
+  AimEligibilityRefreshNavigationThrottle::MaybeCreateAndAdd(registry);
+
 #if !BUILDFLAG(IS_ANDROID)
-  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks)) {
+  if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks) ||
+      base::FeatureList::IsEnabled(
+          contextual_tasks::kContextualTasksUrlRedirectToAimUrl)) {
     contextual_tasks::ContextualTasksNavigationThrottle::MaybeCreateAndAdd(
         registry);
   }
 
   DevToolsWindow::MaybeCreateAndAddNavigationThrottle(registry);
 
+  if (base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
+    ChromeSearchNavigationThrottle::MaybeCreateAndAdd(registry);
+  }
+
   NewTabPageNavigationThrottle::MaybeCreateAndAdd(registry);
 
   web_app::TabbedWebAppNavigationThrottle::MaybeCreateAndAdd(registry);
 
   web_app::WebUIWebAppNavigationThrottle::MaybeCreateAndAdd(registry);
+
+  ImageNavigationThrottle::MaybeCreateAndAdd(registry);
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
@@ -591,10 +609,13 @@ void CreateAndAddChromeThrottlesForNavigation(
   web_app::IsolatedWebAppThrottle::MaybeCreateAndAdd(registry);
 
 #endif  // !BUILDFLAG(IS_ANDROID)
+
   actor::ActorNavigationThrottle::MaybeCreateAndAdd(registry);
 
   dom_distiller::DistillerPageWebContents::MaybeCreateAndAddNavigationThrottle(
       registry);
 
   dom_distiller::DistillerReferrerThrottle::MaybeCreateAndAdd(registry);
+
+  glic::GlicNavigationThrottle::MaybeCreateAndAdd(registry);
 }
