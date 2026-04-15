@@ -17,10 +17,13 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  base/allocator/partition_alloc_features.cc    |  3 ++
  base/allocator/partition_alloc_support.cc     | 30 ++++++++++++++-----
  .../partition_allocator/partition_alloc.gni   |  6 ++--
+ base/observer_list_types.cc                   | 11 +++++++
  build_overrides/partition_alloc.gni           |  3 +-
+ .../compositor/CompositorViewHolder.java      |  2 +-
+ .../layouts/LayoutManagerChromeTablet.java    | 12 ++++----
  .../Enable-Partition-Alloc-BRP-Checks.inc     | 11 +++++++
  .../platform/wtf/allocator/partitions.cc      | 10 +------
- 6 files changed, 43 insertions(+), 20 deletions(-)
+ 9 files changed, 61 insertions(+), 27 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc
 
 diff --git a/base/allocator/partition_alloc_features.cc b/base/allocator/partition_alloc_features.cc
@@ -131,6 +134,32 @@ diff --git a/base/allocator/partition_allocator/partition_alloc.gni b/base/alloc
  }
  
  # We want to provide assertions that guard against inconsistent build
+diff --git a/base/observer_list_types.cc b/base/observer_list_types.cc
+--- a/base/observer_list_types.cc
++++ b/base/observer_list_types.cc
+@@ -3,11 +3,22 @@
+ // found in the LICENSE file.
+ 
+ #include "base/observer_list_types.h"
++#include "base/logging.h"
++#include "base/debug/stack_trace.h"
+ 
+ namespace base {
+ 
+ CheckedObserver::CheckedObserver() = default;
+ CheckedObserver::~CheckedObserver() = default;
++  // If weak_ptr was invalidated then this attempt to iterate over the
++  // pointer is a UAF. Tip: If it's unclear where the `delete` occurred, try
++  // adding CHECK(!IsInObserverList()) to the ~CheckedObserver() (destructor)
++  // override. However, note that this is not always a bug: a destroyed
++  // observer can exist in an ObserverList so long as nothing iterates over
++  // the ObserverList before the list itself is destroyed.
++  // if(IsInObserverList()) {
++  //   LOG(INFO) << "--- ~CheckedObserver " << base::debug::StackTrace();
++  // }
+ 
+ bool CheckedObserver::IsInObserverList() const {
+   return factory_.HasWeakPtrs();
 diff --git a/build_overrides/partition_alloc.gni b/build_overrides/partition_alloc.gni
 --- a/build_overrides/partition_alloc.gni
 +++ b/build_overrides/partition_alloc.gni
@@ -151,6 +180,47 @@ diff --git a/build_overrides/partition_alloc.gni b/build_overrides/partition_all
  
  raw_ptr_zero_on_construct_default = true
  raw_ptr_zero_on_move_default = true
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
+@@ -719,8 +719,8 @@ public class CompositorViewHolder extends FrameLayout
+             mApplicationBottomInsetSupplier.getSupplier().removeObserver(mOnViewportInsetsChanged);
+         }
+ 
+-        mCompositorView.shutDown();
+         if (mLayoutManager != null) mLayoutManager.destroy();
++        mCompositorView.shutDown();
+         if (mOnscreenContentProvider != null) mOnscreenContentProvider.destroy();
+         if (mContentView != null) {
+             mContentView.removeOnHierarchyChangeListener(this);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromeTablet.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromeTablet.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromeTablet.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChromeTablet.java
+@@ -178,18 +178,18 @@ public class LayoutManagerChromeTablet extends LayoutManagerChrome {
+     @Override
+     @SuppressWarnings("NullAway")
+     public void destroy() {
+-        super.destroy();
++        if (mTabStripLayoutHelperManager != null) {
++            removeObserver(mTabStripLayoutHelperManager.getTabSwitcherObserver());
++            mTabStripLayoutHelperManager.destroy();
++            mTabStripLayoutHelperManager = null;
++        }
+ 
+         if (mLayerTitleCache != null) {
+             mLayerTitleCache.shutDown();
+             mLayerTitleCache = null;
+         }
+ 
+-        if (mTabStripLayoutHelperManager != null) {
+-            removeObserver(mTabStripLayoutHelperManager.getTabSwitcherObserver());
+-            mTabStripLayoutHelperManager.destroy();
+-            mTabStripLayoutHelperManager = null;
+-        }
++        super.destroy();
+     }
+ 
+     @Override
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc b/cromite_flags/chrome/browser/about_flags_cc/Enable-Partition-Alloc-BRP-Checks.inc
 new file mode 100644
 --- /dev/null
