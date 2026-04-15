@@ -65,7 +65,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../extensions/api/identity/web_auth_flow.h   |  4 +-
  .../browser/extensions/api/tabs/tabs_api.cc   |  3 +
  .../extensions/api/tabs/tabs_event_router.cc  | 22 ++++++-
- .../browser_extension_window_controller.cc    | 14 +++-
+ .../browser_extension_window_controller.cc    | 19 +++++-
  .../browser_extension_window_controller.h     |  6 +-
  .../extensions/extension_management.cc        |  8 ++-
  .../browser/extensions/extension_management.h |  2 +-
@@ -166,6 +166,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../render_frame_media_playback_options.cc    |  2 +-
  .../about_flags_cc/Extensions-Android.inc     | 12 ++++
  .../about_flags_cc/Webstore-protection.inc    |  8 +--
+ ...ntal-support-for-extensions-on-Android.inc |  1 +
  extensions/browser/BUILD.gn                   |  4 +-
  ...browser_context_keyed_service_factories.cc |  2 +-
  extensions/browser/api/system_cpu/BUILD.gn    |  2 +-
@@ -198,14 +199,17 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ui/base/device_form_factor_android.cc         |  2 +-
  ui/gl/features.gni                            |  2 +-
  ui/resources/ui_resources.grd                 |  2 +-
- ui/webui/resources/BUILD.gn                   |  4 +-
+ ui/webui/resources/BUILD.gn                   |  2 +-
+ .../cr_components/cr_shortcut_input/BUILD.gn  |  2 +-
+ .../cr_components/managed_footnote/BUILD.gn   |  2 +-
  ui/webui/resources/cr_elements/BUILD.gn       |  2 +-
  .../cr_elements/cr_toolbar/cr_toolbar.css     |  3 +
  ui/webui/resources/css/BUILD.gn               |  2 +-
- 190 files changed, 635 insertions(+), 308 deletions(-)
+ 193 files changed, 642 insertions(+), 309 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Enable-extensions-Android.grdp
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Extensions-Android.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Extensions-Android.inc
+ create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Experimental-support-for-extensions-on-Android.inc
 
 diff --git a/android_webview/BUILD.gn b/android_webview/BUILD.gn
 --- a/android_webview/BUILD.gn
@@ -764,7 +768,7 @@ diff --git a/chrome/app/theme/theme_resources.grd b/chrome/app/theme/theme_resou
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -7469,7 +7469,7 @@ static_library("browser") {
+@@ -7466,7 +7466,7 @@ static_library("browser") {
      deps += [ "//media/mojo/mojom:remoting" ]
    }
  
@@ -773,7 +777,7 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
      sources += [ "download/download_crx_util_android.cc" ]
    }
  
-@@ -7813,7 +7813,7 @@ static_library("browser") {
+@@ -7810,7 +7810,7 @@ static_library("browser") {
  
    # TODO(https://crbug.com/356905053): Add more dependencies here and merge this
    # block with the `enable_extensions` block above.
@@ -782,7 +786,7 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
      sources += [
        # TODO(https://crbug.com/356905053): These files are temporary workarounds
        # allow for a lightweight extensions runtime in desktop-android builds.
-@@ -8593,7 +8593,7 @@ static_library("browser_generated_files") {
+@@ -8590,7 +8590,7 @@ static_library("browser_generated_files") {
            [ "//chrome/browser/ui/webui/new_tab_page/foo:mojo_bindings" ]
      }
    }
@@ -1306,7 +1310,7 @@ diff --git a/chrome/browser/extensions/api/tabs/tabs_event_router.cc b/chrome/br
 diff --git a/chrome/browser/extensions/browser_extension_window_controller.cc b/chrome/browser/extensions/browser_extension_window_controller.cc
 --- a/chrome/browser/extensions/browser_extension_window_controller.cc
 +++ b/chrome/browser/extensions/browser_extension_window_controller.cc
-@@ -105,11 +105,14 @@ BrowserExtensionWindowController::BrowserExtensionWindowController(
+@@ -105,14 +105,22 @@ BrowserExtensionWindowController::BrowserExtensionWindowController(
  #if !BUILDFLAG(IS_ANDROID)
        window_(CHECK_DEREF(browser->GetBrowserForMigrationOnly()->window())),
  #endif  // !BUILDFLAG(IS_ANDROID)
@@ -1322,21 +1326,29 @@ diff --git a/chrome/browser/extensions/browser_extension_window_controller.cc b/
  }
  
  BrowserExtensionWindowController::~BrowserExtensionWindowController() {
-@@ -122,6 +125,13 @@ BrowserExtensionWindowController* BrowserExtensionWindowController::From(
++#if BUILDFLAG(IS_ANDROID)
++  if (tab_list_)
++    tab_list_->RemoveTabListInterfaceObserver(this);
++  tab_list_ = nullptr;
++#endif
+   WindowControllerList::GetInstance()->RemoveExtensionWindow(this);
+ }
+ 
+@@ -122,6 +130,13 @@ BrowserExtensionWindowController* BrowserExtensionWindowController::From(
        browser_window_interface->GetUnownedUserDataHost());
  }
  
 +void BrowserExtensionWindowController::OnTabListDestroyed(TabListInterface& tab_list) {
 +#if BUILDFLAG(IS_ANDROID)
 +  tab_list_->RemoveTabListInterfaceObserver(this);
-+#endif
 +  tab_list_ = nullptr;
++#endif
 +}
 +
  int BrowserExtensionWindowController::GetWindowId() const {
    return static_cast<int>(session_id_.id());
  }
-@@ -268,7 +278,7 @@ base::ListValue BrowserExtensionWindowController::CreateTabList(
+@@ -268,7 +283,7 @@ base::ListValue BrowserExtensionWindowController::CreateTabList(
          ExtensionTabUtil::GetScrubTabBehavior(extension, context, web_contents);
      tab_list.Append(
          ExtensionTabUtil::CreateTabObject(web_contents, scrub_tab_behavior,
@@ -1724,7 +1736,7 @@ diff --git a/chrome/browser/profiles/profile_destroyer.cc b/chrome/browser/profi
 diff --git a/chrome/browser/resources/BUILD.gn b/chrome/browser/resources/BUILD.gn
 --- a/chrome/browser/resources/BUILD.gn
 +++ b/chrome/browser/resources/BUILD.gn
-@@ -130,7 +130,7 @@ group("resources") {
+@@ -123,7 +123,7 @@ group("resources") {
      ]
    }
  
@@ -1949,8 +1961,8 @@ diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 +  if (is_desktop_android_cromite) {
      deps += [ "//chrome/browser/ui/android/extensions/windowing/internal" ]
    }
-   if (is_android) {
-@@ -2998,7 +2998,7 @@ static_library("ui") {
+ 
+@@ -2975,7 +2975,7 @@ static_library("ui") {
      allow_circular_includes_from += [ "//chrome/browser/ui/wallet" ]
    }
  
@@ -2598,7 +2610,7 @@ diff --git a/chrome/browser/ui/prefs/prefs_tab_helper.cc b/chrome/browser/ui/pre
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -185,7 +185,7 @@
+@@ -180,7 +180,7 @@
          // BUILDFLAG(IS_ANDROID)
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -2607,7 +2619,7 @@ diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/u
  #include "chrome/browser/ui/webui/discards/discards_ui.h"
  #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
          // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
-@@ -428,7 +428,7 @@ void RegisterChromeWebUIConfigs() {
+@@ -423,7 +423,7 @@ void RegisterChromeWebUIConfigs() {
          // BUILDFLAG(IS_ANDROID)
  
  #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
@@ -2671,7 +2683,7 @@ diff --git a/chrome/browser/ui/webui/discards/discards_ui.cc b/chrome/browser/ui
 diff --git a/chrome/chrome_paks.gni b/chrome/chrome_paks.gni
 --- a/chrome/chrome_paks.gni
 +++ b/chrome/chrome_paks.gni
-@@ -526,7 +526,7 @@ template("chrome_extra_paks") {
+@@ -515,7 +515,7 @@ template("chrome_extra_paks") {
        deps += [ "//chrome/browser/resources/app_settings:resources" ]
      }
  
@@ -3359,6 +3371,12 @@ diff --git a/cromite_flags/chrome/browser/about_flags_cc/Webstore-protection.inc
 -#endif // !BUILDFLAG(IS_ANDROID)
 -
  #endif // ifdef FLAG_SECTION
+diff --git a/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Experimental-support-for-extensions-on-Android.inc b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Experimental-support-for-extensions-on-Android.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Experimental-support-for-extensions-on-Android.inc
+@@ -0,0 +1 @@
++SET_CROMITE_FEATURE_DISABLED(kProcessRankPolicyAndroid);
 diff --git a/extensions/browser/BUILD.gn b/extensions/browser/BUILD.gn
 --- a/extensions/browser/BUILD.gn
 +++ b/extensions/browser/BUILD.gn
@@ -3901,24 +3919,39 @@ diff --git a/ui/resources/ui_resources.grd b/ui/resources/ui_resources.grd
 diff --git a/ui/webui/resources/BUILD.gn b/ui/webui/resources/BUILD.gn
 --- a/ui/webui/resources/BUILD.gn
 +++ b/ui/webui/resources/BUILD.gn
-@@ -67,7 +67,7 @@ generate_grd("build_grd") {
-       "$target_gen_dir/cr_components/theme_color_picker/resources.grdp",
-       "$root_gen_dir/third_party/polymer/v3_0/polymer_3_0_resources.grdp",
-     ]
--    if (!is_desktop_android) {
-+    if (!is_desktop_android_cromite) {
-       public_deps += [
-         "cr_components/cr_shortcut_input:build_grdp",
-         "cr_components/managed_footnote:build_grdp",
-@@ -78,7 +78,7 @@ generate_grd("build_grd") {
-       ]
-     }
-   }
+@@ -50,7 +50,7 @@ generate_grd("build_grd") {
+     "$target_gen_dir/mojo/resources.grdp",
+   ]
+ 
 -  if ((!is_android && !is_ios) || is_desktop_android) {
 +  if ((!is_android && !is_ios) || is_desktop_android_cromite) {
      public_deps += [
        "cr_components/cr_shortcut_input:build_grdp",
        "cr_components/managed_footnote:build_grdp",
+diff --git a/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn b/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn
+--- a/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn
++++ b/ui/webui/resources/cr_components/cr_shortcut_input/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert((!is_android && !is_ios) || is_desktop_android)
++assert((!is_android && !is_ios) || is_desktop_android_cromite)
+ 
+ build_webui("build") {
+   grd_prefix = "cr_components_cr_shortcut_input"
+diff --git a/ui/webui/resources/cr_components/managed_footnote/BUILD.gn b/ui/webui/resources/cr_components/managed_footnote/BUILD.gn
+--- a/ui/webui/resources/cr_components/managed_footnote/BUILD.gn
++++ b/ui/webui/resources/cr_components/managed_footnote/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//ui/webui/resources/tools/build_webui.gni")
+ 
+-assert((!is_android && !is_ios) || is_desktop_android)
++assert((!is_android && !is_ios) || is_desktop_android_cromite)
+ 
+ build_webui("build") {
+   grd_prefix = "cr_components_managed_footnote"
 diff --git a/ui/webui/resources/cr_elements/BUILD.gn b/ui/webui/resources/cr_elements/BUILD.gn
 --- a/ui/webui/resources/cr_elements/BUILD.gn
 +++ b/ui/webui/resources/cr_elements/BUILD.gn
@@ -3926,7 +3959,7 @@ diff --git a/ui/webui/resources/cr_elements/BUILD.gn b/ui/webui/resources/cr_ele
      ]
    }
  
--  if ((!is_ios) || is_desktop_android) {
+-  if ((!is_android && !is_ios) || is_desktop_android) {
 +  if ((!is_ios) || is_desktop_android_cromite) {
      static_files = [ "cr_a11y_announcer/cr_a11y_announcer.css" ]
      ts_files += [
