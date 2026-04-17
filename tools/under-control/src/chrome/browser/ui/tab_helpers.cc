@@ -32,9 +32,12 @@
 #include "chrome/browser/file_system_access/file_system_access_features.h"
 #include "chrome/browser/file_system_access/file_system_access_permission_request_manager.h"
 #include "chrome/browser/file_system_access/file_system_access_tab_helper.h"
+#include "chrome/browser/finds/core/finds_tab_helper.h"
+#include "chrome/browser/finds/finds_service_factory.h"
 #include "chrome/browser/history/history_tab_helper.h"
 #include "chrome/browser/history/top_sites_factory.h"
 #include "chrome/browser/history_clusters/history_clusters_tab_helper.h"
+#include "chrome/browser/history_embeddings/history_embeddings_service_factory.h"
 #include "chrome/browser/history_embeddings/history_embeddings_tab_helper.h"
 #include "chrome/browser/image_fetcher/image_fetcher_service_factory.h"
 #include "chrome/browser/login_detection/login_detection_tab_helper.h"
@@ -442,9 +445,24 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
       download::NavigationMonitorFactory::GetForKey(profile->GetProfileKey()));
   history::WebContentsTopSitesObserver::CreateForWebContents(
       web_contents, TopSitesFactory::GetForProfile(profile).get());
-  HistoryTabHelper::CreateForWebContents(web_contents);
-  HistoryClustersTabHelper::CreateForWebContents(web_contents);
-  HistoryEmbeddingsTabHelper::CreateForWebContents(web_contents);
+  {
+    auto* history_tab_helper =
+        HistoryTabHelper::GetOrCreateForWebContents(web_contents);
+    HistoryClustersTabHelper::CreateForWebContents(web_contents,
+                                                   history_tab_helper);
+    if (HistoryEmbeddingsServiceFactory::GetForProfile(profile)) {
+      HistoryEmbeddingsTabHelper::CreateForWebContents(web_contents);
+      auto* history_embeddings_tab_helper =
+          HistoryEmbeddingsTabHelper::FromWebContents(web_contents);
+      if (history_tab_helper && history_embeddings_tab_helper) {
+        history_embeddings_tab_helper->SetHistoryTabHelperSubscription(
+            history_tab_helper->RegisterOnUpdatedHistoryForNavigationCallback(
+                base::BindRepeating(
+                    &HistoryEmbeddingsTabHelper::OnUpdatedHistoryForNavigation,
+                    history_embeddings_tab_helper->GetWeakPtr())));
+      }
+    }
+  }
   HttpsOnlyModeTabHelper::CreateForWebContents(web_contents);
   webapps::InstallableManager::CreateForWebContents(web_contents);
   login_detection::LoginDetectionTabHelper::MaybeCreateForWebContents(
@@ -617,6 +635,11 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
                           *web_contents));
   }
   ContextMenuHelper::CreateForWebContents(web_contents);
+
+  if (base::FeatureList::IsEnabled(chrome::android::kChromeFinds)) {
+    finds::FindsTabHelper::CreateForWebContents(
+        web_contents, finds::FindsServiceFactory::GetForProfile(profile));
+  }
 
   if (base::FeatureList::IsEnabled(
           page_load_metrics::features::kBeaconLeakageLogging)) {
