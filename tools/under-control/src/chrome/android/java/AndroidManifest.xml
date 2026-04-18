@@ -72,11 +72,8 @@ by a child template that "extends" this file.
     <uses-permission android:name="android.permission.CAPTURE_KEYBOARD" />
     <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    {% set is_desktop_android = is_desktop_android|default(0) %}
-    {% if is_desktop_android == "true" %}
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    {% endif %}
     {% set enable_screen_capture = enable_screen_capture|default(0) %}
     {% if enable_screen_capture == "true" %}
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
@@ -125,6 +122,12 @@ by a child template that "extends" this file.
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_QUERY_CANDIDATE_CREDENTIALS"/>
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ALLOWED_PROVIDERS"/>
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN"/>
+
+    <!-- Permission for reading the Advanced Protection Mode status. -->
+    <uses-permission android:name="android.permission.QUERY_ADVANCED_PROTECTION_MODE"/>
+
+    <!-- Needed for allowing cross-app and cross-profile communication over the loopback interface. -->
+    <uses-permission android:name="android.permission.USE_LOOPBACK_INTERFACE"/>
 
     {% set enable_vr = enable_vr|default(0) %}
     {% if enable_vr == "true" %}
@@ -229,7 +232,6 @@ by a child template that "extends" this file.
         android:allowBackup="false"
         {% endif %}
         android:networkSecurityConfig="@xml/network_security_config"
-        android:allowAudioPlaybackCapture="false"
         android:appComponentFactory="org.chromium.chrome.browser.base.SplitCompatAppComponentFactory"
         android:enableOnBackInvokedCallback="true"
         {% if javaless_renderers is defined %}
@@ -409,7 +411,7 @@ by a child template that "extends" this file.
             android:theme="@style/Theme.Chromium.Activity"
             android:excludeFromRecents="true"
             android:configChanges=
-                       "screenSize|smallestScreenSize|screenLayout|orientation"
+                       "screenSize|smallestScreenSize|screenLayout|orientation|density|uiMode"
             {{ self.supports_video_persistence() }}
         >
         </activity>
@@ -523,6 +525,16 @@ by a child template that "extends" this file.
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.LOCALE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Actor related -->
+        <receiver android:name="org.chromium.chrome.browser.actor.ActorBroadcastReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.chromium.chrome.browser.actor.ACTION_PAUSE" />
+                <action android:name="org.chromium.chrome.browser.actor.ACTION_RESUME" />
+                <action android:name="org.chromium.chrome.browser.actor.ACTION_CANCEL" />
             </intent-filter>
         </receiver>
 
@@ -687,7 +699,7 @@ by a child template that "extends" this file.
         </activity>
         <activity
             android:name="org.chromium.chrome.browser.chrome_item_picker.ChromeItemPickerActivity"
-            android:theme="@style/Theme.Chromium.WithWindowAnimation"
+            android:theme="@style/Theme.Chromium.Activity.FakeTranslucent"
             android:exported="false"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|mcc|mnc|screenLayout|smallestScreenSize|uiMode">
         </activity>
@@ -914,6 +926,11 @@ by a child template that "extends" this file.
             android:isolatedProcess="true"
             android:process=":decoder_service" />
 
+        <!-- Actor foreground service -->
+        <service android:name="org.chromium.chrome.browser.actor.ActorForegroundService"
+           android:foregroundServiceType="dataSync" android:exported="false">
+        </service>
+
         <!-- Download foreground service -->
         <service android:name="org.chromium.chrome.browser.download.DownloadForegroundService"
            android:foregroundServiceType="dataSync" android:exported="false">
@@ -1115,6 +1132,7 @@ by a child template that "extends" this file.
 
         <activity
             android:name="org.chromium.chrome.browser.notifications.NotificationIntentInterceptor$TrampolineActivity"
+            android:taskAffinity=""
             android:theme="@style/Theme.BrowserUI.Translucent.NoTitleBar"
             android:exported="false"
             android:autoRemoveFromRecents="true"
@@ -1165,12 +1183,10 @@ by a child template that "extends" this file.
             android:exported="false"/>
 
         <service android:name="org.chromium.chrome.browser.media.MediaCaptureNotificationService"
-            {% if is_desktop_android == "true" and enable_screen_capture == "true" %}
+            {% if enable_screen_capture == "true" %}
             android:foregroundServiceType="camera|microphone|mediaProjection|mediaPlayback"
-            {% elif is_desktop_android == "true" %}
+            {% else %}
             android:foregroundServiceType="camera|microphone"
-            {% elif enable_screen_capture == "true" %}
-            android:foregroundServiceType="mediaProjection|mediaPlayback"
             {% endif %}
             android:exported="false"/>
         <service android:name="org.chromium.chrome.browser.media.ui.ChromeMediaNotificationControllerServices$PlaybackListenerService"
@@ -1277,6 +1293,10 @@ by a child template that "extends" this file.
 
       <!-- NOTE: If you change the value of "android:process" for the below services,
            you also need to update kHelperProcessExecutableName in chrome_constants.cc. -->
+      <!-- NOTE: num_sandboxed_services is simply the number of name slots available,
+           and not a limit on the number of sandboxed processes that can be created.
+           In practice, many fewer slots are used, and process names are often reused,
+           such as many processes named with the suffix ":sandboxed_process0". -->
       {% set num_sandboxed_services = 40 %}
       <meta-data android:name="org.chromium.content.browser.NUM_SANDBOXED_SERVICES"
           android:value="{{ num_sandboxed_services }}"/>
