@@ -5485,6 +5485,11 @@ const FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kSubmenusTabContextMenuLffTabStripDescription,
      kOsAndroid,
      FEATURE_VALUE_TYPE(chrome::android::kSubmenusTabContextMenuLffTabStrip)},
+    {"enable-toolbar-swipe-on-non-desktop-lff",
+     flag_descriptions::kEnableToolbarSwipeOnNonDesktopLffName,
+     flag_descriptions::kEnableToolbarSwipeOnNonDesktopLffDescription,
+     kOsAndroid,
+     FEATURE_VALUE_TYPE(chrome::android::kEnableToolbarSwipeOnNonDesktopLff)},
 #endif  // BUILDFLAG(IS_ANDROID)
     {"in-product-help-demo-mode-choice",
      flag_descriptions::kInProductHelpDemoModeChoiceName,
@@ -8886,6 +8891,11 @@ const FeatureEntry kFeatureEntries[] = {
      flag_descriptions::kLensEnableSendRawFileMediaTypesName,
      flag_descriptions::kLensEnableSendRawFileMediaTypesDescription, kOsAll,
      FEATURE_VALUE_TYPE(lens::features::kLensSendRawFileMediaTypes)},
+
+    {"lens-enable-urls-in-composeboxes",
+     flag_descriptions::kLensEnableSendUrlsInComposeboxesName,
+     flag_descriptions::kLensEnableSendUrlsInComposeboxesDescription, kOsAll,
+     FEATURE_VALUE_TYPE(lens::features::kLensSendUrlsInComposeboxes)},
 
     {flag_descriptions::kEnableLensStandaloneFlagId,
      flag_descriptions::kEnableLensStandaloneName,
