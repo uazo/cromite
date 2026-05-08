@@ -9,21 +9,19 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
  chrome/android/BUILD.gn                       |  2 -
  .../android/java/res/xml/main_preferences.xml |  5 ---
- .../AppMenuPropertiesDelegateImpl.java        | 11 -----
  .../search/SearchIndexProviderRegistry.java   |  1 -
  .../TabbedAdaptiveToolbarBehavior.java        |  8 ----
- .../TabbedAppMenuPropertiesDelegate.java      | 13 +-----
- .../tabbed_mode/TabbedRootUiCoordinator.java  |  3 +-
+ .../TabbedAppMenuPropertiesDelegate.java      |  8 +---
+ .../tabbed_mode/TabbedRootUiCoordinator.java  |  4 +-
  chrome/browser/BUILD.gn                       |  2 -
  chrome/browser/actor/BUILD.gn                 |  3 --
  chrome/browser/android/tab_features.cc        |  4 ++
  chrome/browser/android/tab_features.h         |  4 ++
- .../contextual_cueing_helper.cc               |  2 +
- .../contextual_cueing_page_data.cc            |  3 ++
  .../api/pdf_viewer_private/BUILD.gn           |  3 --
  .../pdf_viewer_private_api.cc                 | 43 +------------------
  chrome/browser/glic/BUILD.gn                  |  2 +-
  chrome/browser/glic/android/BUILD.gn          |  2 +-
+ chrome/browser/glic/public/glic_enabling.cc   |  1 +
  chrome/browser/pdf/BUILD.gn                   |  1 -
  chrome/browser/sync/BUILD.gn                  |  4 +-
  chrome/browser/sync/test/integration/BUILD.gn |  2 +-
@@ -35,12 +33,12 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  chrome/common/features.gni                    |  2 +
  chrome/test/BUILD.gn                          |  2 +-
  components/browser_sync/BUILD.gn              |  2 +-
- 28 files changed, 32 insertions(+), 99 deletions(-)
+ 26 files changed, 27 insertions(+), 85 deletions(-)
 
 diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 --- a/chrome/android/BUILD.gn
 +++ b/chrome/android/BUILD.gn
-@@ -374,8 +374,6 @@ if (_is_default_toolchain) {
+@@ -372,8 +372,6 @@ if (_is_default_toolchain) {
        "//chrome/browser/creator/android:java",
        "//chrome/browser/data_sharing:factory_java",
        "//chrome/browser/data_sharing:instant_message_delegate_factory_java",
@@ -52,39 +50,18 @@ diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
 diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/java/res/xml/main_preferences.xml
 --- a/chrome/android/java/res/xml/main_preferences.xml
 +++ b/chrome/android/java/res/xml/main_preferences.xml
-@@ -100,11 +100,6 @@ found in the LICENSE file.
-         android:order="18"
+@@ -106,11 +106,6 @@ found in the LICENSE file.
+         android:order="19"
          android:title="@string/tabs_settings_title"
          app:isPreferenceVisible="false"/>
 -    <Preference
 -        android:fragment="org.chromium.chrome.browser.glic.GlicSettings"
 -        android:key="glic"
--        android:order="19"
+-        android:order="20"
 -        android:title="@string/glic_button_entrypoint_label"/>
      <Preference
          android:fragment="org.chromium.chrome.browser.homepage.settings.HomepageSettings"
          android:key="homepage"
-diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
---- a/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
-+++ b/chrome/android/java/src/org/chromium/chrome/browser/app/appmenu/AppMenuPropertiesDelegateImpl.java
-@@ -739,17 +739,6 @@ public abstract class AppMenuPropertiesDelegateImpl implements AppMenuProperties
-         return downloadButton;
-     }
- 
--    protected PropertyModel buildGlicActionModel(@Nullable Tab currentTab) {
--        PropertyModel glicButton =
--                buildModelForIcon(
--                        R.id.glic_menu_id,
--                        R.string.glic_button_entrypoint_ask_gemini_label,
--                        R.string.glic_button_entrypoint_label,
--                        R.drawable.ic_spark_24dp);
--        glicButton.set(AppMenuItemProperties.ENABLED, true);
--        return glicButton;
--    }
--
-     /** Build the PropertyModel for the page info action. */
-     protected PropertyModel buildPageInfoModel(@Nullable Tab currentTab) {
-         PropertyModel pageInfoButton =
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/settings/search/SearchIndexProviderRegistry.java
@@ -115,7 +92,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
 -            controller.addButtonVariant(
 -                    AdaptiveToolbarButtonVariant.GLIC,
 -                    new GlicToolbarButtonController(
--                            mContext, mActivityTabProvider, mToggleGlicCallback));
+-                            mContext, mActivityTabProvider, mToggleGlicCallback, trackerSupplier));
 -        }
 -
          mRegisterVoiceSearchRunnable.run();
@@ -124,20 +101,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
-@@ -237,11 +237,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
-             iconModels.add(buildForwardActionModel(currentTab));
-             iconModels.add(buildBookmarkActionModel(currentTab));
+@@ -248,7 +248,6 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
              iconModels.add(buildDownloadActionModel(currentTab));
--            if (ChromeFeatureList.sGlic.isEnabled()) {
--                iconModels.add(buildGlicActionModel(currentTab));
--            } else {
--                iconModels.add(buildPageInfoModel(currentTab));
+             if (!ChromeFeatureList.sThreeDotMenuBackButton.isEnabled()) {
+                 iconModels.add(buildPageInfoModel(currentTab));
 -            }
-+            iconModels.add(buildPageInfoModel(currentTab));
  
              iconModels.add(buildReloadModel(currentTab));
  
-@@ -1399,12 +1395,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+@@ -1411,12 +1410,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
                  || !ChromeFeatureList.sGlic.isEnabled()) {
              return null;
          }
@@ -154,7 +126,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedRootUiCoordinator.java
-@@ -107,7 +107,6 @@ import org.chromium.chrome.browser.gesturenav.BackActionDelegate;
+@@ -111,7 +111,6 @@ import org.chromium.chrome.browser.gesturenav.GestureUserEducationIphController;
  import org.chromium.chrome.browser.gesturenav.HistoryNavigationCoordinator;
  import org.chromium.chrome.browser.gesturenav.NavigationSheet;
  import org.chromium.chrome.browser.gesturenav.TabbedSheetDelegate;
@@ -162,11 +134,12 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
  import org.chromium.chrome.browser.history.HistoryManagerUtils;
  import org.chromium.chrome.browser.hub.HubManager;
  import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthCoordinatorFactory;
-@@ -2255,7 +2254,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
+@@ -2394,8 +2393,7 @@ public class TabbedRootUiCoordinator extends RootUiCoordinator {
          Profile profile = mTabModelSelectorSupplier.get().getCurrentModel().getProfile();
          assert profile != null;
  
--        return GlicKeyedServiceHandler.toggleGlic(profile, mChromeAndroidTaskSupplier.get());
+-        return GlicKeyedServiceHandler.toggleGlic(
+-                profile, mChromeAndroidTaskSupplier.get(), preventClose);
 +        return false;
      }
  
@@ -174,7 +147,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/Tab
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -3274,8 +3274,6 @@ static_library("browser") {
+@@ -3083,8 +3083,6 @@ static_library("browser") {
        "//chrome/browser/flags:flags_android_impl",
        "//chrome/browser/gesturenav/android:gesturenav",
        "//chrome/browser/gesturenav/android:impl",
@@ -186,7 +159,7 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 diff --git a/chrome/browser/actor/BUILD.gn b/chrome/browser/actor/BUILD.gn
 --- a/chrome/browser/actor/BUILD.gn
 +++ b/chrome/browser/actor/BUILD.gn
-@@ -399,9 +399,6 @@ source_set("browser_tests") {
+@@ -402,9 +402,6 @@ source_set("browser_tests") {
      ":tools_test_support",
      "ui:event_dispatcher",
      "//chrome/browser/affiliations",
@@ -199,27 +172,30 @@ diff --git a/chrome/browser/actor/BUILD.gn b/chrome/browser/actor/BUILD.gn
 diff --git a/chrome/browser/android/tab_features.cc b/chrome/browser/android/tab_features.cc
 --- a/chrome/browser/android/tab_features.cc
 +++ b/chrome/browser/android/tab_features.cc
-@@ -9,8 +9,10 @@
- #include "chrome/browser/actor/actor_tab_data.h"
+@@ -12,9 +12,11 @@
  #include "chrome/browser/actor/android/ui/actor_ui_tab_controller_android.h"
+ #include "chrome/browser/glic/public/features.h"
  #include "chrome/browser/glic/public/glic_enabling.h"
 +#if BUILDFLAG(ENABLE_GLIC)
  #include "chrome/browser/glic/public/widget/glic_side_panel_coordinator_android.h"
+ #include "chrome/browser/glic/public/widget/glic_side_panel_coordinator_desktop_android.h"
  #include "chrome/browser/glic/service/glic_instance_helper.h"
 +#endif
  #include "chrome/browser/net/qwac_web_contents_observer.h"
  #include "chrome/browser/preloading/new_tab_page_preload/new_tab_page_preload_pipeline_manager.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -62,11 +64,13 @@ TabFeatures::TabFeatures(content::WebContents* web_contents, Profile* profile) {
+@@ -73,6 +75,7 @@ TabFeatures::TabFeatures(content::WebContents* web_contents, Profile* profile) {
        GetUserDataFactory().CreateInstance<lens::TabContextualizationController>(
            *tab, tab);
  
 +#if BUILDFLAG(ENABLE_GLIC)
    glic_instance_helper_ =
        GetUserDataFactory().CreateInstance<glic::GlicInstanceHelper>(*tab, tab);
-   glic_side_panel_coordinator_ =
-       GetUserDataFactory()
-           .CreateInstance<glic::GlicSidePanelCoordinatorAndroid>(*tab, tab);
+   if (AndroidSidePanelEnabledFn::IsEnabled()) {
+@@ -85,6 +88,7 @@ TabFeatures::TabFeatures(content::WebContents* web_contents, Profile* profile) {
+         GetUserDataFactory()
+             .CreateInstance<glic::GlicSidePanelCoordinatorAndroid>(*tab, tab);
+   }
 +#endif
  }
  
@@ -227,7 +203,7 @@ diff --git a/chrome/browser/android/tab_features.cc b/chrome/browser/android/tab
 diff --git a/chrome/browser/android/tab_features.h b/chrome/browser/android/tab_features.h
 --- a/chrome/browser/android/tab_features.h
 +++ b/chrome/browser/android/tab_features.h
-@@ -26,10 +26,12 @@ namespace content {
+@@ -27,10 +27,12 @@ namespace content {
  class WebContents;
  }  // namespace content
  
@@ -240,7 +216,7 @@ diff --git a/chrome/browser/android/tab_features.h b/chrome/browser/android/tab_
  
  namespace sync_sessions {
  class SyncSessionsRouterTabHelper;
-@@ -72,8 +74,10 @@ class TabFeatures {
+@@ -75,8 +77,10 @@ class TabFeatures {
    std::unique_ptr<lens::TabContextualizationController>
        tab_contextualization_controller_;
  
@@ -251,52 +227,6 @@ diff --git a/chrome/browser/android/tab_features.h b/chrome/browser/android/tab_
    std::unique_ptr<actor::ui::ActorUiTabControllerInterface>
        actor_ui_tab_controller_;
  };
-diff --git a/chrome/browser/contextual_cueing/contextual_cueing_helper.cc b/chrome/browser/contextual_cueing/contextual_cueing_helper.cc
---- a/chrome/browser/contextual_cueing/contextual_cueing_helper.cc
-+++ b/chrome/browser/contextual_cueing/contextual_cueing_helper.cc
-@@ -419,6 +419,7 @@ void ContextualCueingHelper::OnCueingDecision(
-     return;
-   }
- 
-+#if BUILDFLAG(ENABLE_GLIC)
-   // Handle side panel auto-open case: bypass nudge and open panel directly.
-   // If auto-open fails or is disabled, falls through to standard nudge.
-   if (should_open_side_panel) {
-@@ -454,6 +455,7 @@ void ContextualCueingHelper::OnCueingDecision(
-                           contextual_cueing_service_->GetWeakPtr(),
-                           web_contents(), document_available_time,
-                           decision_result->is_dynamic));
-+#endif
- }
- 
- // static
-diff --git a/chrome/browser/contextual_cueing/contextual_cueing_page_data.cc b/chrome/browser/contextual_cueing/contextual_cueing_page_data.cc
---- a/chrome/browser/contextual_cueing/contextual_cueing_page_data.cc
-+++ b/chrome/browser/contextual_cueing/contextual_cueing_page_data.cc
-@@ -10,6 +10,7 @@
- #include "base/strings/string_util.h"
- #include "base/task/single_thread_task_runner.h"
- #include "chrome/browser/glic/public/features.h"
-+#include "chrome/common/buildflags.h"
- #include "chrome/browser/contextual_cueing/contextual_cueing_features.h"
- #include "chrome/grit/generated_resources.h"
- #include "content/public/browser/web_contents.h"
-@@ -95,6 +96,7 @@ PAGE_USER_DATA_KEY_IMPL(ContextualCueingPageData);
- 
- // Attempts to find the matching cueing configuration.
- void ContextualCueingPageData::FindMatchingConfig() {
-+#if BUILDFLAG(ENABLE_GLIC)
-   CHECK(cueing_decision_callback_);
-   bool needs_pdf_page_count = false;
-   bool needs_page_content = false;
-@@ -159,6 +161,7 @@ void ContextualCueingPageData::FindMatchingConfig() {
-     // Wait till the page content is returned.
-     return;
-   }
-+#endif
-   // None of the config matched, and no client-signals were requested.
-   std::move(cueing_decision_callback_)
-       .Run(base::unexpected(NudgeDecision::kClientConditionsUnmet));
 diff --git a/chrome/browser/extensions/api/pdf_viewer_private/BUILD.gn b/chrome/browser/extensions/api/pdf_viewer_private/BUILD.gn
 --- a/chrome/browser/extensions/api/pdf_viewer_private/BUILD.gn
 +++ b/chrome/browser/extensions/api/pdf_viewer_private/BUILD.gn
@@ -308,7 +238,7 @@ diff --git a/chrome/browser/extensions/api/pdf_viewer_private/BUILD.gn b/chrome/
      "//chrome/browser/pdf",
      "//chrome/browser/pdf:pdf_pref_names",
      "//chrome/browser/profiles:profile",
-@@ -46,8 +45,6 @@ source_set("browser_tests") {
+@@ -47,8 +46,6 @@ source_set("browser_tests") {
    sources = [ "pdf_viewer_private_browsertest.cc" ]
    deps = [
      ":pdf_viewer_private",
@@ -330,7 +260,7 @@ diff --git a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private
  #include "chrome/browser/pdf/pdf_pref_names.h"
  #include "chrome/browser/pdf/pdf_viewer_stream_manager.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -52,8 +49,6 @@ namespace SetPdfPluginAttributes =
+@@ -53,8 +50,6 @@ namespace SetPdfPluginAttributes =
  
  namespace SetPdfDocumentTitle = api::pdf_viewer_private::SetPdfDocumentTitle;
  
@@ -339,7 +269,7 @@ diff --git a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private
  // Check if the current URL is allowed based on a list of allowlisted domains.
  bool IsUrlAllowedToEmbedLocalFiles(const GURL& current_url,
                                     const base::ListValue& allowlisted_domains) {
-@@ -308,43 +303,7 @@ ExtensionFunction::ResponseAction PdfViewerPrivateGlicSummarizeFunction::Run() {
+@@ -309,43 +304,7 @@ ExtensionFunction::ResponseAction PdfViewerPrivateGlicSummarizeFunction::Run() {
      return RespondNow(Error("No tab."));
    }
  
@@ -387,19 +317,19 @@ diff --git a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private
 diff --git a/chrome/browser/glic/BUILD.gn b/chrome/browser/glic/BUILD.gn
 --- a/chrome/browser/glic/BUILD.gn
 +++ b/chrome/browser/glic/BUILD.gn
-@@ -440,7 +440,7 @@ source_set("impl") {
-     deps += [
+@@ -460,7 +460,7 @@ source_set("impl") {
        ":actor_types_for_migration",
-       "//chrome/browser/context_sharing/tab_bottom_sheet/android:jni_headers",
--      "//chrome/browser/glic/android",
-+      #"//chrome/browser/glic/android",
+       "//chrome/browser/glic/android",
+       "//chrome/browser/glic/android:jni_bridges",
+-      "//chrome/browser/ui/side_panel:side_panel_ui_provider",
++      #"//chrome/browser/ui/side_panel:side_panel_ui_provider",
+       "//chrome/browser/ui/side_panel/android",
        "//ui/android",
      ]
-   }
 diff --git a/chrome/browser/glic/android/BUILD.gn b/chrome/browser/glic/android/BUILD.gn
 --- a/chrome/browser/glic/android/BUILD.gn
 +++ b/chrome/browser/glic/android/BUILD.gn
-@@ -62,7 +62,7 @@ android_library("java") {
+@@ -87,7 +87,7 @@ source_set("jni_bridges") {
    ]
  }
  
@@ -408,10 +338,21 @@ diff --git a/chrome/browser/glic/android/BUILD.gn b/chrome/browser/glic/android/
    sources = [
      "glic_keyed_service_android.cc",
      "glic_keyed_service_android.h",
+diff --git a/chrome/browser/glic/public/glic_enabling.cc b/chrome/browser/glic/public/glic_enabling.cc
+--- a/chrome/browser/glic/public/glic_enabling.cc
++++ b/chrome/browser/glic/public/glic_enabling.cc
+@@ -444,6 +444,7 @@ GlicGlobalEnabling::GlicGlobalEnabling(Delegate& delegate) {
+ GlicGlobalEnabling::~GlicGlobalEnabling() = default;
+ 
+ bool GlicGlobalEnabling::IsEnabledByFlags() {
++  if ((true)) return false;
+   if (g_bypass_enablement_checks_for_testing) {
+     return true;
+   }
 diff --git a/chrome/browser/pdf/BUILD.gn b/chrome/browser/pdf/BUILD.gn
 --- a/chrome/browser/pdf/BUILD.gn
 +++ b/chrome/browser/pdf/BUILD.gn
-@@ -32,7 +32,6 @@ source_set("pdf") {
+@@ -33,7 +33,6 @@ source_set("pdf") {
      "//build:chromeos_buildflags",
      "//chrome/browser:browser_process",
      "//chrome/browser:resources",
@@ -422,7 +363,7 @@ diff --git a/chrome/browser/pdf/BUILD.gn b/chrome/browser/pdf/BUILD.gn
 diff --git a/chrome/browser/sync/BUILD.gn b/chrome/browser/sync/BUILD.gn
 --- a/chrome/browser/sync/BUILD.gn
 +++ b/chrome/browser/sync/BUILD.gn
-@@ -103,7 +103,7 @@ source_set("sync") {
+@@ -105,7 +105,7 @@ source_set("sync") {
      "//chrome/browser/password_manager/factories",
      "//chrome/browser/plus_addresses",
      "//chrome/browser/signin",
@@ -431,7 +372,7 @@ diff --git a/chrome/browser/sync/BUILD.gn b/chrome/browser/sync/BUILD.gn
      "//chrome/browser/subscription_eligibility",
      "//chrome/browser/ui/sync",
      "//chrome/browser/ui/toolbar",
-@@ -146,7 +146,7 @@ source_set("sync") {
+@@ -151,7 +151,7 @@ source_set("sync") {
      "//components/saved_tab_groups/public",
      "//components/send_tab_to_self",
      "//components/sharing_message",
@@ -443,15 +384,15 @@ diff --git a/chrome/browser/sync/BUILD.gn b/chrome/browser/sync/BUILD.gn
 diff --git a/chrome/browser/sync/test/integration/BUILD.gn b/chrome/browser/sync/test/integration/BUILD.gn
 --- a/chrome/browser/sync/test/integration/BUILD.gn
 +++ b/chrome/browser/sync/test/integration/BUILD.gn
-@@ -254,7 +254,7 @@ source_set("sync_integration_tests_impl") {
-       "//chrome/browser/search_engines",
+@@ -266,7 +266,7 @@ source_set("sync_integration_tests_impl") {
        "//chrome/browser/send_tab_to_self",
+       "//chrome/browser/send_tab_to_self:impl",
        "//chrome/browser/sharing",
 -      "//chrome/browser/skills",
 +      #"//chrome/browser/skills",
        "//chrome/browser/themes",
        "//chrome/browser/ui:ui_features",
-       "//chrome/browser/ui/tabs/saved_tab_groups",
+       "//chrome/browser/ui/send_tab_to_self",
 diff --git a/chrome/browser/ui/pdf/BUILD.gn b/chrome/browser/ui/pdf/BUILD.gn
 --- a/chrome/browser/ui/pdf/BUILD.gn
 +++ b/chrome/browser/ui/pdf/BUILD.gn
@@ -485,7 +426,7 @@ diff --git a/chrome/browser/ui/pdf/chrome_pdf_document_helper_client.cc b/chrome
 diff --git a/chrome/browser/ui/tabs/alert/tab_alert_controller.cc b/chrome/browser/ui/tabs/alert/tab_alert_controller.cc
 --- a/chrome/browser/ui/tabs/alert/tab_alert_controller.cc
 +++ b/chrome/browser/ui/tabs/alert/tab_alert_controller.cc
-@@ -173,12 +173,14 @@ std::u16string TabAlertController::GetTabAlertStateText(
+@@ -174,12 +174,14 @@ std::u16string TabAlertController::GetTabAlertStateText(
      case TabAlert::kActorWaitingOnUser:
        return l10n_util::GetStringUTF16(
            IDS_TOOLTIP_TAB_ALERT_STATE_ACTOR_ACCESSING);
@@ -514,7 +455,7 @@ diff --git a/chrome/common/BUILD.gn b/chrome/common/BUILD.gn
 diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
 --- a/chrome/common/chrome_features.cc
 +++ b/chrome/common/chrome_features.cc
-@@ -525,6 +525,7 @@ BASE_FEATURE(kGlic,
+@@ -453,6 +453,7 @@ BASE_FEATURE(kGlic,
               base::FEATURE_DISABLED_BY_DEFAULT
  #endif
  );
@@ -525,7 +466,7 @@ diff --git a/chrome/common/chrome_features.cc b/chrome/common/chrome_features.cc
 diff --git a/chrome/common/features.gni b/chrome/common/features.gni
 --- a/chrome/common/features.gni
 +++ b/chrome/common/features.gni
-@@ -45,6 +45,8 @@ declare_args() {
+@@ -49,6 +49,8 @@ declare_args() {
    # Enables usage of notifications via Chrome's MessageCenter.
    enable_chrome_notifications = is_mac || is_win || is_linux
  
@@ -537,9 +478,9 @@ diff --git a/chrome/common/features.gni b/chrome/common/features.gni
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn
-@@ -2028,7 +2028,7 @@ if (is_android) {
-       "//chrome/browser/content_settings:content_settings_factory",
+@@ -2017,7 +2017,7 @@ if (is_android) {
        "//chrome/browser/enterprise/data_controls",
+       "//chrome/browser/enterprise/platform_auth:features",
        "//chrome/browser/flags:flags_android",
 -      "//chrome/browser/glic:browser_tests",
 +      #"//chrome/browser/glic:browser_tests",
@@ -549,7 +490,7 @@ diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
 diff --git a/components/browser_sync/BUILD.gn b/components/browser_sync/BUILD.gn
 --- a/components/browser_sync/BUILD.gn
 +++ b/components/browser_sync/BUILD.gn
-@@ -50,7 +50,7 @@ static_library("browser_sync") {
+@@ -51,7 +51,7 @@ static_library("browser_sync") {
      "//components/send_tab_to_self",
      "//components/sharing_message",
      "//components/skills:features",

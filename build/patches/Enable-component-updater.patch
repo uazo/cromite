@@ -176,7 +176,7 @@ diff --git a/android_webview/nonembedded/webview_apk_process.h b/android_webview
 diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
 --- a/chrome/browser/component_updater/registration.cc
 +++ b/chrome/browser/component_updater/registration.cc
-@@ -134,6 +134,8 @@ void DeleteOldComponents(const base::FilePath& user_data_dir) {
+@@ -136,6 +136,8 @@ void DeleteOldComponents(const base::FilePath& user_data_dir) {
  void RegisterComponentsForUpdate() {
    auto* const cus = g_browser_process->component_updater();
  
@@ -583,7 +583,7 @@ diff --git a/components/crx_file/crx_verifier.h b/components/crx_file/crx_verifi
 diff --git a/components/optimization_guide/core/delivery/prediction_model_download_manager.cc b/components/optimization_guide/core/delivery/prediction_model_download_manager.cc
 --- a/components/optimization_guide/core/delivery/prediction_model_download_manager.cc
 +++ b/components/optimization_guide/core/delivery/prediction_model_download_manager.cc
-@@ -312,7 +312,7 @@ bool PredictionModelDownloadManager::VerifyDownload(
+@@ -313,7 +313,7 @@ bool PredictionModelDownloadManager::VerifyDownload(
          download_file_path, crx_file::VerifierFormat::CRX3,
          /*required_key_hashes=*/{},
          /*required_file_hash=*/{}, &public_key,
@@ -595,7 +595,7 @@ diff --git a/components/optimization_guide/core/delivery/prediction_model_downlo
 diff --git a/components/update_client/component.cc b/components/update_client/component.cc
 --- a/components/update_client/component.cc
 +++ b/components/update_client/component.cc
-@@ -370,6 +370,19 @@ void Component::StateChecking::DoHandle() {
+@@ -368,6 +368,19 @@ void Component::StateChecking::DoHandle() {
      return;
    }
  
@@ -618,15 +618,15 @@ diff --git a/components/update_client/component.cc b/components/update_client/co
 diff --git a/components/update_client/crx_downloader.cc b/components/update_client/crx_downloader.cc
 --- a/components/update_client/crx_downloader.cc
 +++ b/components/update_client/crx_downloader.cc
-@@ -25,6 +25,7 @@
- #include "components/update_client/update_client_metrics.h"
+@@ -32,6 +32,7 @@
  #include "components/update_client/url_fetcher_downloader.h"
  #include "components/update_client/utils.h"
+ #include "url/gurl.h"
 +#include "base/logging.h"
  
  namespace update_client {
  
-@@ -95,6 +96,9 @@ base::OnceClosure CrxDownloader::StartDownload(
+@@ -103,6 +104,9 @@ base::OnceClosure CrxDownloader::StartDownload(
    current_url_ = urls_.begin();
    download_callback_ = std::move(download_callback);
  
@@ -636,7 +636,7 @@ diff --git a/components/update_client/crx_downloader.cc b/components/update_clie
    return DoStartDownload(*current_url_);
  }
  
-@@ -132,6 +136,7 @@ void CrxDownloader::OnDownloadComplete(
+@@ -140,6 +144,7 @@ void CrxDownloader::OnDownloadComplete(
                return CrxDownloaderError::NONE;
              }
              DeleteFileAndEmptyParentDirectory(filepath);
@@ -660,12 +660,12 @@ diff --git a/components/update_client/net/network_impl.cc b/components/update_cl
 diff --git a/components/update_client/op_install.cc b/components/update_client/op_install.cc
 --- a/components/update_client/op_install.cc
 +++ b/components/update_client/op_install.cc
-@@ -201,7 +201,7 @@ void Unpack(base::OnceCallback<void(const Unpacker::Result&)> callback,
+@@ -202,7 +202,7 @@ void Unpack(base::OnceCallback<void(const Unpacker::Result&)> callback,
                &Unpacker::Unpack, id, prod_id, pk_hash,
                // If and only if cached, the original path no longer exists.
                cache_result.has_value() ? cache_result.value() : crx_file,
--              std::move(unzipper), crx_format,
-+              std::move(unzipper), /*is_extension*/ false, crx_format,
+-              std::move(unzipper), crx_format, is_foreground,
++              std::move(unzipper), /*is_extension*/ false, crx_format, is_foreground,
                base::BindPostTaskToCurrentDefault(std::move(callback))));
  }
  
@@ -723,15 +723,16 @@ diff --git a/components/update_client/request_sender.cc b/components/update_clie
 diff --git a/components/update_client/unpacker.cc b/components/update_client/unpacker.cc
 --- a/components/update_client/unpacker.cc
 +++ b/components/update_client/unpacker.cc
-@@ -67,15 +67,16 @@ void Unpacker::Unpack(const std::string& app_id,
+@@ -72,16 +72,17 @@ void Unpacker::Unpack(const std::string& app_id,
                        const std::vector<uint8_t>& pk_hash,
                        const base::FilePath& path,
                        std::unique_ptr<Unzipper> unzipper,
 +                      bool is_extension,
                        crx_file::VerifierFormat crx_format,
+                       bool is_foreground,
                        base::OnceCallback<void(const Result& result)> callback) {
    base::WrapRefCounted(new Unpacker(app_id, prod_id, path, std::move(unzipper),
-                                     std::move(callback)))
+                                     is_foreground, std::move(callback)))
 -      ->Verify(pk_hash, crx_format);
 +      ->Verify(pk_hash, crx_format, is_extension);
  }
@@ -742,7 +743,7 @@ diff --git a/components/update_client/unpacker.cc b/components/update_client/unp
    TRACE_EVENT("update_client", "Unpacker::Verify",
                perfetto::Flow::FromPointer(this));
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-@@ -90,7 +91,7 @@ void Unpacker::Verify(const std::vector<uint8_t>& pk_hash,
+@@ -96,7 +97,7 @@ void Unpacker::Verify(const std::vector<uint8_t>& pk_hash,
    }
    const crx_file::VerifierResult result = crx_file::Verify(
        path_, crx_format, required_keys, std::vector<uint8_t>(), &public_key_,
@@ -760,9 +761,9 @@ diff --git a/components/update_client/unpacker.h b/components/update_client/unpa
                       std::unique_ptr<Unzipper> unzipper,
 +                     bool is_extension,
                       crx_file::VerifierFormat crx_format,
+                      bool is_foreground,
                       base::OnceCallback<void(const Result& result)> callback);
- 
-@@ -97,7 +98,8 @@ class Unpacker : public base::RefCountedThreadSafe<Unpacker> {
+@@ -99,7 +100,8 @@ class Unpacker : public base::RefCountedThreadSafe<Unpacker> {
    // `BeginUnzipping` if successful. Triggers `EndUnpacking` if an early error
    // is encountered.
    void Verify(const std::vector<uint8_t>& pk_hash,
@@ -775,7 +776,7 @@ diff --git a/components/update_client/unpacker.h b/components/update_client/unpa
 diff --git a/components/update_client/update_checker.cc b/components/update_client/update_checker.cc
 --- a/components/update_client/update_checker.cc
 +++ b/components/update_client/update_checker.cc
-@@ -262,6 +262,10 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
+@@ -263,6 +263,10 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
        config_->IsMachineExternallyManaged(), additional_attributes,
        updater_state_attributes, std::move(apps));
  
@@ -786,7 +787,7 @@ diff --git a/components/update_client/update_checker.cc b/components/update_clie
    cancellation_->OnCancel(
        base::MakeRefCounted<RequestSender>(config_->GetNetworkFetcherFactory())
            ->Send({url},
-@@ -271,7 +275,7 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
+@@ -272,7 +276,7 @@ void UpdateCheckerImpl::CheckForUpdatesHelper(
                   config_->GetProtocolHandlerFactory()
                       ->CreateSerializer()
                       ->Serialize(request),
@@ -825,7 +826,7 @@ diff --git a/components/update_client/utils.cc b/components/update_client/utils.
  #include "base/json/json_file_value_serializer.h"
  #include "base/path_service.h"
  #include "base/strings/string_number_conversions.h"
-@@ -115,6 +116,9 @@ bool VerifyFileHash256(const base::FilePath& filepath,
+@@ -111,6 +112,9 @@ bool VerifyFileHash256(const base::FilePath& filepath,
      return false;
    }
  
