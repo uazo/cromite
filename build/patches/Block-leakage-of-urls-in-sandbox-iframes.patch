@@ -10,14 +10,14 @@ leakage of certain information in sandbox iframes
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- .../browser/renderer_host/render_frame_host_impl.cc | 12 +++++++++++-
- .../Block-url-leakage-sandbox-iframe.inc            |  8 ++++++++
- .../Block-url-leakage-sandbox-iframe.inc            |  3 +++
- .../features_h/Block-url-leakage-sandbox-iframe.inc |  1 +
- third_party/blink/renderer/core/frame/location.cc   | 13 +++++++++++++
- .../blink/renderer/core/loader/document_loader.cc   | 12 ++++++++++++
- .../blink/renderer/core/loader/document_loader.h    |  2 +-
- 7 files changed, 49 insertions(+), 2 deletions(-)
+ .../renderer_host/render_frame_host_impl.cc       | 12 +++++++++++-
+ .../Block-url-leakage-sandbox-iframe.inc          |  8 ++++++++
+ .../Block-url-leakage-sandbox-iframe.inc          |  3 +++
+ .../Block-url-leakage-sandbox-iframe.inc          |  1 +
+ third_party/blink/renderer/core/frame/location.cc | 15 ++++++++++++++-
+ .../blink/renderer/core/loader/document_loader.cc | 12 ++++++++++++
+ .../blink/renderer/core/loader/document_loader.h  |  2 +-
+ 7 files changed, 50 insertions(+), 3 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Block-url-leakage-sandbox-iframe.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/Block-url-leakage-sandbox-iframe.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_h/Block-url-leakage-sandbox-iframe.inc
@@ -25,7 +25,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 diff --git a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
 --- a/content/browser/renderer_host/render_frame_host_impl.cc
 +++ b/content/browser/renderer_host/render_frame_host_impl.cc
-@@ -5374,7 +5374,17 @@ void RenderFrameHostImpl::SetLastCommittedOrigin(
+@@ -5422,7 +5422,17 @@ void RenderFrameHostImpl::SetLastCommittedOrigin(
  }
  
  void RenderFrameHostImpl::SetInheritedBaseUrl(const GURL& inherited_base_url) {
@@ -82,31 +82,36 @@ diff --git a/third_party/blink/renderer/core/frame/location.cc b/third_party/bli
  #include "third_party/blink/renderer/bindings/core/v8/binding_security.h"
  #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
  #include "third_party/blink/renderer/core/dom/document.h"
-@@ -127,8 +128,20 @@ DOMStringList* Location::ancestorOrigins() const {
-   auto* origins = MakeGarbageCollected<DOMStringList>();
-   if (!IsAttached())
-     return origins;
+@@ -133,12 +134,24 @@ DOMStringList* Location::ancestorOrigins() {
+     }
+     return ancestor_origins_list_.Get();
+   }
+-
 +  if (base::FeatureList::IsEnabled(blink::features::kBlockUrlLeakageSandboxIframe)
 +        && dom_window_->GetFrame()->GetSecurityContext()->IsSandboxed(
 +              network::mojom::WebSandboxFlags::kOrigin)) {
 +    // not allow any value for sandboxed frames
++    auto* origins = MakeGarbageCollected<DOMStringList>();
 +    return origins;
 +  }
-   for (Frame* frame = dom_window_->GetFrame()->Tree().Parent(); frame;
-        frame = frame->Tree().Parent()) {
-+    if (base::FeatureList::IsEnabled(blink::features::kBlockUrlLeakageSandboxIframe)
-+          && frame->GetSecurityContext()->IsSandboxed(
-+                network::mojom::WebSandboxFlags::kOrigin)) {
-+      // blocks at first sandbox frame
-+      break;
-+    }
-     origins->Append(
-         frame->GetSecurityContext()->GetSecurityOrigin()->ToString());
-   }
+   if (!ancestor_origins_list_ ||
+       !RuntimeEnabledFeatures::AncestorOriginsStoredOnDocumentEnabled()) {
+     ancestor_origins_list_ = MakeGarbageCollected<DOMStringList>();
+     for (Frame* frame = dom_window_->GetFrame()->Tree().Parent(); frame;
+          frame = frame->Tree().Parent()) {
++      if (base::FeatureList::IsEnabled(blink::features::kBlockUrlLeakageSandboxIframe)
++            && frame->GetSecurityContext()->IsSandboxed(
++                  network::mojom::WebSandboxFlags::kOrigin)) {
++        // blocks at first sandbox frame
++        break;
++      }
+       ancestor_origins_list_->Append(
+           frame->GetSecurityContext()->GetSecurityOrigin()->ToString());
+     }
 diff --git a/third_party/blink/renderer/core/loader/document_loader.cc b/third_party/blink/renderer/core/loader/document_loader.cc
 --- a/third_party/blink/renderer/core/loader/document_loader.cc
 +++ b/third_party/blink/renderer/core/loader/document_loader.cc
-@@ -850,6 +850,11 @@ WebString DocumentLoader::HttpMethod() const {
+@@ -851,6 +851,11 @@ WebString DocumentLoader::HttpMethod() const {
  }
  
  const AtomicString& DocumentLoader::GetReferrer() const {
@@ -118,7 +123,7 @@ diff --git a/third_party/blink/renderer/core/loader/document_loader.cc b/third_p
    return referrer_;
  }
  
-@@ -2965,6 +2970,13 @@ void DocumentLoader::CommitNavigation() {
+@@ -2984,6 +2989,13 @@ void DocumentLoader::CommitNavigation() {
          response_.HttpHeaderField(http_names::kDocumentPolicyReportOnly));
    }
  
