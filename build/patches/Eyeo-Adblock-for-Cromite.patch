@@ -65,7 +65,7 @@ suit Cromite logic.
  .../browser/resource_classification_runner.h  |    7 +
  .../resource_classification_runner_impl.cc    |   71 +-
  .../resource_classification_runner_impl.h     |    8 +
- components/adblock/core/BUILD.gn              |   39 -
+ components/adblock/core/BUILD.gn              |   41 +-
  components/adblock/core/common/BUILD.gn       |    8 -
  .../adblock/core/common/adblock_constants.cc  |   17 +-
  .../adblock/core/common/adblock_constants.h   |    1 -
@@ -93,6 +93,7 @@ suit Cromite logic.
  .../adblock/core/resources/elemhideemu.jst    |    2 +
  .../resources/snippets/dist/dependencies.jst  | 1690 ++++++
  .../dist/isolated-first-all.source.jst        | 5256 +++++++++++++++++
+ components/adblock/core/sha256_file.py        |   75 +
  .../adblock/core/sitekey_storage_impl.cc      |   17 +-
  .../core/subscription/conversion_executors.h  |    1 +
  .../filtering_configuration_maintainer.h      |    4 +
@@ -131,7 +132,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 126 files changed, 9368 insertions(+), 708 deletions(-)
+ 127 files changed, 9444 insertions(+), 709 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -140,6 +141,7 @@ suit Cromite logic.
  create mode 100644 components/adblock/core/converter/parser/test/test_rules.txt
  create mode 100644 components/adblock/core/resources/snippets/dist/dependencies.jst
  create mode 100644 components/adblock/core/resources/snippets/dist/isolated-first-all.source.jst
+ create mode 100644 components/adblock/core/sha256_file.py
  create mode 100644 components/content_settings/core/browser/bromite_content_settings/ads.inc
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Stricter-popup-blocker.inc
 
@@ -160,10 +162,10 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
  <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
      xmlns:app="http://schemas.android.com/apk/res-auto"
      android:orderingFromXml="false">
-@@ -92,11 +83,6 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
+@@ -98,11 +89,6 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
      <org.chromium.components.browser_ui.settings.ChromeBasePreference
          android:key="autofill_options"
-         android:order="16" />
+         android:order="17" />
 -    <Preference
 -        android:fragment="org.chromium.chrome.browser.adblock.settings.AdblockSettingsFragment"
 -        android:key="adblock"
@@ -172,7 +174,7 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
  
      <PreferenceCategory
          android:key="advanced_section"
-@@ -123,6 +109,11 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
+@@ -129,6 +115,11 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
          android:key="adblock"
          android:order="13"
          android:title="@string/prefs_adblock"/>
@@ -183,7 +185,7 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
 +        android:title="@string/adblock_settings_title" />
      <Preference
          android:key="notifications"
-         android:order="22"
+         android:order="23"
 diff --git a/chrome/browser/adblock/adblock_chrome_content_browser_client.cc b/chrome/browser/adblock/adblock_chrome_content_browser_client.cc
 --- a/chrome/browser/adblock/adblock_chrome_content_browser_client.cc
 +++ b/chrome/browser/adblock/adblock_chrome_content_browser_client.cc
@@ -884,7 +886,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6598,7 +6598,9 @@ ChromeContentBrowserClient::
+@@ -6637,7 +6637,9 @@ ChromeContentBrowserClient::
  }
  
  bool ChromeContentBrowserClient::WillInterceptWebSocket(
@@ -895,7 +897,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
    if (!frame) {
      return false;
-@@ -6621,9 +6623,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
+@@ -6659,9 +6661,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
  }
  
  void ChromeContentBrowserClient::CreateWebSocket(
@@ -910,7 +912,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
 diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
 --- a/chrome/browser/chrome_content_browser_client.h
 +++ b/chrome/browser/chrome_content_browser_client.h
-@@ -731,11 +731,15 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+@@ -723,11 +723,15 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
    CreateURLLoaderHandlerForServiceWorkerInitiatedNavigationRequest(
        content::FrameTreeNodeId frame_tree_node_id,
        const network::ResourceRequest& resource_request) override;
@@ -1177,7 +1179,7 @@ diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chro
  #include "components/autofill/core/common/autofill_prefs.h"
  #include "components/bookmarks/common/bookmark_pref_names.h"
  #include "components/browsing_data/core/pref_names.h"
-@@ -205,6 +206,19 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+@@ -206,6 +207,19 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
    }
    s_allowlist = new PrefsUtil::TypedPrefMap();
  
@@ -1200,7 +1202,7 @@ diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chro
 diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 --- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -269,7 +269,6 @@
+@@ -279,7 +279,6 @@
  #include "chrome/common/buildflags.h"
  #include "chrome/common/chrome_features.h"
  #include "components/adblock/content/browser/factories/adblock_request_throttle_factory.h"
@@ -1208,7 +1210,7 @@ diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  #include "components/adblock/content/browser/factories/content_security_policy_injector_factory.h"
  #include "components/adblock/content/browser/factories/element_hider_factory.h"
  #include "components/adblock/content/browser/factories/resource_classification_runner_factory.h"
-@@ -987,7 +986,6 @@ void ChromeBrowserMainExtraPartsProfiles::
+@@ -998,7 +997,6 @@ void ChromeBrowserMainExtraPartsProfiles::
    FederatedIdentityApiPermissionContextFactory::GetInstance();
    FederatedIdentityAutoReauthnPermissionContextFactory::GetInstance();
    FederatedIdentityPermissionContextFactory::GetInstance();
@@ -1219,15 +1221,15 @@ diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
 --- a/chrome/browser/resources/settings/BUILD.gn
 +++ b/chrome/browser/resources/settings/BUILD.gn
-@@ -65,6 +65,7 @@ build_webui("build") {
-     "ai_page/ai_tab_organization_subpage.ts",
+@@ -66,6 +66,7 @@ build_webui("build") {
+     "ai_page/ai_site_add_dialog.ts",
      "ai_page/history_search_page.ts",
      "ai_page/offer_writing_help_page.ts",
 +    "adblock_page/adblock_page.ts",
      "appearance_page/appearance_fonts_page.ts",
      "appearance_page/appearance_page.ts",
      "appearance_page/appearance_page_index.ts",
-@@ -433,6 +434,7 @@ build_webui("build") {
+@@ -439,6 +440,7 @@ build_webui("build") {
    ts_definitions = [
      "//tools/typescript/definitions/autofill_private.d.ts",
      "//tools/typescript/definitions/chrome_event.d.ts",
@@ -1796,7 +1798,7 @@ diff --git a/chrome/browser/resources/settings/page_visibility.ts b/chrome/brows
 diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
 --- a/chrome/browser/resources/settings/route.ts
 +++ b/chrome/browser/resources/settings/route.ts
-@@ -274,6 +274,10 @@ function createRoutes(): SettingsRoutes {
+@@ -275,6 +275,10 @@ function createRoutes(): SettingsRoutes {
          '/onStartup', 'onStartup', loadTimeData.getString('onStartup'));
    }
  
@@ -1821,7 +1823,7 @@ diff --git a/chrome/browser/resources/settings/router.ts b/chrome/browser/resour
 diff --git a/chrome/browser/resources/settings/settings.ts b/chrome/browser/resources/settings/settings.ts
 --- a/chrome/browser/resources/settings/settings.ts
 +++ b/chrome/browser/resources/settings/settings.ts
-@@ -65,6 +65,7 @@ export {HomeUrlInputElement} from './appearance_page/home_url_input.js';
+@@ -67,6 +67,7 @@ export {HomeUrlInputElement} from './appearance_page/home_url_input.js';
  export {SettingsAutofillAiEntriesListElement} from './autofill_page/autofill_ai_entries_list.js';
  export {SettingsAutofillPageElement} from './autofill_page/autofill_page.js';
  export {SettingsAutofillPageIndexElement} from './autofill_page/autofill_page_index.js';
@@ -1875,7 +1877,7 @@ diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html 
 diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 --- a/chrome/browser/ui/tab_helpers.cc
 +++ b/chrome/browser/ui/tab_helpers.cc
-@@ -356,7 +356,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+@@ -365,7 +365,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
    auto* original_profile = profile->GetOriginalProfile();
    adblock::EnsureBackgroundServicesStarted(original_profile);
    adblock::RegisterAdblockWebContentObserver<
@@ -1902,10 +1904,10 @@ diff --git a/chrome/common/extensions/api/_permission_features.json b/chrome/com
    "autofillPrivate": {
      "channel": "trunk",
      "extension_types": ["extension", "platform_app"],
-@@ -421,13 +414,6 @@
-     // "desktop_android" is not supported.
-     "platforms": ["chromeos", "linux", "mac", "win"]
-   },
+@@ -543,13 +536,6 @@
+       ]
+     }
+   ],
 -  "eyeoFilteringPrivate": {
 -    "channel": "stable",
 -    "extension_types": ["extension", "platform_app"],
@@ -1913,9 +1915,9 @@ diff --git a/chrome/common/extensions/api/_permission_features.json b/chrome/com
 -      "664F11343A17783FC7F6DC994BBC8AAF6823739C"  // eyeo test extension
 -    ]
 -  },
-   "favicon": {
+   "lockWindowFullscreenPrivate": {
      "channel": "stable",
-     "extension_types": ["extension"]
+     "component_extensions_auto_granted": false,
 diff --git a/chrome/common/extensions/api/adblock_private.idl b/chrome/common/extensions/api/adblock_private.idl
 --- a/chrome/common/extensions/api/adblock_private.idl
 +++ b/chrome/common/extensions/api/adblock_private.idl
@@ -2374,7 +2376,7 @@ new file mode 100644
 +  load_time_data.Set("tabTitle",
 +    l10n_util::GetStringUTF16(IDS_ERRORPAGES_TITLE_BLOCKED_BY_ADMINISTRATOR));
 +  load_time_data.Set("heading",
-+    l10n_util::GetStringUTF16(IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR));
++    l10n_util::GetStringUTF16(IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR_ADBLOCK));
 +
 +  std::u16string subscription_url_string(url_formatter::FormatUrl(
 +      subscription_url_, url_formatter::kFormatUrlOmitNothing,
@@ -3923,6 +3925,15 @@ diff --git a/components/adblock/core/BUILD.gn b/components/adblock/core/BUILD.gn
  import("//third_party/flatbuffers/flatbuffer.gni")
  
  flatbuffer("schema") {
+@@ -28,7 +27,7 @@ action("generate_schema_hash") {
+   # The script lives in /chrome but has no dependencies to the //chrome target.
+   # According to the script's author, it could be moved to /build but only if
+   # there's code *upstream* that needs it outside of /chrome.
+-  script = "//chrome/tools/build/sha256_file.py"
++  script = "//components/adblock/core/sha256_file.py"
+   outputs = [ "${target_gen_dir}/schema/schema_hash.cc" ]
+   inputs = [ "${target_gen_dir}/schema/filter_list_schema_generated.h" ]
+ 
 @@ -49,43 +48,9 @@ source_set("schema_hash") {
    deps = [ ":generate_schema_hash" ]
  }
@@ -12002,6 +12013,86 @@ new file mode 100644
 +    document.addEventListener("readystatechange", executeScript, {once:true});
 +  }
 +}
+diff --git a/components/adblock/core/sha256_file.py b/components/adblock/core/sha256_file.py
+new file mode 100644
+--- /dev/null
++++ b/components/adblock/core/sha256_file.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python
++# Copyright 2021 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++"""sha256_file.py takes one or more files, computes a SHA-256 hash over it,
++and writes a .cc file containing variables with the digest bytes.
++
++Usage:
++    sha256_file.py path/to/hashes file1.txt file2.pak
++
++Which will create path/to/hashes.cc with a constant for each of the specified
++input file's hash. Corresponding header file should be committed in codebase to
++avoid unnecessary build serilization.
++"""
++
++import hashlib
++import os.path
++import sys
++
++sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
++                             os.path.pardir, os.path.pardir, os.path.pardir,
++                             'build'))
++import action_helpers
++
++
++def main(argv):
++    if len(argv) < 3:
++        print('Usage: {} output_path_prefix file1.pak...'.format(argv[0]),
++              file=sys.stderr)
++        return 1
++
++    output_path_prefix = argv[1]
++
++    cc_contents = '#include "{}.h"\n\n'.format(
++        # Drop (<toolchain>/)gen/ prefix.
++        output_path_prefix.split('gen/', 1)[1])
++    for (name, value) in _hash_files(argv[2:]):
++        name = 'kSha256_' + os.path.basename(name).replace('.', '_')
++        cc_contents += 'const std::array<uint8_t, 32> {} = {{'.format(name)
++        cc_contents += ', '.join(map(hex, value))
++        cc_contents += '};\n\n'
++
++    with action_helpers.atomic_output(output_path_prefix + '.cc',
++                                      mode='w') as f:
++        f.write(FILE_TEMPLATE.format(contents=cc_contents))
++
++
++def _hash_files(files):
++    for path in files:
++        with open(path, 'rb') as f:
++            yield path, _hash_file_contents(f)
++
++
++def _hash_file_contents(f):
++    sha2 = hashlib.sha256()
++    while True:
++        data = f.read(4096)
++        if not data:
++            break
++        sha2.update(data)
++    return sha2.digest()
++
++
++FILE_TEMPLATE = """// Generated by chrome/tools/build/sha256_file.py
++// !! DO NOT EDIT !!
++
++#include <stdint.h>
++
++#include <array>
++
++{contents}
++"""
++
++if __name__ == '__main__':
++    sys.exit(main(sys.argv))
 diff --git a/components/adblock/core/sitekey_storage_impl.cc b/components/adblock/core/sitekey_storage_impl.cc
 --- a/components/adblock/core/sitekey_storage_impl.cc
 +++ b/components/adblock/core/sitekey_storage_impl.cc
@@ -12979,7 +13070,7 @@ diff --git a/components/error_page_strings.grdp b/components/error_page_strings.
 +  <message name="IDS_ERRORPAGES_TITLE_BLOCKED_BY_ADMINISTRATOR" desc="Title in the error page when an administrator policy blocks a request.">
 +    Blocked by Adblock
 +  </message>
-+  <message name="IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR" desc="Heading in the error page when an administrator policy blocks a request.">
++  <message name="IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR_ADBLOCK" desc="Heading in the error page when an administrator policy blocks a request.">
 +    Blocked by Adblock
 +  </message>
 +  <message name="IDS_ERRORPAGES_PRIMARY_PARAGRAPH_BLOCKED_BY_ADMINISTRATOR" desc="Primary paragraph in the error page when an administrator policy blocks a request.">
@@ -13012,7 +13103,7 @@ diff --git a/components/security_interstitials/core/browser/resources/interstiti
 diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/browser/websockets/websocket_connector_impl.cc
 --- a/content/browser/websockets/websocket_connector_impl.cc
 +++ b/content/browser/websockets/websocket_connector_impl.cc
-@@ -91,14 +91,14 @@ void WebSocketConnectorImpl::Connect(
+@@ -93,15 +93,15 @@ void WebSocketConnectorImpl::Connect(
    const uint32_t options =
        GetContentClient()->browser()->GetWebSocketOptions(frame);
  
@@ -13024,7 +13115,8 @@ diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/br
          base::BindOnce(ConnectCalledByContentBrowserClient, requested_protocols,
                         storage_access_api_status, isolation_info_, frame_id_,
                         origin_, client_security_state_->Clone(), options,
-                        std::move(throttling_profile_id)),
+                        std::move(throttling_profile_id),
+                        network_restrictions_id_),
 -        url, isolation_info_.site_for_cookies(), user_agent,
 +        url, origin_, isolation_info_.site_for_cookies(), user_agent,
          std::move(handshake_client));
@@ -13033,7 +13125,7 @@ diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/br
 diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -1157,7 +1157,7 @@ void ContentBrowserClient::WillCreateURLLoaderFactory(
+@@ -1134,7 +1134,7 @@ void ContentBrowserClient::WillCreateURLLoaderFactory(
    DCHECK(browser_context);
  }
  
@@ -13042,7 +13134,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
    return false;
  }
  
-@@ -1166,9 +1166,11 @@ uint32_t ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
+@@ -1143,9 +1143,11 @@ uint32_t ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
  }
  
  void ContentBrowserClient::CreateWebSocket(
@@ -13057,7 +13149,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
 diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
 --- a/content/public/browser/content_browser_client.h
 +++ b/content/public/browser/content_browser_client.h
-@@ -2163,7 +2163,7 @@ class CONTENT_EXPORT ContentBrowserClient {
+@@ -2101,7 +2101,7 @@ class CONTENT_EXPORT ContentBrowserClient {
        scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner);
  
    // Returns true when the embedder wants to intercept a websocket connection.
@@ -13066,7 +13158,7 @@ diff --git a/content/public/browser/content_browser_client.h b/content/public/br
  
    // Returns the WebSocket creation options.
    virtual uint32_t GetWebSocketOptions(RenderFrameHost* frame);
-@@ -2185,9 +2185,11 @@ class CONTENT_EXPORT ContentBrowserClient {
+@@ -2123,9 +2123,11 @@ class CONTENT_EXPORT ContentBrowserClient {
    // Always called on the UI thread and only when the Network Service is
    // enabled.
    virtual void CreateWebSocket(
@@ -13186,7 +13278,7 @@ diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_pa
 diff --git a/third_party/blink/renderer/core/html/html_element.cc b/third_party/blink/renderer/core/html/html_element.cc
 --- a/third_party/blink/renderer/core/html/html_element.cc
 +++ b/third_party/blink/renderer/core/html/html_element.cc
-@@ -3010,13 +3010,7 @@ void HTMLElement::setSpellcheck(bool enable) {
+@@ -3031,13 +3031,7 @@ void HTMLElement::setSpellcheck(bool enable) {
  }
  
  void HTMLElement::click() {

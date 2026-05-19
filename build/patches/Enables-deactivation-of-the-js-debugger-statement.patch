@@ -7,7 +7,7 @@ deactivating the debugger javascript statement
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- .../src/front_end/core/sdk/DebuggerModel.ts   |  9 ++++++++
+ .../src/front_end/core/sdk/DebuggerModel.ts   |  8 +++++++
  .../src/front_end/core/sdk/sdk-meta.ts        | 23 +++++++++++++++++++
  .../generated/InspectorBackendCommands.ts     |  4 ++++
  .../front_end/generated/protocol-mapping.d.ts |  4 ++++
@@ -23,41 +23,40 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  v8/src/inspector/v8-debugger-agent-impl.cc    |  8 +++++++
  v8/src/inspector/v8-debugger-agent-impl.h     |  1 +
  v8/src/runtime/runtime-debug.cc               | 17 ++++++++++++--
- 16 files changed, 101 insertions(+), 5 deletions(-)
+ 16 files changed, 100 insertions(+), 5 deletions(-)
 
 diff --git a/third_party/devtools-frontend/src/front_end/core/sdk/DebuggerModel.ts b/third_party/devtools-frontend/src/front_end/core/sdk/DebuggerModel.ts
 --- a/third_party/devtools-frontend/src/front_end/core/sdk/DebuggerModel.ts
 +++ b/third_party/devtools-frontend/src/front_end/core/sdk/DebuggerModel.ts
-@@ -185,6 +185,9 @@ export class DebuggerModel extends SDKModel<EventTypes> {
-     Common.Settings.Settings.instance()
-         .moduleSetting('disable-async-stack-traces')
-         .addChangeListener(this.asyncStackTracesStateChanged, this);
-+    Common.Settings.Settings.instance()
-+        .moduleSetting('disableDebuggerStatement')
-+        .addChangeListener(this.DebuggerStatementChanged, this);
-     Common.Settings.Settings.instance()
-         .moduleSetting('breakpoints-active')
-         .addChangeListener(this.breakpointsActiveChanged, this);
-@@ -198,6 +201,7 @@ export class DebuggerModel extends SDKModel<EventTypes> {
-     Common.Settings.Settings.instance()
-         .moduleSetting('js-source-maps-enabled')
+@@ -179,6 +179,7 @@ export class DebuggerModel extends SDKModel<EventTypes> {
+     settings.moduleSetting('pause-on-uncaught-exception').addChangeListener(this.pauseOnExceptionStateChanged, this);
+     settings.moduleSetting('disable-async-stack-traces').addChangeListener(this.asyncStackTracesStateChanged, this);
+     settings.moduleSetting('breakpoints-active').addChangeListener(this.breakpointsActiveChanged, this);
++    settings.moduleSetting('disableDebuggerStatement').addChangeListener(this.debuggerStatementChanged, this);
+ 
+     if (!target.suspended()) {
+       void this.enableDebugger();
+@@ -187,6 +188,7 @@ export class DebuggerModel extends SDKModel<EventTypes> {
+     this.#sourceMapManager.setEnabled(settings.moduleSetting('js-source-maps-enabled').get());
+     settings.moduleSetting('js-source-maps-enabled')
          .addChangeListener(event => this.#sourceMapManager.setEnabled((event.data as boolean)));
-+    this.DebuggerStatementChanged();
++    this.debuggerStatementChanged();
  
      const resourceTreeModel = (target.model(ResourceTreeModel) as ResourceTreeModel);
      if (resourceTreeModel) {
-@@ -389,6 +393,11 @@ export class DebuggerModel extends SDKModel<EventTypes> {
+@@ -379,6 +381,12 @@ export class DebuggerModel extends SDKModel<EventTypes> {
      return this.agent.invoke_setAsyncCallStackDepth({maxDepth});
    }
  
-+  private DebuggerStatementChanged(): Promise<Protocol.ProtocolResponseWithError> {
-+    const enabled = !Common.Settings.Settings.instance().moduleSetting('disableDebuggerStatement').get();
++  private debuggerStatementChanged(): Promise<Protocol.ProtocolResponseWithError> {
++    const settings = this.target().targetManager().settings;
++    const enabled = !settings.moduleSetting('disableDebuggerStatement').get();
 +    return this.agent.invoke_setDebuggerStatementEnabled({enabled});
 +  }
 +
    private breakpointsActiveChanged(): void {
-     void this.agent.invoke_setBreakpointsActive(
-         {active: Common.Settings.Settings.instance().moduleSetting('breakpoints-active').get()});
+     const settings = this.target().targetManager().settings;
+     void this.agent.invoke_setBreakpointsActive({active: settings.moduleSetting('breakpoints-active').get()});
 diff --git a/third_party/devtools-frontend/src/front_end/core/sdk/sdk-meta.ts b/third_party/devtools-frontend/src/front_end/core/sdk/sdk-meta.ts
 --- a/third_party/devtools-frontend/src/front_end/core/sdk/sdk-meta.ts
 +++ b/third_party/devtools-frontend/src/front_end/core/sdk/sdk-meta.ts
@@ -101,7 +100,7 @@ diff --git a/third_party/devtools-frontend/src/front_end/core/sdk/sdk-meta.ts b/
 diff --git a/third_party/devtools-frontend/src/front_end/generated/InspectorBackendCommands.ts b/third_party/devtools-frontend/src/front_end/generated/InspectorBackendCommands.ts
 --- a/third_party/devtools-frontend/src/front_end/generated/InspectorBackendCommands.ts
 +++ b/third_party/devtools-frontend/src/front_end/generated/InspectorBackendCommands.ts
-@@ -1548,6 +1548,10 @@ inspectorBackend.registerCommand("Debugger.resume", [{"name": "terminateOnResume
+@@ -1531,6 +1531,10 @@ inspectorBackend.registerCommand("Debugger.resume", [{"name": "terminateOnResume
  inspectorBackend.registerCommand("Debugger.searchInContent", [{"name": "scriptId", "type": "string", "optional": false, "description": "Id of the script to search in.", "typeRef": "Runtime.ScriptId"}, {"name": "query", "type": "string", "optional": false, "description": "String to search for.", "typeRef": null}, {"name": "caseSensitive", "type": "boolean", "optional": true, "description": "If true, search is case sensitive.", "typeRef": null}, {"name": "isRegex", "type": "boolean", "optional": true, "description": "If true, treats string parameter as regex.", "typeRef": null}], ["result"], "Searches for given string in script content.");
  inspectorBackend.registerCommand("Debugger.setAsyncCallStackDepth", [{"name": "maxDepth", "type": "number", "optional": false, "description": "Maximum depth of async call stacks. Setting to `0` will effectively disable collecting async call stacks (default).", "typeRef": null}], [], "Enables or disables async call stacks tracking.");
  inspectorBackend.registerCommand("Debugger.setBlackboxExecutionContexts", [{"name": "uniqueIds", "type": "array", "optional": false, "description": "Array of execution context unique ids for the debugger to ignore.", "typeRef": "string"}], [], "Replace previous blackbox execution contexts with passed ones. Forces backend to skip stepping/pausing in scripts in these execution contexts. VM will try to leave blackboxed script by performing 'step in' several times, finally resorting to 'step out' if unsuccessful.");
@@ -115,7 +114,7 @@ diff --git a/third_party/devtools-frontend/src/front_end/generated/InspectorBack
 diff --git a/third_party/devtools-frontend/src/front_end/generated/protocol-mapping.d.ts b/third_party/devtools-frontend/src/front_end/generated/protocol-mapping.d.ts
 --- a/third_party/devtools-frontend/src/front_end/generated/protocol-mapping.d.ts
 +++ b/third_party/devtools-frontend/src/front_end/generated/protocol-mapping.d.ts
-@@ -5511,6 +5511,10 @@ export namespace ProtocolMapping {
+@@ -5523,6 +5523,10 @@ export namespace ProtocolMapping {
        paramsType: [Protocol.Debugger.SetBlackboxExecutionContextsRequest];
        returnType: void;
      };
@@ -129,7 +128,7 @@ diff --git a/third_party/devtools-frontend/src/front_end/generated/protocol-mapp
 diff --git a/third_party/devtools-frontend/src/front_end/generated/protocol-proxy-api.d.ts b/third_party/devtools-frontend/src/front_end/generated/protocol-proxy-api.d.ts
 --- a/third_party/devtools-frontend/src/front_end/generated/protocol-proxy-api.d.ts
 +++ b/third_party/devtools-frontend/src/front_end/generated/protocol-proxy-api.d.ts
-@@ -4957,6 +4957,8 @@ declare namespace ProtocolProxyApi {
+@@ -4987,6 +4987,8 @@ declare namespace ProtocolProxyApi {
       */
      invoke_setBlackboxExecutionContexts(params: Protocol.Debugger.SetBlackboxExecutionContextsRequest): Promise<Protocol.ProtocolResponseWithError>;
  
@@ -141,7 +140,7 @@ diff --git a/third_party/devtools-frontend/src/front_end/generated/protocol-prox
 diff --git a/third_party/devtools-frontend/src/front_end/generated/protocol.ts b/third_party/devtools-frontend/src/front_end/generated/protocol.ts
 --- a/third_party/devtools-frontend/src/front_end/generated/protocol.ts
 +++ b/third_party/devtools-frontend/src/front_end/generated/protocol.ts
-@@ -21087,6 +21087,10 @@ export namespace Debugger {
+@@ -20945,6 +20945,10 @@ export namespace Debugger {
      uniqueIds: string[];
    }
  
@@ -155,7 +154,7 @@ diff --git a/third_party/devtools-frontend/src/front_end/generated/protocol.ts b
 diff --git a/third_party/devtools-frontend/src/third_party/blink/public/devtools_protocol/browser_protocol.json b/third_party/devtools-frontend/src/third_party/blink/public/devtools_protocol/browser_protocol.json
 --- a/third_party/devtools-frontend/src/third_party/blink/public/devtools_protocol/browser_protocol.json
 +++ b/third_party/devtools-frontend/src/third_party/blink/public/devtools_protocol/browser_protocol.json
-@@ -31997,8 +31997,17 @@
+@@ -31482,8 +31482,17 @@
                              "$ref": "WasmDisassemblyChunk"
                          }
                      ]
@@ -175,7 +174,7 @@ diff --git a/third_party/devtools-frontend/src/third_party/blink/public/devtools
                      "name": "nextWasmDisassemblyChunk",
                      "description": "Disassemble the next chunk of lines for the module corresponding to the\nstream. If disassembly is complete, this API will invalidate the streamId\nand return an empty chunk. Any subsequent calls for the now invalid stream\nwill return errors.",
                      "experimental": true,
-@@ -35188,4 +35197,4 @@
+@@ -34673,4 +34682,4 @@
              ]
          }
      ]
@@ -199,7 +198,7 @@ diff --git a/v8/include/js_protocol.pdl b/v8/include/js_protocol.pdl
 diff --git a/v8/src/common/message-template.h b/v8/src/common/message-template.h
 --- a/v8/src/common/message-template.h
 +++ b/v8/src/common/message-template.h
-@@ -778,6 +778,7 @@ namespace internal {
+@@ -784,6 +784,7 @@ namespace internal {
    /* AggregateError */                                                         \
    T(AllPromisesRejected, "All promises were rejected")                         \
    T(CannotDeepFreezeObject, "Cannot DeepFreeze object of type %")              \
@@ -210,7 +209,7 @@ diff --git a/v8/src/common/message-template.h b/v8/src/common/message-template.h
 diff --git a/v8/src/debug/debug-interface.cc b/v8/src/debug/debug-interface.cc
 --- a/v8/src/debug/debug-interface.cc
 +++ b/v8/src/debug/debug-interface.cc
-@@ -1090,6 +1090,11 @@ void SetAsyncEventDelegate(Isolate* v8_isolate, AsyncEventDelegate* delegate) {
+@@ -1101,6 +1101,11 @@ void SetAsyncEventDelegate(Isolate* v8_isolate, AsyncEventDelegate* delegate) {
    reinterpret_cast<i::Isolate*>(v8_isolate)->set_async_event_delegate(delegate);
  }
  
@@ -260,7 +259,7 @@ diff --git a/v8/src/debug/debug.h b/v8/src/debug/debug.h
 diff --git a/v8/src/execution/messages.cc b/v8/src/execution/messages.cc
 --- a/v8/src/execution/messages.cc
 +++ b/v8/src/execution/messages.cc
-@@ -488,6 +488,7 @@ MaybeHandle<String> MessageFormatter::TryFormat(
+@@ -495,6 +495,7 @@ MaybeHandle<String> MessageFormatter::TryFormat(
        MessageTemplate::kUndefinedOrNullToObject,
        MessageTemplate::kUnexpectedStrictReserved,
        MessageTemplate::kUnexpectedTokenIdentifier,
@@ -271,7 +270,7 @@ diff --git a/v8/src/execution/messages.cc b/v8/src/execution/messages.cc
 diff --git a/v8/src/inspector/v8-debugger-agent-impl.cc b/v8/src/inspector/v8-debugger-agent-impl.cc
 --- a/v8/src/inspector/v8-debugger-agent-impl.cc
 +++ b/v8/src/inspector/v8-debugger-agent-impl.cc
-@@ -1697,6 +1697,14 @@ Response V8DebuggerAgentImpl::setAsyncCallStackDepth(int depth) {
+@@ -1703,6 +1703,14 @@ Response V8DebuggerAgentImpl::setAsyncCallStackDepth(int depth) {
    return Response::Success();
  }
  

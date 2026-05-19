@@ -26,13 +26,13 @@ Original License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  .../about_flags_cc/Disable-TLS-resumption.inc | 12 ++++
- .../features_cc/Disable-TLS-resumption.inc    |  7 +++
+ .../features_cc/Disable-TLS-resumption.inc    |  7 ++
  .../features_h/Disable-TLS-resumption.inc     |  5 ++
  net/http/http_network_session.cc              |  1 +
- net/quic/quic_session_pool.cc                 | 35 ++++++++++-
- net/socket/ssl_client_socket_impl.cc          | 59 +++++++++++++++++++
+ net/quic/quic_session_pool.cc                 | 35 +++++++++-
+ net/socket/ssl_client_socket_impl.cc          | 68 +++++++++++++++++++
  net/socket/ssl_client_socket_impl.h           |  2 +
- 7 files changed, 119 insertions(+), 2 deletions(-)
+ 7 files changed, 128 insertions(+), 2 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Disable-TLS-resumption.inc
  create mode 100644 cromite_flags/net/base/features_cc/Disable-TLS-resumption.inc
  create mode 100644 cromite_flags/net/base/features_h/Disable-TLS-resumption.inc
@@ -90,7 +90,7 @@ diff --git a/net/http/http_network_session.cc b/net/http/http_network_session.cc
 diff --git a/net/quic/quic_session_pool.cc b/net/quic/quic_session_pool.cc
 --- a/net/quic/quic_session_pool.cc
 +++ b/net/quic/quic_session_pool.cc
-@@ -380,6 +380,38 @@ base::TimeDelta GetAdditionalDelayForMainJob() {
+@@ -384,6 +384,38 @@ base::TimeDelta GetAdditionalDelayForMainJob() {
  
  }  // namespace
  
@@ -129,7 +129,7 @@ diff --git a/net/quic/quic_session_pool.cc b/net/quic/quic_session_pool.cc
  QuicSessionRequest::QuicSessionRequest(QuicSessionPool* pool) : pool_(pool) {}
  
  QuicSessionRequest::~QuicSessionRequest() {
-@@ -2429,8 +2461,7 @@ QuicSessionPool::CreateCryptoConfigHandle(QuicCryptoClientConfigKey key) {
+@@ -2484,8 +2516,7 @@ QuicSessionPool::CreateCryptoConfigHandle(QuicCryptoClientConfigKey key) {
                cert_verifier_, transport_security_state_, sct_auditing_delegate_,
                std::move(hostnames_to_allow_unknown_roots),
                key.network_anonymization_key),
@@ -142,7 +142,15 @@ diff --git a/net/quic/quic_session_pool.cc b/net/quic/quic_session_pool.cc
 diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
 --- a/net/socket/ssl_client_socket_impl.cc
 +++ b/net/socket/ssl_client_socket_impl.cc
-@@ -292,7 +292,33 @@ SSLClientSocketImpl::SSLClientSocketImpl(
+@@ -31,6 +31,7 @@
+ #include "base/strings/string_view_util.h"
+ #include "base/synchronization/lock.h"
+ #include "base/task/sequenced_task_runner.h"
++#include "base/types/fixed_array.h"
+ #include "base/trace_event/trace_event.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+@@ -292,7 +293,41 @@ SSLClientSocketImpl::SSLClientSocketImpl(
    CHECK(context_);
  }
  
@@ -156,18 +164,26 @@ diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket
 +  }
 +
 +  unsigned len;
-+  auto* session_id = SSL_SESSION_get_id(session, &len);
++  const uint8_t *session_id = SSL_SESSION_get_id(session, &len);
++  base::FixedArray<uint8_t> session_id_bytes(len);
++  for (unsigned i = 0; i < len; i++) {
++    session_id_bytes[i] = UNSAFE_TODO(session_id[i]);
++  }
 +
 +  const uint8_t *ticket;
 +  size_t ticklen;
 +  SSL_SESSION_get0_ticket(session, &ticket, &ticklen);
++  base::FixedArray<uint8_t> ticket_bytes(ticklen);
++  for (size_t i = 0; i < ticklen; i++) {
++    ticket_bytes[i] = UNSAFE_TODO(ticket[i]);
++  }
 +
 +  LOG(INFO) << "SSL Log: "
 +            << tag
 +            << " host: " << host_and_port_.ToString()
 +            << " NIK: " << ssl_config_.network_anonymization_key.ToDebugString()
-+            << " sessionid: " << base::HexEncode(session_id, len)
-+            << (ticklen > 0 ? " ticket:" + base::HexEncode(ticket, ticklen) : "");
++            << " sessionid: " << base::HexEncode(base::span<uint8_t>(session_id_bytes))
++            << (ticklen > 0 ? " ticket:" + base::HexEncode(ticket_bytes) : "");
 +}
 +
  SSLClientSocketImpl::~SSLClientSocketImpl() {
@@ -176,7 +192,7 @@ diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket
    Disconnect();
  }
  
-@@ -710,6 +736,8 @@ int SSLClientSocketImpl::Init() {
+@@ -710,6 +745,8 @@ int SSLClientSocketImpl::Init() {
      }
      if (session)
        SSL_set_session(ssl_.get(), session.get());
@@ -185,7 +201,7 @@ diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket
    }
  
    transport_adapter_ = std::make_unique<SocketBIOAdapter>(
-@@ -994,6 +1022,35 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
+@@ -994,6 +1031,35 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
                      : SSLHandshakeDetails::kTLS13Full;
      }
    }
@@ -221,7 +237,7 @@ diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket
    UMA_HISTOGRAM_ENUMERATION("Net.SSLHandshakeDetails", details);
  
    // Measure TLS connections that implement the renegotiation_info and EMS
-@@ -1624,6 +1681,8 @@ bool SSLClientSocketImpl::IsRenegotiationAllowed() const {
+@@ -1624,6 +1690,8 @@ bool SSLClientSocketImpl::IsRenegotiationAllowed() const {
  }
  
  bool SSLClientSocketImpl::IsCachingEnabled() const {
