@@ -65,7 +65,7 @@ suit Cromite logic.
  .../browser/resource_classification_runner.h  |    7 +
  .../resource_classification_runner_impl.cc    |   71 +-
  .../resource_classification_runner_impl.h     |    8 +
- components/adblock/core/BUILD.gn              |   39 -
+ components/adblock/core/BUILD.gn              |   41 +-
  components/adblock/core/common/BUILD.gn       |    8 -
  .../adblock/core/common/adblock_constants.cc  |   17 +-
  .../adblock/core/common/adblock_constants.h   |    1 -
@@ -93,6 +93,7 @@ suit Cromite logic.
  .../adblock/core/resources/elemhideemu.jst    |    2 +
  .../resources/snippets/dist/dependencies.jst  | 1690 ++++++
  .../dist/isolated-first-all.source.jst        | 5256 +++++++++++++++++
+ components/adblock/core/sha256_file.py        |   75 +
  .../adblock/core/sitekey_storage_impl.cc      |   17 +-
  .../core/subscription/conversion_executors.h  |    1 +
  .../filtering_configuration_maintainer.h      |    4 +
@@ -131,7 +132,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 126 files changed, 9368 insertions(+), 708 deletions(-)
+ 127 files changed, 9444 insertions(+), 709 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -140,6 +141,7 @@ suit Cromite logic.
  create mode 100644 components/adblock/core/converter/parser/test/test_rules.txt
  create mode 100644 components/adblock/core/resources/snippets/dist/dependencies.jst
  create mode 100644 components/adblock/core/resources/snippets/dist/isolated-first-all.source.jst
+ create mode 100644 components/adblock/core/sha256_file.py
  create mode 100644 components/content_settings/core/browser/bromite_content_settings/ads.inc
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Stricter-popup-blocker.inc
 
@@ -884,7 +886,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6639,7 +6639,9 @@ ChromeContentBrowserClient::
+@@ -6637,7 +6637,9 @@ ChromeContentBrowserClient::
  }
  
  bool ChromeContentBrowserClient::WillInterceptWebSocket(
@@ -895,7 +897,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
    if (!frame) {
      return false;
-@@ -6661,9 +6663,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
+@@ -6659,9 +6661,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
  }
  
  void ChromeContentBrowserClient::CreateWebSocket(
@@ -2374,7 +2376,7 @@ new file mode 100644
 +  load_time_data.Set("tabTitle",
 +    l10n_util::GetStringUTF16(IDS_ERRORPAGES_TITLE_BLOCKED_BY_ADMINISTRATOR));
 +  load_time_data.Set("heading",
-+    l10n_util::GetStringUTF16(IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR));
++    l10n_util::GetStringUTF16(IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR_ADBLOCK));
 +
 +  std::u16string subscription_url_string(url_formatter::FormatUrl(
 +      subscription_url_, url_formatter::kFormatUrlOmitNothing,
@@ -3923,6 +3925,15 @@ diff --git a/components/adblock/core/BUILD.gn b/components/adblock/core/BUILD.gn
  import("//third_party/flatbuffers/flatbuffer.gni")
  
  flatbuffer("schema") {
+@@ -28,7 +27,7 @@ action("generate_schema_hash") {
+   # The script lives in /chrome but has no dependencies to the //chrome target.
+   # According to the script's author, it could be moved to /build but only if
+   # there's code *upstream* that needs it outside of /chrome.
+-  script = "//chrome/tools/build/sha256_file.py"
++  script = "//components/adblock/core/sha256_file.py"
+   outputs = [ "${target_gen_dir}/schema/schema_hash.cc" ]
+   inputs = [ "${target_gen_dir}/schema/filter_list_schema_generated.h" ]
+ 
 @@ -49,43 +48,9 @@ source_set("schema_hash") {
    deps = [ ":generate_schema_hash" ]
  }
@@ -12002,6 +12013,86 @@ new file mode 100644
 +    document.addEventListener("readystatechange", executeScript, {once:true});
 +  }
 +}
+diff --git a/components/adblock/core/sha256_file.py b/components/adblock/core/sha256_file.py
+new file mode 100644
+--- /dev/null
++++ b/components/adblock/core/sha256_file.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python
++# Copyright 2021 The Chromium Authors
++# Use of this source code is governed by a BSD-style license that can be
++# found in the LICENSE file.
++"""sha256_file.py takes one or more files, computes a SHA-256 hash over it,
++and writes a .cc file containing variables with the digest bytes.
++
++Usage:
++    sha256_file.py path/to/hashes file1.txt file2.pak
++
++Which will create path/to/hashes.cc with a constant for each of the specified
++input file's hash. Corresponding header file should be committed in codebase to
++avoid unnecessary build serilization.
++"""
++
++import hashlib
++import os.path
++import sys
++
++sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)),
++                             os.path.pardir, os.path.pardir, os.path.pardir,
++                             'build'))
++import action_helpers
++
++
++def main(argv):
++    if len(argv) < 3:
++        print('Usage: {} output_path_prefix file1.pak...'.format(argv[0]),
++              file=sys.stderr)
++        return 1
++
++    output_path_prefix = argv[1]
++
++    cc_contents = '#include "{}.h"\n\n'.format(
++        # Drop (<toolchain>/)gen/ prefix.
++        output_path_prefix.split('gen/', 1)[1])
++    for (name, value) in _hash_files(argv[2:]):
++        name = 'kSha256_' + os.path.basename(name).replace('.', '_')
++        cc_contents += 'const std::array<uint8_t, 32> {} = {{'.format(name)
++        cc_contents += ', '.join(map(hex, value))
++        cc_contents += '};\n\n'
++
++    with action_helpers.atomic_output(output_path_prefix + '.cc',
++                                      mode='w') as f:
++        f.write(FILE_TEMPLATE.format(contents=cc_contents))
++
++
++def _hash_files(files):
++    for path in files:
++        with open(path, 'rb') as f:
++            yield path, _hash_file_contents(f)
++
++
++def _hash_file_contents(f):
++    sha2 = hashlib.sha256()
++    while True:
++        data = f.read(4096)
++        if not data:
++            break
++        sha2.update(data)
++    return sha2.digest()
++
++
++FILE_TEMPLATE = """// Generated by chrome/tools/build/sha256_file.py
++// !! DO NOT EDIT !!
++
++#include <stdint.h>
++
++#include <array>
++
++{contents}
++"""
++
++if __name__ == '__main__':
++    sys.exit(main(sys.argv))
 diff --git a/components/adblock/core/sitekey_storage_impl.cc b/components/adblock/core/sitekey_storage_impl.cc
 --- a/components/adblock/core/sitekey_storage_impl.cc
 +++ b/components/adblock/core/sitekey_storage_impl.cc
@@ -12979,7 +13070,7 @@ diff --git a/components/error_page_strings.grdp b/components/error_page_strings.
 +  <message name="IDS_ERRORPAGES_TITLE_BLOCKED_BY_ADMINISTRATOR" desc="Title in the error page when an administrator policy blocks a request.">
 +    Blocked by Adblock
 +  </message>
-+  <message name="IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR" desc="Heading in the error page when an administrator policy blocks a request.">
++  <message name="IDS_ERRORPAGES_HEADING_BLOCKED_BY_ADMINISTRATOR_ADBLOCK" desc="Heading in the error page when an administrator policy blocks a request.">
 +    Blocked by Adblock
 +  </message>
 +  <message name="IDS_ERRORPAGES_PRIMARY_PARAGRAPH_BLOCKED_BY_ADMINISTRATOR" desc="Primary paragraph in the error page when an administrator policy blocks a request.">

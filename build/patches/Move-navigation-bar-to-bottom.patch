@@ -32,6 +32,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../chrome/browser/ChromeTabbedActivity.java  |   3 +-
  .../ChromeAccessibilitySettingsDelegate.java  |  70 +++++++++
  .../HeadlessBrowserControlsStateProvider.java |   5 +
+ .../BottomBarContainerCoordinator.java        |   7 +-
  .../compositor/CompositorViewHolder.java      |   7 +
  .../layouts/LayoutManagerChrome.java          |  12 +-
  .../layouts/LayoutManagerChromeTablet.java    |   7 +-
@@ -42,19 +43,20 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../scene_layer/StaticTabSceneLayer.java      |   7 +-
  .../scene_layer/TabStripSceneLayer.java       |  20 ++-
  .../browser/findinpage/FindToolbarTablet.java |  10 +-
- .../fullscreen/BrowserControlsManager.java    |  17 +-
- .../messages/MessageContainerCoordinator.java |  15 +-
+ .../fullscreen/BrowserControlsManager.java    |  20 ++-
+ .../messages/MessageContainerCoordinator.java |  20 ++-
  .../modaldialog/ChromeTabModalPresenter.java  |   2 +-
  .../chrome/browser/ntp/NewTabPage.java        |  14 +-
- .../chrome/browser/ntp/NewTabPageLayout.java  |  10 +-
+ .../chrome/browser/ntp/NewTabPageLayout.java  |  12 +-
  .../chrome/browser/ntp/RecentTabsPage.java    |  31 +++-
  .../browser/page_info/ChromePageInfo.java     |   2 +
  .../browser/searchwidget/SearchActivity.java  |  14 ++
  .../settings/FragmentDependencyProvider.java  |   5 +
  .../StatusIndicatorCoordinator.java           |   9 ++
  .../StatusIndicatorSceneLayer.java            |   6 +-
- .../browser/toolbar/ToolbarManager.java       |  37 ++++-
+ .../browser/toolbar/ToolbarManager.java       |  39 ++++-
  .../chrome/browser/ui/BottomContainer.java    |  18 +++
+ .../chrome/browser/ui/BottomSheetManager.java |  10 ++
  .../ui/system/StatusBarColorController.java   |   8 +
  .../android/compositor/layer/toolbar_layer.cc |   6 +-
  .../scene_layer/tab_strip_scene_layer.cc      |  16 +-
@@ -108,7 +110,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../render_widget_host_view_android.cc        |   3 +
  .../Move-navigation-bar-to-bottom.inc         |  17 ++
  .../renderer/core/frame/viewport_data.cc      |   1 +
- 95 files changed, 1086 insertions(+), 103 deletions(-)
+ 97 files changed, 1111 insertions(+), 107 deletions(-)
  create mode 100644 chrome/browser/hub/internal/android/java/src/org/chromium/chrome/browser/hub/ReversedLinearLayout.java
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Move-navigation-bar-to-bottom.inc
 
@@ -922,6 +924,30 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/tabmodel/He
      @Override
      public int getTopControlsMinHeight() {
          return 0;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/bottombar/BottomBarContainerCoordinator.java
+@@ -22,6 +22,10 @@ import org.chromium.chrome.browser.ui.bottombar.BottomBar;
+ import org.chromium.chrome.browser.ui.bottombar.BottomBarHostManager.Host;
+ import org.chromium.components.browser_ui.widget.gesture.BackPressHandler;
+ 
++import org.chromium.base.supplier.NullableObservableSupplier;
++import org.chromium.chrome.browser.theme.TopUiThemeColorProvider;
++import org.chromium.chrome.browser.tab.Tab;
++
+ /**
+  * Container for the bottom bar.
+  *
+@@ -76,7 +80,8 @@ public class BottomBarContainerCoordinator implements BottomControlsContentDeleg
+     @Override
+     public void initializeWithNative(
+             BottomControlsVisibilityController visibilityController,
+-            Callback<Object> onModelTokenChange) {
++            Callback<Object> onModelTokenChange,
++            TopUiThemeColorProvider topUiThemeColorProvider, NullableObservableSupplier<Tab> tabSupplier) {
+         mVisibilityController = visibilityController;
+         mOnModelTokenChange = onModelTokenChange;
+ 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
@@ -1344,7 +1370,17 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/fullscreen/Brow
  /** A class that manages browser control visibility and positioning. */
  @NullMarked
  public class BrowserControlsManager implements ActivityStateListener, BrowserControlsSizer {
-@@ -580,6 +582,14 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
+@@ -364,6 +366,9 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
+         mRendererTopContentOffset = mTopControlsHeight;
+         updateControlOffset();
+         scheduleVisibilityUpdate();
++        for (BrowserControlsStateProvider.Observer obs : mControlsObservers) {
++            obs.onTopControlsHeightChanged(mTopControlsHeight, mTopControlsMinHeight);
++        }
+     }
+ 
+     /**
+@@ -580,6 +585,14 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
          }
      }
  
@@ -1359,7 +1395,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/fullscreen/Brow
      @Override
      public int getTopControlsMinHeight() {
          return mTopControlsMinHeight;
-@@ -681,6 +691,8 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
+@@ -681,6 +694,8 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
  
      @Override
      public float getTopVisibleContentOffset() {
@@ -1368,7 +1404,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/fullscreen/Brow
          return getTopControlsHeight() + getTopControlOffset();
      }
  
-@@ -931,7 +943,10 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
+@@ -931,7 +946,10 @@ public class BrowserControlsManager implements ActivityStateListener, BrowserCon
                  TraceEvent.scoped("BrowserControlsManager.notifyControlOffsetChanged")) {
              scheduleVisibilityUpdate();
              if (shouldShowAndroidControls() && mControlsPosition == ControlsPosition.TOP) {
@@ -1383,21 +1419,26 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/fullscreen/Brow
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/messages/MessageContainerCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/messages/MessageContainerCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/messages/MessageContainerCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/messages/MessageContainerCoordinator.java
-@@ -18,6 +18,9 @@ import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
+@@ -18,6 +18,10 @@ import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
  import org.chromium.components.messages.MessageContainer;
  import org.chromium.ui.base.ViewUtils;
  
 +import android.view.Gravity;
 +import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import androidx.coordinatorlayout.widget.CoordinatorLayout;
 +
  /**
   * Coordinator of {@link MessageContainer}, which can adjust margins of the message container and
   * control the visibility of browser control when message is being shown.
-@@ -62,7 +65,12 @@ public class MessageContainerCoordinator implements BrowserControlsStateProvider
+@@ -60,9 +64,14 @@ public class MessageContainerCoordinator implements BrowserControlsStateProvider
+         if (mContainer.getVisibility() != View.VISIBLE) {
+             return;
          }
-         ViewGroup.MarginLayoutParams params =
-                 (ViewGroup.MarginLayoutParams) mContainer.getLayoutParams();
+-        ViewGroup.MarginLayoutParams params =
+-                (ViewGroup.MarginLayoutParams) mContainer.getLayoutParams();
 -        params.topMargin = getContainerTopOffset();
++        CoordinatorLayout.LayoutParams params =
++                (CoordinatorLayout.LayoutParams) mContainer.getLayoutParams();
 +        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +            params.gravity = Gravity.START | Gravity.BOTTOM;
 +            params.bottomMargin = getContainerTopOffset();
@@ -1407,7 +1448,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/messages/Messag
          mContainer.setLayoutParams(params);
      }
  
-@@ -171,7 +179,10 @@ public class MessageContainerCoordinator implements BrowserControlsStateProvider
+@@ -171,7 +180,10 @@ public class MessageContainerCoordinator implements BrowserControlsStateProvider
       */
      private int getContainerTopOffset() {
          assert mContainer != null;
@@ -1475,17 +1516,19 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageLayout.java
-@@ -6,6 +6,9 @@ package org.chromium.chrome.browser.ntp;
+@@ -16,6 +16,11 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
  
- import android.content.Context;
- import android.util.AttributeSet;
 +import android.view.ViewGroup.LayoutParams;
 +import android.widget.FrameLayout;
 +import android.view.Gravity;
- import android.view.View;
- import android.view.ViewGroup;
- import android.view.ViewStub;
-@@ -59,7 +62,12 @@ public class NewTabPageLayout extends LinearLayout {
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
++
+ /**
+  * Layout for the new tab page. This positions the page elements in the correct vertical positions.
+  * There are no separate phone and tablet UIs; this layout adapts based on the available space.
+@@ -59,7 +64,12 @@ public class NewTabPageLayout extends LinearLayout {
          Log.i(TAG, "NewTabPageLayout.onFinishInflate before insertSiteSectionView");
  
          initializeSiteSectionView();
@@ -1793,6 +1836,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/toolbar/Toolbar
          if (mInitializedWithNative) {
              tabGroupUiBottomControlsCoordinator.initializeWithNative();
          }
+@@ -2422,7 +2451,7 @@ public class ToolbarManager
+                         /* readAloudRestoringSupplier= */ () -> {
+                             final var readAloud = mReadAloudControllerSupplier.get();
+                             return readAloud != null && readAloud.isRestoringPlayer();
+-                        });
++                        }, mTopUiThemeColorProvider, mActivityTabProvider.asObservable());
+         if (mInitializedWithNative) {
+             bottomAppBarCoordinator.initializeWithNative();
+         }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContainer.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContainer.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContainer.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContainer.java
@@ -1833,6 +1885,36 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomContai
          float offsetFromControls =
                  mBrowserControlsStateProvider.getBottomControlOffset()
                          - mBrowserControlsStateProvider.getBottomControlsHeight();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomSheetManager.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomSheetManager.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomSheetManager.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/BottomSheetManager.java
+@@ -15,6 +15,7 @@ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
+ import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanel;
+ import org.chromium.chrome.browser.compositor.overlay_panel.OverlayPanelManager;
++import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider.LayoutStateObserver;
+ import org.chromium.chrome.browser.layouts.LayoutType;
+@@ -166,9 +167,18 @@ class BottomSheetManager extends EmptyBottomSheetObserver implements DestroyObse
+                                 mBrowserControlsVisibilityManager.getBrowserControlHiddenRatio());
+                     }
+ 
++                    @Override
++                    public void onTopControlsHeightChanged(int topControlsHeight, int topControlsMinHeight) {
++                        onBottomControlsHeightChanged(controlsVisibilityManager.getBottomControlsHeight(),
++                            controlsVisibilityManager.getBottomControlsMinHeight());
++                    }
++
+                     @Override
+                     public void onBottomControlsHeightChanged(
+                             int bottomControlsHeight, int bottomControlsMinHeight) {
++                        if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
++                            bottomControlsHeight += controlsVisibilityManager.getTopControlsHeight();
++                        }
+                         mSheetController.setBottomControlsOffset(bottomControlsHeight);
+                     }
+                 };
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/system/StatusBarColorController.java
@@ -2767,8 +2849,8 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
                  || SuggestionCommonProperties.BG_TOP_CORNER_ROUNDED == propertyKey) {
 +            if (ChromeFeatureList.sMoveTopToolbarToBottom.isEnabled()) {
 +                view.setRoundingEdges(
-+                        model.get(DropdownCommonProperties.BG_BOTTOM_CORNER_ROUNDED),
-+                        model.get(DropdownCommonProperties.BG_TOP_CORNER_ROUNDED));
++                        model.get(SuggestionCommonProperties.BG_BOTTOM_CORNER_ROUNDED),
++                        model.get(SuggestionCommonProperties.BG_TOP_CORNER_ROUNDED));
 +                return;
 +            }
              view.setRoundingEdges(

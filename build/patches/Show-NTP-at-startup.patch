@@ -11,15 +11,19 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../java/res/xml/homepage_preferences.xml     |  6 ++++
  .../browser/BrowserRestartActivity.java       |  1 +
  .../browser/ChromeInactivityTracker.java      | 14 ++++++++
- .../chrome/browser/ChromeTabbedActivity.java  |  2 ++
- .../browser/tasks/ReturnToChromeUtil.java     | 16 ++++++++-
+ .../chrome/browser/ChromeTabbedActivity.java  | 10 +++---
+ .../browser/tasks/ReturnToChromeUtil.java     | 19 ++++++++---
  chrome/app/settings_strings.grdp              |  2 +-
+ .../HomeTipsModulesProvider.java              |  4 +--
  .../flags/android/chrome_feature_list.cc      |  1 +
  .../cromite/sShowNtpAtStartupAndroid.java     | 33 +++++++++++++++++++
+ .../magic_stack/HomeModulesMediator.java      |  8 +++++
+ .../browser/magic_stack/ModuleRegistry.java   |  3 +-
  .../policies/background_tab_loading_policy.cc |  2 ++
  .../preferences/ChromePreferenceKeys.java     |  2 ++
  .../LegacyChromePreferenceKeys.java           |  1 +
  .../on_startup_page/on_startup_page.ts        |  1 +
+ .../client_util/HomeModulesRankingHelper.java |  2 --
  chrome/browser/sessions/session_restore.cc    |  9 ++++-
  .../res/layout/single_tab_module_layout.xml   | 17 +++++-----
  .../SingleTabSwitcherCoordinator.java         |  2 +-
@@ -30,7 +34,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../about_flags_cc/show-ntp-at-startup.inc    | 12 +++++++
  .../show-ntp-at-startup.inc                   |  5 +++
  .../show-ntp-at-startup.inc                   |  1 +
- 22 files changed, 135 insertions(+), 16 deletions(-)
+ 26 files changed, 150 insertions(+), 29 deletions(-)
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sShowNtpAtStartupAndroid.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/show-ntp-at-startup.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc
@@ -109,6 +113,40 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
          TabUsageTracker.initialize(this.getLifecycleDispatcher(), tabModelSelector);
          TabGroupUsageTracker.initialize(
                  this.getLifecycleDispatcher(), tabModelSelector, this::isWarmOnResume);
+@@ -3310,13 +3312,13 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                         getTabModelSelectorSupplier(),
+                         getTabContentManagerSupplier(),
+                         SetupListModuleUtils::isSetupListActive);
+-        moduleRegistry.registerModule(ModuleType.SINGLE_TAB, singleTabModuleBuilder);
++        moduleRegistry.registerModule(ModuleType.SINGLE_TAB, singleTabModuleBuilder, /*active*/ true);
+ 
+         if (ChromeFeatureList.sPriceChangeModule.isEnabled()) {
+             PriceChangeModuleBuilder priceChangeModuleBuilder =
+                     new PriceChangeModuleBuilder(
+                             this, getProfileProviderSupplier(), mTabModelSelector);
+-            moduleRegistry.registerModule(ModuleType.PRICE_CHANGE, priceChangeModuleBuilder);
++            moduleRegistry.registerModule(ModuleType.PRICE_CHANGE, priceChangeModuleBuilder, /*active*/ false);
+         }
+ 
+         SafetyHubMagicStackBuilder safetyHubMagicStackBuilder =
+@@ -3325,7 +3327,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                         mTabModelProfileSupplier,
+                         mTabModelSelector,
+                         getModalDialogManagerSupplier());
+-        moduleRegistry.registerModule(ModuleType.SAFETY_HUB, safetyHubMagicStackBuilder);
++        moduleRegistry.registerModule(ModuleType.SAFETY_HUB, safetyHubMagicStackBuilder, /*active*/ false);
+ 
+         // Fetch and register the appropriate collection of educational tip or setup list modules.
+         HomeTipsModulesProvider.registerTipModules(
+@@ -3342,7 +3344,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                             SettingsNavigationFactory.createSettingsNavigation()
+                                     .startSettings(this, TabsSettings.class);
+                         });
+-        moduleRegistry.registerModule(ModuleType.AUXILIARY_SEARCH, auxiliarySearchModuleBuilder);
++        moduleRegistry.registerModule(ModuleType.AUXILIARY_SEARCH, auxiliarySearchModuleBuilder, /*active*/ false);
+ 
+         mModuleRegistrySupplier.set(moduleRegistry);
+     }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToChromeUtil.java b/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToChromeUtil.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToChromeUtil.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToChromeUtil.java
@@ -124,12 +162,21 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToC
  import org.chromium.chrome.browser.ntp.NewTabPage;
  import org.chromium.chrome.browser.ntp_customization.NtpCustomizationUtils;
  import org.chromium.chrome.browser.profiles.Profile;
-@@ -138,6 +140,18 @@ public final class ReturnToChromeUtil {
+@@ -128,14 +130,21 @@ public final class ReturnToChromeUtil {
+             Bundle bundle,
+             PersistableBundle persistableBundle,
+             ChromeInactivityTracker inactivityTracker) {
+-        // If the device is android desktop, don't show a NTP homepage.
+-        if (NtpCustomizationUtils.isNtpSimplificationEnabledOnDesktop()) {
++        // If the current session is due to recreated, don't show a NTP homepage.
++        if (isFromRecreate(bundle) || isFromUpdate(persistableBundle)) {
              return false;
          }
  
+-        // If the current session is due to recreated, don't show a NTP homepage.
+-        if (isFromRecreate(bundle) || isFromUpdate(persistableBundle)) {
 +        if (!sShowNtpAtStartupAndroid.getInstance().isEnabled())
-+            return false;
+             return false;
 +
 +        boolean isMainIntentFromLauncherOrRestart =
 +                IntentUtils.isMainIntentFromLauncher(intent)
@@ -138,12 +185,10 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tasks/ReturnToC
 +        if (isMainIntentFromLauncherOrRestart && inactivityTracker.isNewStartup()) {
 +            inactivityTracker.setIsStartup(false);
 +            return true;
-+        }
-+
+         }
+ 
          // Checks whether to show the NTP homepage due to feature flag
-         // HOME_SURFACE_RETURN_TIME_SECONDS.
-         long lastVisibleTimeMs = inactivityTracker.getLastVisibleTimeMs();
-@@ -246,7 +260,7 @@ public final class ReturnToChromeUtil {
+@@ -246,7 +255,7 @@ public final class ReturnToChromeUtil {
              TabModel currentTabModel,
              TabCreator tabCreator,
              HomeSurfaceTracker homeSurfaceTracker) {
@@ -164,6 +209,22 @@ diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
    </message>
    <message name="IDS_SETTINGS_ON_STARTUP_USE_CURRENT" desc="Button to use current pages.">
      Use current pages
+diff --git a/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/HomeTipsModulesProvider.java b/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/HomeTipsModulesProvider.java
+--- a/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/HomeTipsModulesProvider.java
++++ b/chrome/browser/educational_tip/java/src/org/chromium/chrome/browser/educational_tip/HomeTipsModulesProvider.java
+@@ -43,10 +43,10 @@ public class HomeTipsModulesProvider {
+             if (moduleType == ModuleType.SETUP_LIST_TWO_CELL_CONTAINER) {
+                 moduleRegistry.registerModule(
+                         moduleType,
+-                        new EducationalTipModuleTwoCellBuilder(moduleType, actionDelegate));
++                        new EducationalTipModuleTwoCellBuilder(moduleType, actionDelegate), /*active*/ false);
+             } else {
+                 moduleRegistry.registerModule(
+-                        moduleType, new EducationalTipModuleBuilder(moduleType, actionDelegate));
++                        moduleType, new EducationalTipModuleBuilder(moduleType, actionDelegate), /*active*/ false);
+             }
+         }
+     }
 diff --git a/chrome/browser/flags/android/chrome_feature_list.cc b/chrome/browser/flags/android/chrome_feature_list.cc
 --- a/chrome/browser/flags/android/chrome_feature_list.cc
 +++ b/chrome/browser/flags/android/chrome_feature_list.cc
@@ -213,6 +274,37 @@ new file mode 100644
 +        return sInstance;
 +    }
 +}
+diff --git a/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/HomeModulesMediator.java b/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/HomeModulesMediator.java
+--- a/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/HomeModulesMediator.java
++++ b/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/HomeModulesMediator.java
+@@ -125,6 +125,14 @@ public class HomeModulesMediator {
+         // 0. Get the set of currently enabled (eligible) modules.
+         mEnabledModuleSet = null;
+         Set<Integer> enabledModuleSet = getFilteredEnabledModuleSet();
++        List<Integer> enabledModuleList = new ArrayList<>(enabledModuleSet);
++
++        buildModulesAndShow(
++                enabledModuleList,
++                moduleDelegate,
++                onHomeModulesChangedCallback,
++                /*durationMs*/ 0);
++        if ((true)) return;
+ 
+         // 1. Get the sorted list of manually ranked modules, filtered by eligibility.
+         List<Integer> manuallyRankedModules = getSortedManuallyRankedModules(enabledModuleSet);
+diff --git a/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/ModuleRegistry.java b/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/ModuleRegistry.java
+--- a/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/ModuleRegistry.java
++++ b/chrome/browser/magic_stack/android/java/src/org/chromium/chrome/browser/magic_stack/ModuleRegistry.java
+@@ -68,7 +68,8 @@ public class ModuleRegistry {
+      * @param moduleType The type of the module.
+      * @param builder The object of the module builder.
+      */
+-    public void registerModule(@ModuleType int moduleType, ModuleProviderBuilder builder) {
++    public void registerModule(@ModuleType int moduleType, ModuleProviderBuilder builder, boolean active) {
++        if (!active) return;
+         mModuleBuildersMap.put(moduleType, builder);
+     }
+ 
 diff --git a/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc b/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc
 --- a/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc
 +++ b/chrome/browser/performance_manager/policies/background_tab_loading_policy.cc
@@ -266,6 +358,25 @@ diff --git a/chrome/browser/resources/settings/on_startup_page/on_startup_page.t
      return pref.enforcement === chrome.settingsPrivate.Enforcement.ENFORCED ||
          pref.enforcement === chrome.settingsPrivate.Enforcement.RECOMMENDED;
    }
+diff --git a/chrome/browser/segmentation_platform/android/java/src/org/chromium/chrome/browser/segmentation_platform/client_util/HomeModulesRankingHelper.java b/chrome/browser/segmentation_platform/android/java/src/org/chromium/chrome/browser/segmentation_platform/client_util/HomeModulesRankingHelper.java
+--- a/chrome/browser/segmentation_platform/android/java/src/org/chromium/chrome/browser/segmentation_platform/client_util/HomeModulesRankingHelper.java
++++ b/chrome/browser/segmentation_platform/android/java/src/org/chromium/chrome/browser/segmentation_platform/client_util/HomeModulesRankingHelper.java
+@@ -51,7 +51,6 @@ public final class HomeModulesRankingHelper {
+      * @param moduleLabel the module label to notify the module ranker
+      */
+     public static void notifyCardInteracted(Profile profile, String moduleLabel) {
+-        HomeModulesRankingHelperJni.get().notifyCardInteracted(profile, moduleLabel);
+     }
+ 
+     /**
+@@ -61,7 +60,6 @@ public final class HomeModulesRankingHelper {
+      * @param moduleLabel the module label to notify the module ranker
+      */
+     public static void notifyCardShown(Profile profile, String moduleLabel) {
+-        HomeModulesRankingHelperJni.get().notifyCardShown(profile, moduleLabel);
+     }
+ 
+     /**
 diff --git a/chrome/browser/sessions/session_restore.cc b/chrome/browser/sessions/session_restore.cc
 --- a/chrome/browser/sessions/session_restore.cc
 +++ b/chrome/browser/sessions/session_restore.cc

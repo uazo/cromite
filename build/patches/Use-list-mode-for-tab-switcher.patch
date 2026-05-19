@@ -27,11 +27,12 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../tab_management/TabSwitcherPaneBase.java   |   4 +-
  .../TabSwitcherPaneCoordinatorFactory.java    |   5 +-
  .../tab_management/TabUiFeatureUtilities.java |   7 +
+ .../PinnedTabStripCoordinator.java            |  10 +-
  .../tab_ui/tab_management_java_sources.gni    |   2 +
  .../java/res/xml/privacy_preferences.xml      |   6 +
  .../chrome/browser/app/ChromeActivity.java    |   5 +-
  chrome/browser/android/favicon_helper.cc      | 214 ++++++++++-
- chrome/browser/android/favicon_helper.h       |  25 ++
+ chrome/browser/android/favicon_helper.h       |  23 ++
  .../flags/cromite/sTabSwitcherListMode.java   |  33 ++
  .../tab_ui/TabListFaviconProvider.java        | 111 ++++++
  .../browser/ui/favicon/FaviconHelper.java     |  57 ++-
@@ -41,7 +42,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../java/res/drawable/ic_warning_red_16dp.xml |  26 ++
  .../layout/title_and_description_layout.xml   |  31 +-
  .../tab-switcher-list-mode.inc                |   3 +
- 34 files changed, 1180 insertions(+), 41 deletions(-)
+ 35 files changed, 1186 insertions(+), 43 deletions(-)
  create mode 100644 chrome/android/features/tab_ui/java/res/drawable/selected_tab_background.xml
  create mode 100644 chrome/android/features/tab_ui/java/res/drawable/selected_tab_background_incognito.xml
  create mode 100644 chrome/android/features/tab_ui/java/res/layout/tab_list_card_item.xml
@@ -1053,6 +1054,50 @@ diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser
      /** Returns whether device OEM is allow-listed for tab tearing */
      public static boolean doesOemSupportDragToCreateInstance() {
          return TAB_TEARING_OEM_ALLOWLIST.contains(Build.MANUFACTURER.toLowerCase(Locale.US));
+diff --git a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/pinned_tabs_strip/PinnedTabStripCoordinator.java b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/pinned_tabs_strip/PinnedTabStripCoordinator.java
+--- a/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/pinned_tabs_strip/PinnedTabStripCoordinator.java
++++ b/chrome/android/features/tab_ui/java/src/org/chromium/chrome/browser/tasks/tab_management/pinned_tabs_strip/PinnedTabStripCoordinator.java
+@@ -32,6 +32,7 @@ import org.chromium.chrome.browser.tasks.tab_management.TabListCoordinator;
+ import org.chromium.chrome.browser.tasks.tab_management.TabListModel;
+ import org.chromium.chrome.browser.tasks.tab_management.TabListRecyclerView;
+ import org.chromium.chrome.browser.tasks.tab_management.TabProperties.UiType;
++import org.chromium.chrome.browser.tasks.tab_management.TabUiFeatureUtilities;
+ import org.chromium.components.browser_ui.bottomsheet.BottomSheetController;
+ import org.chromium.ui.modaldialog.ModalDialogManager;
+ import org.chromium.ui.modelutil.PropertyModel;
+@@ -106,6 +107,10 @@ public class PinnedTabStripCoordinator {
+ 
+         RecyclerView tabGridListRecyclerView = tabListCoordinator.getContainerView();
+         TabListModel tabListModel = tabListCoordinator.getTabListModel();
++        if (TabUiFeatureUtilities.shouldUseListMode()) {
++           mMediator = null;
++           return;
++        }
+         mMediator =
+                 createMediator(
+                         activity,
+@@ -149,11 +154,12 @@ public class PinnedTabStripCoordinator {
+ 
+     /** Called when the pinned tabs strip is scrolled. */
+     public void onScrolled() {
+-        mMediator.onScrolled();
++        if (mMediator != null) mMediator.onScrolled();
+     }
+ 
+     /** Returns whether the pinned tabs strip is currently visible. */
+     public boolean isPinnedTabsBarVisible() {
++        if (mMediator == null) return false;
+         return mMediator.isPinnedTabsBarVisible();
+     }
+ 
+@@ -197,6 +203,6 @@ public class PinnedTabStripCoordinator {
+     }
+ 
+     public void destroy() {
+-        mMediator.destroy();
++        if (mMediator != null) mMediator.destroy();
+     }
+ }
 diff --git a/chrome/android/features/tab_ui/tab_management_java_sources.gni b/chrome/android/features/tab_ui/tab_management_java_sources.gni
 --- a/chrome/android/features/tab_ui/tab_management_java_sources.gni
 +++ b/chrome/android/features/tab_ui/tab_management_java_sources.gni
@@ -1367,7 +1412,7 @@ diff --git a/chrome/browser/android/favicon_helper.h b/chrome/browser/android/fa
    bool GetLocalFaviconImageForURL(
        JNIEnv* env,
        Profile* profile,
-@@ -44,11 +50,22 @@ class FaviconHelper {
+@@ -44,11 +50,20 @@ class FaviconHelper {
        GURL url,
        int desired_size_in_pixel,
        favicon_base::FaviconRawBitmapCallback callback_runner);
@@ -1379,8 +1424,6 @@ diff --git a/chrome/browser/android/favicon_helper.h b/chrome/browser/android/fa
    void OnJobFinished(int job_id);
  
   private:
-+  FRIEND_TEST_ALL_PREFIXES(FaviconHelperTest, GetLargestSizeIndex);
-+
    virtual ~FaviconHelper();
  
 +  class Job;
@@ -1390,7 +1433,7 @@ diff --git a/chrome/browser/android/favicon_helper.h b/chrome/browser/android/fa
    // This function is expected to be bound to a WeakPtr<FaviconHelper>, so that
    // it won't be run if the FaviconHelper is deleted and
    // |j_favicon_image_callback| isn't executed in that case.
-@@ -56,8 +73,16 @@ class FaviconHelper {
+@@ -56,8 +71,16 @@ class FaviconHelper {
        const base::android::JavaRef<jobject>& j_favicon_image_callback,
        const favicon_base::FaviconRawBitmapResult& result);
  
