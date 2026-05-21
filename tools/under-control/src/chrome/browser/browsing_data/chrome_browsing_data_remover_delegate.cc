@@ -42,7 +42,8 @@
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/domain_reliability/service_factory.h"
-#include "chrome/browser/downgrade/user_data_downgrade.h"
+#include "chrome/browser/downgrade/snapshot_file_collector.h"
+#include "chrome/browser/downgrade/user_data_downgrade.h"  // nogncheck
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
@@ -57,8 +58,8 @@
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service.h"
 #include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service_factory.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
@@ -81,7 +82,6 @@
 #include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "chrome/browser/strike_database/strike_database_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/tpcd/metadata/manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
@@ -143,7 +143,6 @@
 #include "components/strike_database/strike_database.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
-#include "components/tpcd/metadata/browser/manager.h"
 #include "components/web_cache/browser/web_cache_manager.h"
 #include "components/webrtc_logging/browser/log_cleanup.h"
 #include "components/webrtc_logging/browser/text_log_list.h"
@@ -156,6 +155,7 @@
 #include "content/public/browser/prefetch_service_delegate.h"
 #include "content/public/browser/ssl_host_state_delegate.h"
 #include "content/public/browser/storage_partition.h"
+#include "device/fido/platform_credential_store.h"
 #include "google_apis/gaia/gaia_urls.h"
 #include "media/base/media_switches.h"
 #include "media/mojo/services/video_decode_perf_history.h"
@@ -175,9 +175,10 @@
 #include "chrome/browser/feed/feed_service_factory.h"
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/settings/jni_headers/RecentSearchQueue_jni.h"
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
 #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
-#include "components/cdm/browser/media_drm_storage_impl.h"  // nogncheck crbug.com/1125897
+#include "components/cdm/browser/media_drm_storage_impl.h"  // nogncheck crbug.com/40147906
 #include "components/feed/core/v2/public/feed_service.h"    // nogncheck
 #include "components/feed/feed_feature_list.h"
 #include "components/installedapp/android/jni_headers/PackageHash_jni.h"
@@ -200,13 +201,10 @@
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/common/constants.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/activity_log/activity_log.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/net/system_proxy_manager.h"
@@ -433,7 +431,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
       language_histogram->ClearHistory(delete_begin_, delete_end_);
     }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     // The extension activity log contains details of which websites extensions
     // were active on. It therefore indirectly stores details of websites a
     // user has visited so best clean from here as well.
@@ -651,11 +649,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         privacy_sandbox_settings->OnCookiesCleared();
       }
 
-      if (tpcd::metadata::Manager* manager =
-              tpcd::metadata::ManagerFactory::GetForProfile(profile_)) {
-        manager->ResetCohorts();
-      }
-
 #if BUILDFLAG(IS_ANDROID)
       Java_PackageHash_onCookiesDeleted(base::android::AttachCurrentThread(),
                                         profile_->GetJavaObject());
@@ -697,7 +690,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
 
       profile_->GetDefaultStoragePartition()->ClearDataForOrigin(
           content::StoragePartition::REMOVE_DATA_MASK_LOCAL_STORAGE,
-          GURL(chrome::kChromeUINewTabPageURL), base::DoNothing());
+          chrome::ChromeUINewTabPageURLAsGURL(), base::DoNothing());
     }
 #endif  // !BUILDFLAG(IS_ANDROID)
 
@@ -924,8 +917,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         profile_, ServiceAccessType::EXPLICIT_ACCESS);
 
     if (password_store) {
-      // No sync completion callback is needed for profile passwords, since the
-      // login token is persisted and can be used after cookie deletion.
       password_store->RemoveLoginsCreatedBetween(
           FROM_HERE, delete_begin_, delete_end_,
           CreateTaskCompletionCallback(
@@ -979,23 +970,10 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
         profile_, ServiceAccessType::EXPLICIT_ACCESS);
 
     if (account_store) {
-      // Desktop must wait for DATA_TYPE_ACCOUNT_PASSWORDS deletions to be
-      // uploaded to the sync server before deleting any other types (because
-      // deleting DATA_TYPE_COOKIES first would revoke the account storage
-      // opt-in and prevent the upload).
-      // On Android, the account storage doesn't depend on cookies, so there's
-      // no need to wait.
-      base::OnceCallback<void(bool)> sync_completion;
-#if !BUILDFLAG(IS_ANDROID)
-      sync_completion =
-          CreateTaskCompletionCallback(TracingDataType::kAccountPasswordsSynced,
-                                       constants::DATA_TYPE_ACCOUNT_PASSWORDS);
-#endif
       account_store->RemoveLoginsCreatedBetween(
           FROM_HERE, delete_begin_, delete_end_,
           CreateTaskCompletionCallback(TracingDataType::kAccountPasswords,
-                                       constants::DATA_TYPE_ACCOUNT_PASSWORDS),
-          std::move(sync_completion));
+                                       constants::DATA_TYPE_ACCOUNT_PASSWORDS));
     }
 
     // Record that a password removal action happened for the account store.
@@ -1147,6 +1125,10 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
             filter,
             base::IgnoreArgs<offline_pages::OfflinePageModel::DeletePageResult>(
                 CreateTaskCompletionClosure(TracingDataType::kOfflinePages)));
+
+      // Deletes the recent search entries for Android Settings.
+      Java_RecentSearchQueue_deleteDiskData(
+          base::android::AttachCurrentThread());
     }
 #endif
 
@@ -1367,10 +1349,25 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   //////////////////////////////////////////////////////////////////////////////
   // Remove data for this profile contained in any snapshots.
   if (remove_mask && filter_builder->MatchesMostOriginsAndDomains()) {
+    bool delete_all =
+        (((remove_mask & chrome_browsing_data_remover::WIPE_PROFILE) ==
+          chrome_browsing_data_remover::WIPE_PROFILE) ||
+         ((remove_mask & chrome_browsing_data_remover::ALL_DATA_TYPES) ==
+          chrome_browsing_data_remover::ALL_DATA_TYPES)) &&
+        delete_begin_.is_null();
+    std::optional<std::vector<base::FilePath>> files_to_delete;
+    if (!delete_all) {
+      files_to_delete.emplace();
+      for (const auto& item : downgrade::CollectProfileItems()) {
+        if (item.data_types & remove_mask) {
+          files_to_delete->push_back(item.path);
+        }
+      }
+    }
     base::ThreadPool::PostTaskAndReply(
         FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
         base::BindOnce(&downgrade::RemoveDataForProfile, delete_begin_,
-                       profile_->GetPath(), remove_mask),
+                       profile_->GetPath(), std::move(files_to_delete)),
         CreateTaskCompletionClosure(TracingDataType::kUserDataSnapshot));
   }
 #endif  // BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
@@ -1559,6 +1556,7 @@ void ChromeBrowsingDataRemoverDelegate::OnTaskComplete(
   std::move(callback_).Run(failed_data_types_);
 }
 
+// LINT.IfChange(TracingDataTypeHistogramSuffix)
 const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
     TracingDataType task) {
   switch (task) {
@@ -1606,8 +1604,6 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "UserDataSnapshot";
     case TracingDataType::kAccountPasswords:
       return "AccountPasswords";
-    case TracingDataType::kAccountPasswordsSynced:
-      return "AccountPasswordsSynced";
     case TracingDataType::kFaviconCacheExpiration:
       return "FaviconCacheExpiration";
     case TracingDataType::kSecurePaymentConfirmationCredentials:
@@ -1622,6 +1618,7 @@ const char* ChromeBrowsingDataRemoverDelegate::GetHistogramSuffix(
       return "MediaDeviceSalts";
   }
 }
+// LINT.ThenChange(//tools/metrics/histograms/metadata/history/histograms.xml:History.ClearBrowsingData.Duration.ChromeTask.Task)
 
 void ChromeBrowsingDataRemoverDelegate::OnStartRemoving() {
   profile_keep_alive_ = std::make_unique<ScopedProfileKeepAlive>(
@@ -1744,4 +1741,5 @@ void ChromeBrowsingDataRemoverDelegate::DisablePasswordsAutoSignin(
 
 #if BUILDFLAG(IS_ANDROID)
 DEFINE_JNI(PackageHash)
+DEFINE_JNI(RecentSearchQueue)
 #endif
