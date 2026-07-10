@@ -9,22 +9,105 @@ see https://chromium-review.googlesource.com/c/chromium/src/+/5540782
 
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
- .../blink/renderer/core/css/parser/css_supports_parser.cc       | 2 +-
- .../renderer/core/speculation_rules/document_rule_predicate.cc  | 2 +-
- 2 files changed, 2 insertions(+), 2 deletions(-)
+ .../build/scripts/cromite_feature_gen.py      | 63 +++++++++++++++++++
+ .../core/css/parser/css_supports_parser.cc    |  4 +-
+ .../document_rule_predicate.cc                |  2 +-
+ third_party/blink/renderer/platform/BUILD.gn  | 21 +++++++
+ 4 files changed, 88 insertions(+), 2 deletions(-)
+ create mode 100644 third_party/blink/renderer/build/scripts/cromite_feature_gen.py
 
+diff --git a/third_party/blink/renderer/build/scripts/cromite_feature_gen.py b/third_party/blink/renderer/build/scripts/cromite_feature_gen.py
+new file mode 100644
+--- /dev/null
++++ b/third_party/blink/renderer/build/scripts/cromite_feature_gen.py
+@@ -0,0 +1,63 @@
++#!/usr/bin/env python3
++import sys
++import os
++import json
++import re
++
++sys.path.append(os.path.join(os.path.dirname(__file__), '../../build/scripts'))
++import json5_generator
++
++def main():
++    if len(sys.argv) < 4:
++        print("Uso: cromite_feature_gen.py <input.json5> <output.h> <output.cc>")
++        sys.exit(1)
++
++    input_file = sys.argv[1]
++    out_h_path = sys.argv[2]
++    out_cc_path = sys.argv[3]
++
++    data = json5_generator.Json5File.load_from_files([input_file])
++
++    stable_features = []
++    for feature in data.name_dictionaries:
++        status = feature.get('status')
++        if status == 'stable' or (isinstance(status, dict) and status.get('default') == 'stable'):
++            stable_features.append(feature['name'])
++
++    h_code = """#ifndef THIRD_PARTY_BLINK_CROMITE_ENABLED_FEATURES_H_
++#define THIRD_PARTY_BLINK_CROMITE_ENABLED_FEATURES_H_
++
++#include <string>
++#include "third_party/blink/renderer/core/core_export.h"
++
++namespace blink {
++class CORE_EXPORT CromiteCSSFeatures {
++ public:
++  static bool IsFeatureStableFromString(const std::string& name);
++};
++}  // namespace blink
++#endif  // THIRD_PARTY_BLINK_CROMITE_ENABLED_FEATURES_H_
++"""
++    with open(out_h_path, 'w') as f:
++        f.write(h_code)
++
++    cc_elements = []
++    for feat in stable_features:
++        cc_elements.append(f'  if (name == "{feat}") return true;')
++
++    joined_elements = "\n".join(cc_elements)
++
++    cc_code = f"""#include "third_party/blink/renderer/platform/cromite_enabled_features.h"
++
++namespace blink {{
++bool CromiteCSSFeatures::IsFeatureStableFromString(const std::string& name) {{
++{joined_elements}
++  return false;
++}}
++}}  // namespace blink
++"""
++    with open(out_cc_path, 'w') as f:
++        f.write(cc_code)
++
++if __name__ == '__main__':
++    main()
 diff --git a/third_party/blink/renderer/core/css/parser/css_supports_parser.cc b/third_party/blink/renderer/core/css/parser/css_supports_parser.cc
 --- a/third_party/blink/renderer/core/css/parser/css_supports_parser.cc
 +++ b/third_party/blink/renderer/core/css/parser/css_supports_parser.cc
-@@ -302,7 +302,7 @@ bool CSSSupportsParser::ConsumeBlinkFeatureFn(CSSParserTokenStream& stream) {
+@@ -13,6 +13,7 @@
+ #include "third_party/blink/renderer/core/css/style_rule.h"
+ #include "third_party/blink/renderer/core/css_value_keywords.h"
+ #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
++#include "third_party/blink/renderer/platform/cromite_enabled_features.h"
+ 
+ namespace blink {
+ 
+@@ -298,10 +299,11 @@ bool CSSSupportsParser::ConsumeBlinkFeatureFn(CSSParserTokenStream& stream) {
+ 
+   if (stream.Peek().GetType() == kIdentToken) {
+     const CSSParserToken& feature_name = stream.ConsumeIncludingWhitespace();
+-    if (RuntimeEnabledFeatures::IsFeatureEnabledFromString(
++    if (CromiteCSSFeatures::IsFeatureStableFromString(
              feature_name.Value().Utf8()) &&
          guard.Release()) {
        stream.ConsumeWhitespace();
--      return true;
-+      return false;
++      DLOG(INFO) << "---Blink feature: " << feature_name.Value().Utf8();
+       return true;
      }
    }
-   return false;
 diff --git a/third_party/blink/renderer/core/speculation_rules/document_rule_predicate.cc b/third_party/blink/renderer/core/speculation_rules/document_rule_predicate.cc
 --- a/third_party/blink/renderer/core/speculation_rules/document_rule_predicate.cc
 +++ b/third_party/blink/renderer/core/speculation_rules/document_rule_predicate.cc
@@ -37,4 +120,49 @@ diff --git a/third_party/blink/renderer/core/speculation_rules/document_rule_pre
      CSSParserContext* css_parser_context =
          MakeGarbageCollected<CSSParserContext>(*execution_context);
      for (auto* raw_selector : raw_selectors) {
+diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
+--- a/third_party/blink/renderer/platform/BUILD.gn
++++ b/third_party/blink/renderer/platform/BUILD.gn
+@@ -43,6 +43,23 @@ make_names("font_family_names") {
+   output_dir = blink_platform_output_dir
+ }
+ 
++blink_python_runner("generate_cromite_enabled_features") {
++  script = "../build/scripts/cromite_feature_gen.py"
++
++  inputs = [ "runtime_enabled_features.json5" ]
++
++  outputs = [
++    "$blink_platform_output_dir/cromite_enabled_features.h",
++    "$blink_platform_output_dir/cromite_enabled_features.cc",
++  ]
++
++  args = [
++    rebase_path(inputs[0], root_build_dir),
++    rebase_path(outputs[0], root_build_dir),
++    rebase_path(outputs[1], root_build_dir),
++  ]
++}
++
+ blink_python_runner("runtime_enabled_features") {
+   script = "../build/scripts/make_runtime_features.py"
+ 
+@@ -172,6 +189,7 @@ group("make_platform_generated") {
+     ":color_data",
+     ":font_family_names",
+     ":runtime_enabled_features",
++    ":generate_cromite_enabled_features",
+     ":runtime_feature_state_override_context",
+     "//third_party/blink/public:buildflags",
+     "//third_party/blink/public/common:buildflags",
+@@ -1691,6 +1709,9 @@ component("platform") {
+       sources += [ _output ]
+     }
+   }
++  foreach(_output, get_target_outputs(":generate_cromite_enabled_features")) {
++    sources += [ _output ]
++  }
+ 
+   if (current_cpu == "loong64") {
+     cflags = [
 --
