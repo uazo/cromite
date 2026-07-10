@@ -7,7 +7,7 @@ Full activation of incognito mode in experimental extension
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  .../chrome/browser/ChromeTabbedActivity.java  |   5 +
- .../chrome/browser/app/ChromeActivity.java    |  42 +++++-
+ .../chrome/browser/app/ChromeActivity.java    |  42 ++++-
  .../CustomTabIntentDataProvider.java          |   3 +
  .../browser/tabmodel/TabModelJniBridge.java   |   3 +-
  .../tabmodel/TabModelSelectorBase.java        |  14 ++
@@ -20,7 +20,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../extensions/extension_actions_bridge.h     |   4 +-
  .../ui/extensions/ExtensionActionsBridge.java |  62 +++++++-
  .../ui/extensions/ExtensionsMenuBridge.java   | 103 ++++++++++---
- .../extensions/ExtensionsToolbarBridge.java   | 137 ++++++++++++------
+ .../extensions/ExtensionsToolbarBridge.java   | 145 ++++++++++++------
+ .../ExtensionAccessControlButtonMediator.java |   3 +-
  .../ExtensionActionListCoordinator.java       |  12 +-
  .../ExtensionActionListMediator.java          |  24 +--
  .../extensions/ExtensionsMenuCoordinator.java |  14 +-
@@ -32,7 +33,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../ChromeAndroidTaskFeature.java             |   2 +-
  components/tabs/impl/tab_collection.cc        |  16 ++
  components/tabs/impl/tab_strip_collection.cc  |   4 +-
- 26 files changed, 449 insertions(+), 122 deletions(-)
+ 27 files changed, 458 insertions(+), 124 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
@@ -688,7 +689,7 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
      // TODO(crbug.com/423483658): Consider moving ExtensionsMenuButtonState and related types
      // (e.g., RequestAccessButtonParams) into a new ExtensionControls.java file.
      @IntDef({
-@@ -48,21 +55,61 @@ public class ExtensionsToolbarBridge implements Destroyable {
+@@ -48,49 +55,96 @@ public class ExtensionsToolbarBridge implements Destroyable {
      private final @Nullable LifetimeAssert mLifetimeAssert = LifetimeAssert.create(this);
      private long mNativeExtensionsToolbarAndroid;
      private final ObserverList<Observer> mObservers = new ObserverList<>();
@@ -712,6 +713,8 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
                  ExtensionsToolbarBridgeJni.get()
 -                        .init(this, task.getOrCreateNativeBrowserWindowPtr(profile));
 +                        .init(this, mTask.getOrCreateNativeBrowserWindowPtr(mProfile));
++        if (Instance().mNativeExtensionsToolbarAndroid == 0)
++            Instance().mNativeExtensionsToolbarAndroid = mNativeExtensionsToolbarAndroid;
 +    }
 +
 +    @Override
@@ -754,8 +757,10 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
 +    private void destroy() {
          assert mNativeExtensionsToolbarAndroid != 0;
          ExtensionsToolbarBridgeJni.get().destroy(mNativeExtensionsToolbarAndroid);
++        if (Instance().mNativeExtensionsToolbarAndroid == mNativeExtensionsToolbarAndroid)
++            Instance().mNativeExtensionsToolbarAndroid = 0;
          mNativeExtensionsToolbarAndroid = 0;
-@@ -70,27 +117,30 @@ public class ExtensionsToolbarBridge implements Destroyable {
+         LifetimeAssert.destroy(mLifetimeAssert);
      }
  
      public void addObserver(Observer observer) {
@@ -792,7 +797,7 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
      }
  
      @Nullable
-@@ -106,9 +156,10 @@ public class ExtensionsToolbarBridge implements Destroyable {
+@@ -106,9 +160,10 @@ public class ExtensionsToolbarBridge implements Destroyable {
              // ChromeAndroidTask}'s destruction, and it is currently being worked on.
              return null;
          }
@@ -804,7 +809,7 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
                          actionId,
                          webContents,
                          canvasWidthDp,
-@@ -127,52 +178,52 @@ public class ExtensionsToolbarBridge implements Destroyable {
+@@ -127,52 +182,53 @@ public class ExtensionsToolbarBridge implements Destroyable {
      }
  
      public String[] getPinnedActionIds() {
@@ -860,19 +865,23 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
  
      public @ExtensionsMenuButtonState int getExtensionsMenuButtonState(WebContents webContents) {
 -        assert mNativeExtensionsToolbarAndroid != 0;
-+        assert Instance().mNativeExtensionsToolbarAndroid != 0;
++        if (Instance().mNativeExtensionsToolbarAndroid == 0)
++            return ExtensionsMenuButtonState.DEFAULT;
          return ExtensionsToolbarBridgeJni.get()
 -                .getExtensionsMenuButtonState(mNativeExtensionsToolbarAndroid, webContents);
 +                .getExtensionsMenuButtonState(Instance().mNativeExtensionsToolbarAndroid, webContents);
      }
  
      public void onRequestAccessButtonClicked(WebContents webContents) {
-@@ -184,10 +235,10 @@ public class ExtensionsToolbarBridge implements Destroyable {
+@@ -183,11 +239,12 @@ public class ExtensionsToolbarBridge implements Destroyable {
+                 .onRequestAccessButtonClicked(mNativeExtensionsToolbarAndroid, webContents);
      }
  
-     public RequestAccessButtonParams getRequestAccessButtonParams(WebContents webContents) {
+-    public RequestAccessButtonParams getRequestAccessButtonParams(WebContents webContents) {
 -        assert mNativeExtensionsToolbarAndroid != 0;
-+        assert Instance().mNativeExtensionsToolbarAndroid != 0;
++    public RequestAccessButtonParams getNullableRequestAccessButtonParams(WebContents webContents) {
++        if (Instance().mNativeExtensionsToolbarAndroid == 0)
++            return null;
          RequestAccessButtonParams params =
                  ExtensionsToolbarBridgeJni.get()
 -                        .getRequestAccessButtonParams(mNativeExtensionsToolbarAndroid, webContents);
@@ -880,7 +889,7 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
          assert params != null;
          return params;
      }
-@@ -201,29 +252,29 @@ public class ExtensionsToolbarBridge implements Destroyable {
+@@ -201,29 +258,29 @@ public class ExtensionsToolbarBridge implements Destroyable {
      @CalledByNative
      public void triggerPopup(@JniType("std::string") String actionId, long nativeHostPtr) {
          // {@link mDelegate} should be set in {@code ExtensionActionListMediator}'s constructor.
@@ -916,7 +925,7 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
              observer.onToolbarControlStateUpdated();
          }
      }
-@@ -231,65 +282,65 @@ public class ExtensionsToolbarBridge implements Destroyable {
+@@ -231,65 +288,65 @@ public class ExtensionsToolbarBridge implements Destroyable {
      @CalledByNative
      public boolean hasPoppedOutAction() {
          // {@link mDelegate} should be set in {@code ExtensionActionListMediator}'s constructor.
@@ -994,6 +1003,19 @@ diff --git a/chrome/browser/ui/android/extensions/java/src/org/chromium/chrome/b
              observer.onActiveWebContentsChanged(webContents);
          }
      }
+diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionAccessControlButtonMediator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionAccessControlButtonMediator.java
+--- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionAccessControlButtonMediator.java
++++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionAccessControlButtonMediator.java
+@@ -79,7 +79,8 @@ class ExtensionAccessControlButtonMediator implements Destroyable {
+ 
+     private void refreshRequestAccessButtonWithWebContents(WebContents webContents) {
+         RequestAccessButtonParams params =
+-                mExtensionsToolbarBridge.getRequestAccessButtonParams(webContents);
++                mExtensionsToolbarBridge.getNullableRequestAccessButtonParams(webContents);
++        if (params == null) return;
+         if (params.getExtensionIds().length > 0) {
+             mModel.set(ExtensionsToolbarProperties.IS_REQUEST_ACCESS_BUTTON_VISIBLE, true);
+             mModel.set(
 diff --git a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
 --- a/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
 +++ b/chrome/browser/ui/android/toolbar/java/src/org/chromium/chrome/browser/toolbar/extensions/ExtensionActionListCoordinator.java
