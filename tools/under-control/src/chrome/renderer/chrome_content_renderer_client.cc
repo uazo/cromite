@@ -197,6 +197,7 @@
 #include "components/feed/feed_feature_list.h"
 #else
 #include "chrome/common/record_replay/record_replay_features.h"
+#include "chrome/renderer/indigo/indigo_agent.h"
 #include "chrome/renderer/record_replay/record_replay_agent.h"
 #include "chrome/renderer/searchbox/searchbox.h"
 #include "chrome/renderer/searchbox/searchbox_extension.h"
@@ -327,9 +328,9 @@ void AppendParams(
   }
 
   for (size_t i = 0; i < additional_params.size(); ++i) {
-    names[existing_size + i] = WebString::FromUTF16(additional_params[i].name);
+    names[existing_size + i] = WebString::FromUtf16(additional_params[i].name);
     values[existing_size + i] =
-        WebString::FromUTF16(additional_params[i].value);
+        WebString::FromUtf16(additional_params[i].value);
   }
 
   existing_names->swap(names);
@@ -426,15 +427,15 @@ void ChromeContentRendererClient::RenderThreadStarted() {
 
   extensions_renderer_client->RenderThreadStarted();
   WebSecurityPolicy::RegisterURLSchemeAsExtension(
-      WebString::FromASCII(extensions::kExtensionScheme));
+      WebString::FromAscii(extensions::kExtensionScheme));
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
   WebSecurityPolicy::RegisterURLSchemeAsIsolatedApp(
-      WebString::FromASCII(webapps::kIsolatedAppScheme));
+      WebString::FromAscii(webapps::kIsolatedAppScheme));
 #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
         // BUILDFLAG(IS_CHROMEOS)
   WebSecurityPolicy::RegisterURLSchemeAsCodeCacheWithHashing(
-      WebString::FromASCII(extensions::kExtensionScheme));
+      WebString::FromAscii(extensions::kExtensionScheme));
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
 #if BUILDFLAG(ENABLE_SPELLCHECK)
@@ -474,7 +475,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   // treated as first-party.
   // See
   // ChromeContentBrowserClient::ShouldTreatURLSchemeAsFirstPartyWhenTopLevel
-  WebString chrome_scheme(WebString::FromASCII(content::kChromeUIScheme));
+  WebString chrome_scheme(WebString::FromAscii(content::kChromeUIScheme));
   WebSecurityPolicy::RegisterURLSchemeAsFirstPartyWhenTopLevelEmbeddingSecure(
       chrome_scheme);
 
@@ -485,7 +486,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   // URLs since it should never be visible to the user.
   // See also ChromeContentClient::AddAdditionalSchemes that adds it as an
   // empty document scheme.
-  WebString native_scheme(WebString::FromASCII(chrome::kChromeNativeScheme));
+  WebString native_scheme(WebString::FromAscii(chrome::kChromeNativeScheme));
   WebSecurityPolicy::RegisterURLSchemeAsDisplayIsolated(native_scheme);
   WebSecurityPolicy::RegisterURLSchemeAsNotAllowingJavascriptURLs(
       native_scheme);
@@ -494,7 +495,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   // normal content, and should also be unable to script anything but themselves
   // (to help limit the damage that a corrupt page could cause).
   WebString chrome_search_scheme(
-      WebString::FromASCII(chrome::kChromeSearchScheme));
+      WebString::FromAscii(chrome::kChromeSearchScheme));
 
 #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
     BUILDFLAG(IS_CHROMEOS)
@@ -506,7 +507,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
     // isolated-app: is the scheme used for Isolated Web Apps, which are web
     // applications packaged in Signed Web Bundles.
     WebString isolated_app_scheme(
-        WebString::FromASCII(webapps::kIsolatedAppScheme));
+        WebString::FromAscii(webapps::kIsolatedAppScheme));
     // Resources contained in Isolated Web Apps are HTTP-like and safe to expose
     // to the fetch API.
     WebSecurityPolicy::RegisterURLSchemeAsSupportingFetchAPI(
@@ -546,7 +547,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   }
 
   WebString dom_distiller_scheme(
-      WebString::FromASCII(dom_distiller::kDomDistillerScheme));
+      WebString::FromAscii(dom_distiller::kDomDistillerScheme));
   // TODO(nyquist): Add test to ensure this happens when the flag is set.
   WebSecurityPolicy::RegisterURLSchemeAsDisplayIsolated(dom_distiller_scheme);
 
@@ -563,7 +564,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
   for (auto& scheme :
        secure_origin_allowlist::GetSchemesBypassingSecureContextCheck()) {
     WebSecurityPolicy::AddSchemeToSecureContextSafelist(
-        WebString::FromASCII(scheme));
+        WebString::FromAscii(scheme));
   }
 
   // This doesn't work in single-process mode.
@@ -705,6 +706,7 @@ void ChromeContentRendererClient::RenderFrameCreated(
           record_replay::features::kRecordReplayBase)) {
     new record_replay::RecordReplayAgent(render_frame, associated_interfaces);
   }
+  indigo::IndigoAgent::MaybeCreate(render_frame, associated_interfaces);
 #endif
 
   if (content_capture::features::IsContentCaptureEnabled()) {
@@ -1453,13 +1455,13 @@ void ChromeContentRendererClient::
       blink::WebRuntimeFeatures::EnableAIPromptAPI(true);
     }
     blink::WebRuntimeFeatures::EnableAIPromptAPIForWorkers(true);
+    blink::WebRuntimeFeatures::EnableAIPromptAPILegacyIdentifiers(true);
+    blink::WebRuntimeFeatures::EnableAIPromptAPILegacyParams(true);
     blink::WebRuntimeFeatures::EnableAIRewriterAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableAISummarizationAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableAIWriterAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableLanguageDetectionAPIForWorkers(true);
     blink::WebRuntimeFeatures::EnableTranslationAPIForWorkers(true);
-    blink::WebRuntimeFeatures::EnableLanguageModelLegacyParamsAndAttributes(
-        true);
   }
 }
 
