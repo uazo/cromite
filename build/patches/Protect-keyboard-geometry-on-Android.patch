@@ -1,0 +1,3351 @@
+From: uazo <uazo@users.noreply.github.com>
+Date: Fri, 24 Jul 2026 04:34:57 +0000
+Subject: Protect keyboard geometry on Android
+
+Prevent websites from inferring on-screen keyboard dimensions through
+viewport changes, dynamic CSS viewport units, browser-controls geometry,
+and the Virtual Keyboard API.
+
+Keep Chromium content at its neutral pre-IME height inside a native
+ProtectedViewportScrollView. Force overlays-content while protection is
+active, expose an empty virtual-keyboard rectangle, and retain stable
+browser-controls geometry throughout the IME transition.
+
+Use the focused editable or caret bounds to pan the physical viewport
+without resizing Blink. Preserve continuous scrolling by handing
+unconsumed motion between the native ScrollView and cc while retaining
+normal compositor hit testing for inner and root scrollers.
+
+Add an enabled-by-default feature flag and a per-site content setting.
+WebUI and extension pages retain Chromium's standard keyboard behavior.
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+ chrome/android/chrome_java_sources.gni        |    1 +
+ .../chrome/browser/SwipeRefreshHandler.java   |   42 +
+ ...ActivityTabWebContentsDelegateAndroid.java |   38 +-
+ .../compositor/CompositorViewHolder.java      |  275 +++-
+ .../ProtectedViewportScrollView.java          | 1446 +++++++++++++++++
+ .../browser/tab/TabWebContentsObserver.java   |   17 +
+ .../browser/flags/ChromeFeatureList.java      |    2 +-
+ .../sAndroidProtectedKeyboardGeometry.java    |   35 +
+ ...otectedKeyboardGeometryContentSetting.java |   94 ++
+ .../protected_keyboard_geometry.grdp          |   27 +
+ .../protected_keyboard_geometry.inc           |   21 +
+ .../protected_keyboard_geometry.inc           |    2 +
+ .../android/overscroll_controller_android.cc  |   40 +
+ .../android/overscroll_controller_android.h   |   11 +
+ .../web_contents/web_contents_android.cc      |    6 +
+ .../web_contents/web_contents_android.h       |    1 +
+ .../content/browser/input/ImeAdapterImpl.java |   90 +
+ .../browser/webcontents/WebContentsImpl.java  |    8 +
+ .../content_public/browser/WebContents.java   |    3 +
+ .../browser/test/mock/MockWebContents.java    |    3 +
+ .../Android-Protected-Keyboard-Geometry.inc   |   10 +
+ .../protected_keyboard_geometry.inc           |    5 +
+ .../Android-Protected-Keyboard-Geometry.inc   |    3 +
+ .../Android-Protected-Keyboard-Geometry.inc   |    2 +
+ .../public/mojom/input/input_handler.mojom    |    4 +
+ .../core/frame/local_frame_mojo_handler.cc    |    7 +-
+ .../renderer/core/frame/viewport_data.cc      |   13 +-
+ .../blink/renderer/core/frame/viewport_data.h |    4 +-
+ .../core/frame/web_frame_widget_impl.cc       |   20 +
+ .../core/frame/web_frame_widget_impl.h        |    1 +
+ third_party/blink/renderer/core/page/page.cc  |   25 +
+ third_party/blink/renderer/core/page/page.h   |    2 +
+ .../input/frame_widget_input_handler_impl.cc  |    9 +
+ .../input/frame_widget_input_handler_impl.h   |    1 +
+ .../widget/input/input_handler_proxy.cc       |   28 +-
+ .../widget/input/input_handler_proxy.h        |    8 +
+ ui/android/event_forwarder.cc                 |   63 +
+ ui/android/event_forwarder.h                  |   18 +
+ .../chromium/ui/OverscrollRefreshHandler.java |   16 +
+ .../org/chromium/ui/base/EventForwarder.java  |   48 +
+ ui/android/overscroll_refresh.cc              |   15 +
+ ui/android/overscroll_refresh.h               |    5 +
+ ui/android/overscroll_refresh_handler.cc      |   24 +
+ ui/android/overscroll_refresh_handler.h       |    5 +
+ 44 files changed, 2468 insertions(+), 30 deletions(-)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/compositor/ProtectedViewportScrollView.java
+ create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sAndroidProtectedKeyboardGeometry.java
+ create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/CromiteProtectedKeyboardGeometryContentSetting.java
+ create mode 100644 components/browser_ui/strings/bromite_content_settings/protected_keyboard_geometry.grdp
+ create mode 100644 components/content_settings/core/browser/bromite_content_settings/protected_keyboard_geometry.inc
+ create mode 100644 components/content_settings/core/common/bromite_content_settings/protected_keyboard_geometry.inc
+ create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Android-Protected-Keyboard-Geometry.inc
+ create mode 100644 cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/protected_keyboard_geometry.inc
+ create mode 100644 cromite_flags/third_party/blink/common/features_cc/Android-Protected-Keyboard-Geometry.inc
+ create mode 100644 cromite_flags/third_party/blink/common/features_h/Android-Protected-Keyboard-Geometry.inc
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -313,6 +313,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/compositor/CompositorSurfaceManagerImpl.java",
+   "java/src/org/chromium/chrome/browser/compositor/CompositorView.java",
+   "java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java",
++  "java/src/org/chromium/chrome/browser/compositor/ProtectedViewportScrollView.java",
+   "java/src/org/chromium/chrome/browser/compositor/LayerTitleCache.java",
+   "java/src/org/chromium/chrome/browser/compositor/layouts/Layout.java",
+   "java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerChrome.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/SwipeRefreshHandler.java
+@@ -14,6 +14,7 @@ import android.view.HapticFeedbackConstants;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.ViewGroup.LayoutParams;
++import android.view.ViewParent;
+ 
+ import androidx.annotation.ColorInt;
+ 
+@@ -26,6 +27,7 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.browser_controls.BottomOverscrollHandler;
++import org.chromium.chrome.browser.compositor.ProtectedViewportScrollView;
+ import org.chromium.chrome.browser.gesturenav.HistoryNavigationCoordinator;
+ import org.chromium.chrome.browser.tab.EmptyTabObserver;
+ import org.chromium.chrome.browser.tab.Tab;
+@@ -109,6 +111,7 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+     // Handles overscroll PULL_FROM_BOTTOM_EDGE. This is used to track the browser controls
+     // state.
+     private @Nullable BottomOverscrollHandler mBottomOverscrollHandler;
++    private @Nullable ProtectedViewportScrollView mProtectedViewportOverscroll;
+ 
+     public static SwipeRefreshHandler from(Tab tab) {
+         return SwipeRefreshHandler.from(tab, DEFAULT_SWIPE_REFRESH_LAYOUT_CREATOR);
+@@ -222,6 +225,7 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+         mContainerView = null;
+         mNavigationCoordinator = null;
+         mBottomOverscrollHandler = null;
++        mProtectedViewportOverscroll = null;
+         setEnabled(false);
+     }
+ 
+@@ -272,6 +276,43 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+         return false;
+     }
+ 
++    private @Nullable ProtectedViewportScrollView findProtectedViewport() {
++        View current = mTab.getContentView();
++        while (current != null) {
++            if (current instanceof ProtectedViewportScrollView protectedViewport) {
++                return protectedViewport;
++            }
++            ViewParent parent = current.getParent();
++            current = parent instanceof View ? (View) parent : null;
++        }
++        return null;
++    }
++
++    @Override
++    public boolean startProtectedViewportHandoff() {
++        endProtectedViewportHandoff();
++        ProtectedViewportScrollView protectedViewport = findProtectedViewport();
++        if (protectedViewport == null
++                || !protectedViewport.startCompositorOverscrollHandoff()) {
++            return false;
++        }
++        mProtectedViewportOverscroll = protectedViewport;
++        return true;
++    }
++
++    @Override
++    public void updateProtectedViewportHandoff(float accumulatedDeltaY) {
++        if (mProtectedViewportOverscroll != null) {
++            mProtectedViewportOverscroll.pullCompositorOverscroll(accumulatedDeltaY);
++        }
++    }
++
++    @Override
++    public void endProtectedViewportHandoff() {
++        if (mProtectedViewportOverscroll == null) return;
++        mProtectedViewportOverscroll = null;
++    }
++
+     /** Sets {@link HistoryNavigationCoordinator} object. */
+     public void setNavigationCoordinator(HistoryNavigationCoordinator navigationHandler) {
+         mNavigationCoordinator = navigationHandler;
+@@ -315,6 +356,7 @@ public class SwipeRefreshHandler extends TabWebContentsUserData
+     @Override
+     public void reset() {
+         cancelStopRefreshingRunnable();
++        endProtectedViewportHandoff();
+         if (mSwipeRefreshLayout != null) mSwipeRefreshLayout.reset();
+         if (mNavigationCoordinator != null) mNavigationCoordinator.reset();
+         if (mBottomOverscrollHandler != null) mBottomOverscrollHandler.reset();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java b/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
+@@ -530,30 +530,44 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
+ 
+     @Override
+     public int getTopControlsHeight() {
+-        return mBrowserControlsStateProvider != null
+-                ? mBrowserControlsStateProvider.getTopControlsHeight()
+-                : 0;
++        int value =
++                mBrowserControlsStateProvider != null
++                        ? mBrowserControlsStateProvider.getTopControlsHeight()
++                        : 0;
++        CompositorViewHolder viewHolder = mCompositorViewHolderSupplier.get();
++        return viewHolder != null ? viewHolder.getProtectedTopControlsHeight(value) : value;
+     }
+ 
+     @Override
+     public int getTopControlsMinHeight() {
+-        return mBrowserControlsStateProvider != null
+-                ? mBrowserControlsStateProvider.getTopControlsMinHeight()
+-                : 0;
++        int value =
++                mBrowserControlsStateProvider != null
++                        ? mBrowserControlsStateProvider.getTopControlsMinHeight()
++                        : 0;
++        CompositorViewHolder viewHolder = mCompositorViewHolderSupplier.get();
++        return viewHolder != null ? viewHolder.getProtectedTopControlsMinHeight(value) : value;
+     }
+ 
+     @Override
+     public int getBottomControlsHeight() {
+-        return mBrowserControlsStateProvider != null
+-                ? mBrowserControlsStateProvider.getBottomControlsHeight()
+-                : 0;
++        int value =
++                mBrowserControlsStateProvider != null
++                        ? mBrowserControlsStateProvider.getBottomControlsHeight()
++                        : 0;
++        CompositorViewHolder viewHolder = mCompositorViewHolderSupplier.get();
++        return viewHolder != null ? viewHolder.getProtectedBottomControlsHeight(value) : value;
+     }
+ 
+     @Override
+     public int getBottomControlsMinHeight() {
+-        return mBrowserControlsStateProvider != null
+-                ? mBrowserControlsStateProvider.getBottomControlsMinHeight()
+-                : 0;
++        int value =
++                mBrowserControlsStateProvider != null
++                        ? mBrowserControlsStateProvider.getBottomControlsMinHeight()
++                        : 0;
++        CompositorViewHolder viewHolder = mCompositorViewHolderSupplier.get();
++        return viewHolder != null
++                ? viewHolder.getProtectedBottomControlsMinHeight(value)
++                : value;
+     }
+ 
+     @Override
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/CompositorViewHolder.java
+@@ -46,6 +46,7 @@ import androidx.customview.widget.ExploreByTouchHelper;
+ import org.chromium.base.Callback;
+ import org.chromium.base.DeviceInfo;
+ import org.chromium.base.InputHintChecker;
++import org.chromium.base.Log;
+ import org.chromium.base.ObserverList;
+ import org.chromium.base.TraceEvent;
+ import org.chromium.base.metrics.RecordHistogram;
+@@ -63,6 +64,7 @@ import org.chromium.chrome.browser.compositor.layouts.LayoutManagerHost;
+ import org.chromium.chrome.browser.compositor.layouts.LayoutManagerImpl;
+ import org.chromium.chrome.browser.compositor.layouts.LayoutRenderHost;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.flags.cromite.sAndroidProtectedKeyboardGeometry;
+ import org.chromium.chrome.browser.fullscreen.BrowserControlsManager;
+ import org.chromium.chrome.browser.fullscreen.FullscreenManager;
+ import org.chromium.chrome.browser.layouts.EventFilter.EventType;
+@@ -75,6 +77,7 @@ import org.chromium.chrome.browser.tab.TabCreationState;
+ import org.chromium.chrome.browser.tab.TabLoadIfNeededCaller;
+ import org.chromium.chrome.browser.tab.TabObscuringHandler;
+ import org.chromium.chrome.browser.tab.TabObserver;
++import org.chromium.chrome.browser.tab.TabWebContentsObserver;
+ import org.chromium.chrome.browser.tab_ui.TabContentManager;
+ import org.chromium.chrome.browser.tabmodel.TabCreatorManager;
+ import org.chromium.chrome.browser.tabmodel.TabModel;
+@@ -88,8 +91,13 @@ import org.chromium.chrome.browser.ui.side_ui.SideUiCoordinator.SideUiSpecs;
+ import org.chromium.chrome.browser.ui.side_ui.SideUiObserver;
+ import org.chromium.chrome.browser.ui.side_ui.SideUiStateProvider;
+ import org.chromium.components.browser_ui.widget.TouchEventObserver;
++import org.chromium.components.browser_ui.site_settings.WebsitePreferenceBridge;
+ import org.chromium.components.browser_ui.widget.TouchEventProvider;
+ import org.chromium.components.content_capture.OnscreenContentProvider;
++import org.chromium.components.content_settings.ContentSetting;
++import org.chromium.components.content_settings.ContentSettingsType;
++import org.chromium.components.embedder_support.util.UrlUtilities;
++import org.chromium.components.embedder_support.util.UrlConstants;
+ import org.chromium.components.embedder_support.view.ContentView;
+ import org.chromium.components.prefs.PrefService;
+ import org.chromium.content_public.browser.NavigationHandle;
+@@ -177,6 +185,8 @@ public class CompositorViewHolder extends FrameLayout
+     private LayoutManagerImpl mLayoutManager;
+     private Activity mActivity;
+     private CompositorView mCompositorView;
++    private @Nullable ProtectedViewportScrollView mProtectedViewport;
++    private FrameLayout mProtectedViewportContent;
+ 
+     private boolean mContentOverlayVisiblity = true;
+     private boolean mCanBeFocusable;
+@@ -246,7 +256,7 @@ public class CompositorViewHolder extends FrameLayout
+      * Web content can use APIs that can change this to cause the WebContents to be resized.
+      */
+     @VirtualKeyboardMode.EnumType
+-    private int mVirtualKeyboardMode = VirtualKeyboardMode.RESIZES_VISUAL;
++    private int mVirtualKeyboardMode = VirtualKeyboardMode.OVERLAYS_CONTENT;
+ 
+     private @Nullable OnscreenContentProvider mOnscreenContentProvider;
+ 
+@@ -357,10 +367,11 @@ public class CompositorViewHolder extends FrameLayout
+                 @Override
+                 public void onDidFinishNavigationInPrimaryMainFrame(
+                         Tab tab, NavigationHandle navigation) {
+-                    if (!navigation.isSameDocument() && navigation.hasCommitted()) {
++                    if (navigation.hasCommitted()) {
+                         assert getWebContents() == tab.getWebContents();
+                         assert getWebContents() != null;
+-                        updateVirtualKeyboardMode(getWebContents().getVirtualKeyboardMode());
++                        updateProtectedViewportAndVirtualKeyboardMode(
++                                getWebContents().getVirtualKeyboardMode());
+                     }
+                 }
+ 
+@@ -437,6 +448,8 @@ public class CompositorViewHolder extends FrameLayout
+ 
+     @org.chromium.build.annotations.Initializer
+     private void internalInit() {
++        createProtectedViewport();
++
+         addOnLayoutChangeListener(
+                 (v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                     Tab tab = getCurrentTab();
+@@ -470,8 +483,8 @@ public class CompositorViewHolder extends FrameLayout
+                 });
+ 
+         mCompositorView = new CompositorView(getContext(), this);
+-        // mCompositorView should always be the first child.
+-        addView(
++        // mCompositorView should always be the first child in the protected viewport.
++        mProtectedViewportContent.addView(
+                 mCompositorView,
+                 0,
+                 new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+@@ -740,6 +753,8 @@ public class CompositorViewHolder extends FrameLayout
+             PrefService prefService) {
+         mActivity = assumeNonNull(windowAndroid.getActivity().get());
+         mCompositorView.initNativeCompositor(windowAndroid, tabContentManager);
++        if (mProtectedViewport != null)
++            mProtectedViewport.setInsetObserver(windowAndroid.getInsetObserver());
+ 
+         if (mControlContainer != null) {
+             mCompositorView
+@@ -812,6 +827,11 @@ public class CompositorViewHolder extends FrameLayout
+             if (o.onInterceptTouchEvent(e)) return true;
+         }
+ 
++        if (mProtectedViewport != null
++                && mProtectedViewport.shouldDeferParentInterception(e)) {
++            return false;
++        }
++
+         if (mLayoutManager == null) return false;
+ 
+         int actionMasked = SPenSupport.convertSPenEventAction(e.getActionMasked());
+@@ -997,6 +1017,166 @@ public class CompositorViewHolder extends FrameLayout
+         }
+     }
+ 
++    private boolean isProtectedKeyboardGeometryEnabled() {
++        if (!sAndroidProtectedKeyboardGeometry.getInstance().isEnabled()) {
++            return false;
++        }
++        WebContents webContents = getWebContents();
++        if (mTabVisible == null || webContents == null || webContents.isDestroyed()) {
++            return true;
++        }
++
++        TabWebContentsObserver observer = TabWebContentsObserver.from(mTabVisible);
++        Boolean enabled =
++                observer.getProtectedKeyboardGeometryEnabledForCurrentDocument();
++        if (enabled != null) return enabled;
++
++        GURL url = webContents.getLastCommittedUrl();
++        enabled = true;
++        if (UrlUtilities.isInternalScheme(url)
++                || UrlConstants.CHROME_EXTENSION_SCHEME.equals(url.getScheme())) {
++            enabled = false;
++        } else if (!url.isEmpty()) {
++            @ContentSetting
++            int setting =
++                    WebsitePreferenceBridge.getContentSetting(
++                            mTabVisible.getProfile(),
++                            ContentSettingsType.PROTECTED_KEYBOARD_GEOMETRY,
++                            url,
++                            url);
++            enabled = setting == ContentSetting.ALLOW;
++        }
++        observer.setProtectedKeyboardGeometryEnabledForCurrentDocument(enabled);
++        return enabled;
++    }
++
++    private void updateProtectedViewportAndVirtualKeyboardMode(
++            @VirtualKeyboardMode.EnumType int newMode) {
++        boolean protectedGeometryEnabled = isProtectedKeyboardGeometryEnabled();
++        if (protectedGeometryEnabled) {
++            updateVirtualKeyboardMode(newMode);
++        }
++        if (mProtectedViewport != null) {
++            mProtectedViewport.resetCurrentDocumentState();
++            mProtectedViewport.refreshEnabledState();
++        }
++        if (!protectedGeometryEnabled) {
++            updateVirtualKeyboardMode(newMode);
++        }
++    }
++
++    private void createProtectedViewport() {
++        if (!sAndroidProtectedKeyboardGeometry.getInstance().isEnabled()) {
++            mProtectedViewportContent = this;
++            return;
++        }
++
++        mProtectedViewport =
++                new ProtectedViewportScrollView(
++                        getContext(),
++                        new ProtectedViewportScrollView.CompositorScrollDelegate() {
++                            private @Nullable EventForwarder getEventForwarder() {
++                                if (mTabVisible == null) return null;
++                                WebContents webContents = mTabVisible.getWebContents();
++                                return webContents != null ? webContents.getEventForwarder() : null;
++                            }
++
++                            @Override
++                            public void beginCompositorScroll(
++                                    long timeMs, float x, float y, float deltaY) {
++                                EventForwarder forwarder = getEventForwarder();
++                                if (forwarder != null) {
++                                    forwarder.beginCompositorScroll(timeMs, x, y, deltaY);
++                                }
++                            }
++
++                            @Override
++                            public void updateCompositorScroll(
++                                    long timeMs, float x, float y, float deltaY) {
++                                EventForwarder forwarder = getEventForwarder();
++                                if (forwarder != null) {
++                                    forwarder.updateCompositorScroll(timeMs, x, y, deltaY);
++                                }
++                            }
++
++                            @Override
++                            public void endCompositorScroll(
++                                    long timeMs, float x, float y, float velocityY) {
++                                EventForwarder forwarder = getEventForwarder();
++                                if (forwarder == null) return;
++                                forwarder.endCompositorScroll(timeMs, x, y, velocityY);
++                            }
++                        });
++        mProtectedViewport.setProtectionDelegate(
++                new ProtectedViewportScrollView.ProtectionDelegate() {
++                    @Override
++                    public boolean isProtectedKeyboardGeometryEnabled() {
++                        return CompositorViewHolder.this
++                                .isProtectedKeyboardGeometryEnabled();
++                    }
++
++                    @Override
++                    public int getKeyboardInset() {
++                        return mApplicationBottomInsetSupplier != null
++                                ? mApplicationBottomInsetSupplier.getInsets().webContentsHeightInset
++                                : 0;
++                    }
++
++                    @Override
++                    public boolean isKeyboardShowing() {
++                        return mIsKeyboardShowing;
++                    }
++
++                    @Override
++                    public boolean isFocusedElementEditable() {
++                        WebContents webContents = getWebContents();
++                        return webContents != null
++                                && !webContents.isDestroyed()
++                                && webContents.isFocusedElementEditable();
++                    }
++
++                    @Override
++                    public int getViewportWidth() {
++                        return getViewportSize().x;
++                    }
++
++                    @Override
++                    public boolean controlsResizeView() {
++                        return mControlsResizeView;
++                    }
++                });
++        addView(
++                mProtectedViewport,
++                0,
++                new FrameLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
++
++        mProtectedViewportContent = mProtectedViewport.getContentContainer();
++    }
++
++    /** Returns the top controls height exposed to Blink during protected IME resize. */
++    public int getProtectedTopControlsHeight(int currentValue) {
++        if (mProtectedViewport == null) return currentValue;
++        return mProtectedViewport.getProtectedTopControlsHeight(currentValue);
++    }
++
++    /** Returns the top controls minimum height exposed to Blink during protected IME resize. */
++    public int getProtectedTopControlsMinHeight(int currentValue) {
++        if (mProtectedViewport == null) return currentValue;
++        return mProtectedViewport.getProtectedTopControlsMinHeight(currentValue);
++    }
++
++    /** Returns the bottom controls height exposed to Blink during protected IME resize. */
++    public int getProtectedBottomControlsHeight(int currentValue) {
++        if (mProtectedViewport == null) return currentValue;
++        return mProtectedViewport.getProtectedBottomControlsHeight(currentValue);
++    }
++
++    /** Returns the bottom controls minimum height exposed to Blink during protected IME resize. */
++    public int getProtectedBottomControlsMinHeight(int currentValue) {
++        if (mProtectedViewport == null) return currentValue;
++        return mProtectedViewport.getProtectedBottomControlsMinHeight(currentValue);
++    }
++
+     /**
+      * Ensures the tab-backed webContents' size is up to date.
+      *
+@@ -1052,8 +1232,48 @@ public class CompositorViewHolder extends FrameLayout
+             keyboardInset = 0;
+         }
+ 
++        if (mProtectedViewport != null) {
++            controlsInsets =
++                    mProtectedViewport.protectControlsInsets(
++                            controlsInsets, width, keyboardInset, mControlsResizeView, mVirtualKeyboardMode);
++        }
++
+         int verticalViewportInsets = controlsInsets + keyboardInset;
+ 
++        if (mProtectedViewport != null) {
++            StackTraceElement[] sizingStack = Thread.currentThread().getStackTrace();
++            String sizingCaller = sizingStack.length > 3 ? sizingStack[3].getMethodName() : "unknown";
++            if (ProtectedViewportScrollView.DEBUG_DIAGNOSTICS) {
++                Log.i(
++                    "ProtectedViewport",
++                    "--updateWebContentsSize caller=%s viewport=%dx%d view=%dx%d"
++                            + " controlsResize=%b controlsHeight=%d controlsMinHeight=%d"
++                            + " controlsInset=%d keyboardInset=%d verticalInset=%d"
++                            + " topOffset=%d contentOffset=%d target=%dx%d",
++                    sizingCaller,
++                    width,
++                    height,
++                    view.getWidth(),
++                    view.getHeight(),
++                    mControlsResizeView,
++                    mBrowserControlsManager != null
++                            ? mBrowserControlsManager.getTopControlsHeight()
++                                    + mBrowserControlsManager.getBottomControlsHeight()
++                            : 0,
++                    mBrowserControlsManager != null
++                            ? mBrowserControlsManager.getTopControlsMinHeight()
++                                    + mBrowserControlsManager.getBottomControlsMinHeight()
++                            : 0,
++                    controlsInsets,
++                    keyboardInset,
++                    verticalViewportInsets,
++                    mBrowserControlsManager != null ? mBrowserControlsManager.getTopControlOffset() : 0,
++                    mBrowserControlsManager != null ? mBrowserControlsManager.getContentOffset() : 0,
++                    width - horizontalViewportInsets,
++                    height - verticalViewportInsets);
++            }
++        }
++
+         if (isAttachedToWindow(view)) {
+             webContents.setSize(width - horizontalViewportInsets, height - verticalViewportInsets, verticalViewportInsets);
+ 
+@@ -1088,6 +1308,9 @@ public class CompositorViewHolder extends FrameLayout
+ 
+     @VirtualKeyboardMode.EnumType
+     private int defaultVirtualKeyboardMode() {
++        if (isProtectedKeyboardGeometryEnabled()) {
++            return VirtualKeyboardMode.OVERLAYS_CONTENT;
++        }
+         if (mPrefService.getBoolean(Pref.VIRTUAL_KEYBOARD_RESIZES_LAYOUT_BY_DEFAULT)) {
+             return VirtualKeyboardMode.RESIZES_CONTENT;
+         }
+@@ -1187,6 +1410,9 @@ public class CompositorViewHolder extends FrameLayout
+             boolean bottomControlsMinHeightChanged,
+             boolean requestNewFrame,
+             boolean isVisibilityForced) {
++        if (mProtectedViewport != null)
++            mProtectedViewport.onControlsOffsetChangedBeforeLayout(topOffset, isVisibilityForced);
++
+         if (!isVisibilityForced && getResourceManager() != null) {
+             getResourceManager()
+                     .assertResourceExists(AndroidResourceType.DYNAMIC, R.id.control_container);
+@@ -1203,6 +1429,10 @@ public class CompositorViewHolder extends FrameLayout
+         }
+ 
+         updateContentViewChildrenDimension();
++        if (mProtectedViewport != null) {
++            mProtectedViewport.onControlsOffsetChangedAfterLayout(
++                    topOffset, bottomOffset, isVisibilityForced);
++        }
+     }
+ 
+     @Override
+@@ -1211,7 +1441,13 @@ public class CompositorViewHolder extends FrameLayout
+         if (mTabVisible == null) return;
+         onBrowserControlsHeightChanged();
+         updateWebContentsSize(getCurrentTab());
++        if (mProtectedViewport != null) {
++            WebContents webContents = getWebContents();
++            if (webContents != null) webContents.updateFocusedElementBounds();
++        }
+         onViewportChanged();
++        if (mProtectedViewport != null)
++            mProtectedViewport.onBottomControlsHeightChanged();
+     }
+ 
+     @Override
+@@ -1219,6 +1455,10 @@ public class CompositorViewHolder extends FrameLayout
+         if (mTabVisible == null) return;
+         onBrowserControlsHeightChanged();
+         updateWebContentsSize(getCurrentTab());
++        if (mProtectedViewport != null) {
++            WebContents webContents = getWebContents();
++            if (webContents != null) webContents.updateFocusedElementBounds();
++        }
+         onViewportChanged();
+     }
+ 
+@@ -1484,8 +1724,12 @@ public class CompositorViewHolder extends FrameLayout
+ 
+     @Override
+     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
++        boolean wasKeyboardShowing = mIsKeyboardShowing;
+         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+         mIsKeyboardShowing = KeyboardVisibilityDelegate.getInstance().isKeyboardShowing(this);
++        if (mProtectedViewport != null && wasKeyboardShowing && !mIsKeyboardShowing) {
++            mProtectedViewport.resetViewportPan();
++        }
+     }
+ 
+     @Override
+@@ -1520,6 +1764,8 @@ public class CompositorViewHolder extends FrameLayout
+      */
+     public void setBrowserControlsManager(BrowserControlsManager manager) {
+         mBrowserControlsManager = manager;
++        if (mProtectedViewport != null)
++            mProtectedViewport.setBrowserControlsStateProvider(manager);
+         mBrowserControlsManager.addObserver(this);
+         onViewportChanged();
+     }
+@@ -1651,7 +1897,8 @@ public class CompositorViewHolder extends FrameLayout
+         if (mView == null) return;
+         WebContents webContents = getWebContents();
+         if (show) {
+-            if (mView != assumeNonNull(getCurrentTab()).getView() || mView.getParent() == this) {
++            if (mView != assumeNonNull(getCurrentTab()).getView()
++                    || mView.getParent() == mProtectedViewportContent) {
+                 return;
+             }
+             // During tab creation, we temporarily add the new tab's view to a FrameLayout to
+@@ -1667,20 +1914,20 @@ public class CompositorViewHolder extends FrameLayout
+ 
+             // CompositorView always has index of 0.
+             // TODO(crbug.com/40770763): Look into enforcing the z-order of the views.
+-            addView(mView, 1);
++            mProtectedViewportContent.addView(mView, 1);
+             repositionTabViewForSideUi();
+             updateFocusability(false, /* blockDescendants= */ false);
+ 
+             // Claim focus for the new view unless the user is currently using the URL bar.
+             if (mUrlBar == null || !mUrlBar.hasFocus()) mView.requestFocus();
+         } else {
+-            if (mView.getParent() == this) {
++            if (mView.getParent() == mProtectedViewportContent) {
+                 updateFocusability(mCanBeFocusable, /* blockDescendants= */ false);
+ 
+                 if (webContents != null && !webContents.isDestroyed()) {
+                     assumeNonNull(getContentView()).setVisibility(View.INVISIBLE);
+                 }
+-                removeView(mView);
++                mProtectedViewportContent.removeView(mView);
+             }
+         }
+     }
+@@ -1698,6 +1945,11 @@ public class CompositorViewHolder extends FrameLayout
+ 
+     @VisibleForTesting
+     void onWillShowBrowserControls(boolean viewTransitionOptIn) {
++        if (mProtectedViewport != null) {
++            mProtectedViewport.prepareForKeyboardShow();
++            assert ChromeFeatureList.sBrowserControlsEarlyResize.isEnabled()
++                    : "Protected viewport requires BrowserControlsEarlyResize";
++        }
+         // TODO(bokan): Flag guarding potential new behavior
+         // https://crbug.com/332331777.
+         if (!viewTransitionOptIn && !ChromeFeatureList.sBrowserControlsEarlyResize.isEnabled()) {
+@@ -1740,6 +1992,11 @@ public class CompositorViewHolder extends FrameLayout
+ 
+         mTabVisible = tab;
+         mView = newView;
++        WebContents webContents = getWebContents();
++        updateProtectedViewportAndVirtualKeyboardMode(
++                webContents != null
++                        ? webContents.getVirtualKeyboardMode()
++                        : VirtualKeyboardMode.UNSET);
+ 
+         updateContentOverlayVisibility(mContentOverlayVisiblity);
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/ProtectedViewportScrollView.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/ProtectedViewportScrollView.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/ProtectedViewportScrollView.java
+@@ -0,0 +1,1446 @@
++/*
++    This file is part of Cromite.
++
++    Cromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Cromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Cromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.chrome.browser.compositor;
++
++import android.content.Context;
++import android.graphics.Rect;
++import android.view.MotionEvent;
++import android.view.VelocityTracker;
++import android.view.View;
++import android.view.ViewConfiguration;
++import android.widget.FrameLayout;
++import android.widget.ScrollView;
++
++import androidx.core.view.WindowInsetsAnimationCompat;
++import androidx.core.view.WindowInsetsCompat;
++
++import org.chromium.base.Log;
++import org.chromium.build.BuildConfig;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
++import org.chromium.chrome.browser.browser_controls.BrowserControlsUtils;
++import org.chromium.ui.insets.InsetObserver;
++import org.chromium.ui.insets.InsetObserver.WindowInsetsAnimationListener;
++import org.chromium.ui.mojom.VirtualKeyboardMode;
++
++import java.util.List;
++
++/**
++ * A scrollable physical viewport around Chromium's rendered content.
++ *
++ * <p>The scroll position is outside Blink's logical viewport. A focused editable can request that
++ * its physical rectangle be made visible after Android resizes the application for the keyboard,
++ * while the user can subsequently adjust that pan with normal touch scrolling.
++ *
++ * <p>Terminology used by this class:
++ *
++ * <ul>
++ *   <li><b>Neutral</b> is the content geometry retained as if the IME had not reduced the native
++ *       viewport, at this ScrollView's scroll origin and the largest height observed for the
++ *       current width.
++ *   <li><b>Unforced baseline</b> is the latest browser-controls state observed while visibility is
++ *       not constrained to SHOWN or HIDDEN and can follow normal page scrolling.
++ *   <li><b>Early capture</b> is the synchronous snapshot taken before Android reports the IME
++ *       animation, closing the interval in which controls geometry could otherwise change first.
++ *   <li><b>Protected keyboard resize</b> is the logical interval during which keyboard-related
++ *       native changes must not alter the content or controls geometry exposed to Blink. It can
++ *       begin before the native viewport actually changes size.
++ *   <li><b>Clearance</b> is the neutral vertical space below the focused editable rectangle. It is
++ *       preserved above the IME, after subtracting browser controls that physically disappeared;
++ *       it is not the keyboard inset.
++ *   <li><b>Physical pan</b> is this native ScrollView's offset. It moves rendered content without
++ *       changing Blink's logical page scroll or viewport geometry.
++ *   <li><b>Unlocked physical pan</b> is the portion of the physical scroll range currently made
++ *       available by the focus request or by unused cc scrolling.
++ *   <li><b>Handoff</b> is the transfer of unconsumed vertical motion at the boundary between this
++ *       physical ScrollView and cc's scroll tree. Residual touch motion can move to cc, while cc
++ *       overscroll can unlock and consume remaining physical pan.
++ * </ul>
++ */
++@NullMarked
++public final class ProtectedViewportScrollView extends ScrollView {
++    private static final String TAG = "ProtectedViewport";
++    public static final boolean DEBUG_DIAGNOSTICS = false;
++    private static final int INVALID_POINTER_ID = -1;
++
++    // Gesture routing transitions:
++    // DOWN -> UNDECIDED
++    // MOVE beyond touch slop -> HORIZONTAL or VERTICAL
++    // VERTICAL with physical range -> VERTICAL_PARENT_DEFERRED
++    // UP or CANCEL -> UNDECIDED
++    private enum GestureRoutingState {
++        UNDECIDED,
++        HORIZONTAL,
++        VERTICAL,
++        VERTICAL_PARENT_DEFERRED
++    }
++
++    /** Transfers unconsumed physical scrolling to Chromium's compositor scroll tree. */
++    public interface CompositorScrollDelegate {
++        void beginCompositorScroll(long timeMs, float x, float y, float deltaY);
++
++        void updateCompositorScroll(long timeMs, float x, float y, float deltaY);
++
++        void endCompositorScroll(long timeMs, float x, float y, float velocityY);
++    }
++
++    /** Supplies state owned by Chromium while this view owns protected viewport policy. */
++    public interface ProtectionDelegate {
++        boolean isProtectedKeyboardGeometryEnabled();
++
++        int getKeyboardInset();
++
++        boolean isKeyboardShowing();
++
++        boolean isFocusedElementEditable();
++
++        int getViewportWidth();
++
++        boolean controlsResizeView();
++    }
++
++    private enum BrowserControlsTrackingMode {
++        FIXED_INSETS,
++        VISIBLE_CONTROLS
++    }
++
++    private static final class BrowserControlsSnapshot {
++        // Viewport width for which this browser-controls geometry was captured.
++        final int mWidth;
++
++        // Insets returned to WebContents. Mutable only while following visible controls.
++        int mInsets;
++
++        // Full and minimum controls geometry exposed to Blink during protection.
++        final int mTopHeight;
++        final int mTopMinHeight;
++        final int mBottomHeight;
++        final int mBottomMinHeight;
++
++        // Physical bottom-controls visibility and the policy used to update the inset.
++        final int mVisibleBottomHeight;
++        final BrowserControlsTrackingMode mTrackingMode;
++
++        BrowserControlsSnapshot(
++                int width,
++                int insets,
++                int topHeight,
++                int topMinHeight,
++                int bottomHeight,
++                int bottomMinHeight,
++                int visibleBottomHeight,
++                BrowserControlsTrackingMode trackingMode) {
++            mWidth = width;
++            mInsets = insets;
++            mTopHeight = topHeight;
++            mTopMinHeight = topMinHeight;
++            mBottomHeight = bottomHeight;
++            mBottomMinHeight = bottomMinHeight;
++            mVisibleBottomHeight = visibleBottomHeight;
++            mTrackingMode = trackingMode;
++        }
++    }
++
++    private static final class BrowserControlsProtectionState {
++        // Most recent controls state observed without forced visibility.
++        boolean mLastUnforcedResizeView;
++        int mLastUnforcedTopOffset;
++
++        // Baseline used to compensate top controls shown for the focused editable.
++        int mEditableTopOffsetBaseline;
++
++        // Independent lifecycle latches; both may be true at the same time.
++        boolean mEarlyShowCaptured;
++        boolean mEditableTopControlsActive;
++
++        // Controls geometry currently returned while protection is active.
++        @Nullable BrowserControlsSnapshot mSnapshot;
++
++        void reset() {
++            mLastUnforcedResizeView = false;
++            mLastUnforcedTopOffset = 0;
++            mEditableTopOffsetBaseline = 0;
++            mEarlyShowCaptured = false;
++            mEditableTopControlsActive = false;
++            mSnapshot = null;
++        }
++    }
++
++    private static final class ViewportPanState {
++        // First focused editable rectangle retained for the keyboard interaction.
++        final Rect mRequestedRect = new Rect();
++
++        // Neutral space below the rectangle, preserved when positioning it above the IME.
++        int mRequestedBottomClearance;
++
++        // Physically hidden bottom controls removed from the retained neutral clearance.
++        int mHiddenBottomControlsHeight;
++
++        // Physical pan range currently available to touch and compositor overscroll.
++        int mUnlockedPhysicalPanY;
++
++        boolean hasRequest() {
++            return !mRequestedRect.isEmpty();
++        }
++
++        void reset() {
++            mRequestedRect.setEmpty();
++            mRequestedBottomClearance = 0;
++            mHiddenBottomControlsHeight = 0;
++            mUnlockedPhysicalPanY = 0;
++        }
++    }
++
++    private static final class CompositorHandoffState {
++        // Synthetic compositor scroll sequence opened for the current touch stream.
++        boolean mScrollInProgress;
++
++        // Whether the current Android gesture has forwarded real motion.
++        boolean mCurrentGestureForwardedDelta;
++
++        // Physical scroll origin used when cc returns cumulative overscroll.
++        int mPullStartY;
++    }
++
++    // Native hierarchy and immutable Android collaborators.
++
++    // ScrollView's only direct child. Its overflow supplies physical scroll range.
++    private final FrameLayout mScrollContent;
++
++    // Owns Chromium's CompositorView and ContentView at the protected neutral height.
++    private final FrameLayout mContent;
++
++    // Transfers motion left at a physical edge to Chromium's compositor scroll tree.
++    private final CompositorScrollDelegate mCompositorScrollDelegate;
++
++    // Supplies device-specific touch and fling thresholds.
++    private final ViewConfiguration mViewConfiguration;
++
++    // Current touch sequence and routing decision.
++
++    // Tracks the active pointer velocity; null outside a tracked touch sequence.
++    private @Nullable VelocityTracker mGestureVelocityTracker;
++
++    // Pointer whose terminal Y velocity can be handed to the compositor.
++    private int mGesturePointerId = INVALID_POINTER_ID;
++
++    // ACTION_DOWN coordinates used to choose and latch the gesture axis.
++    private float mGestureStartX;
++    private float mGestureStartY;
++    private GestureRoutingState mGestureRoutingState = GestureRoutingState.UNDECIDED;
++
++    // Latest touch sample, retained because overScrollBy() does not receive MotionEvent.
++    private long mLastGestureEventTimeMs;
++    private float mLastGestureX;
++    private float mLastGestureY;
++
++    // Bidirectional state exchanged with Chromium's compositor scroll path.
++    private final CompositorHandoffState mCompositorHandoff = new CompositorHandoffState();
++
++    // Focus request and physical pan geometry for the current keyboard interaction.
++    private final ViewportPanState mPanState = new ViewportPanState();
++
++    // Top-controls correction applied when capturing a focused editable rectangle.
++    private int mShownTopControlsHeight;
++
++    // Largest neutral content size observed for the current width; -1 invalidates the cache.
++    private int mNeutralContentWidth = -1;
++    private int mNeutralContentHeight;
++
++    // Policy and browser-controls sources installed by CompositorViewHolder.
++    private @Nullable ProtectionDelegate mProtectionDelegate;
++    private @Nullable BrowserControlsStateProvider mBrowserControlsStateProvider;
++
++    // Browser-controls baseline, lifecycle latches, and currently protected geometry.
++    private final BrowserControlsProtectionState mControlsState =
++            new BrowserControlsProtectionState();
++
++    // IME animation lifecycle and observer registration.
++
++    // True only between onPrepare() and onEnd() for the current IME animation.
++    private boolean mImeAnimationRunning;
++
++    // Direction latched at onPrepare(); retained after onEnd() until the next keyboard show.
++    private boolean mImeClosing;
++
++    // Optional source of IME animation events.
++    private @Nullable InsetObserver mInsetObserver;
++
++    // Effective per-document feature state currently applied to this native view.
++    private boolean mEnabled;
++
++    // The browser-controls latches and IME flags are independent, not mutually exclusive states.
++    //
++    // prepareForKeyboardShow(), after accepting an editable focus:
++    //   - captures mControlsState.mSnapshot before the IME transition;
++    //   - sets mControlsState.mEarlyShowCaptured = true;
++    //   - sets mImeClosing = false.
++    //
++    // updateEditableTopControlsState(isVisibilityForced):
++    //   - if isVisibilityForced && isFocusedElementEditable():
++    //       mControlsState.mEditableTopControlsActive = true;
++    //   - otherwise:
++    //       mControlsState.mEarlyShowCaptured = false;
++    //       mControlsState.mEditableTopControlsActive = false.
++    // isVisibilityForced is the value received from BrowserControlsManager. It means
++    // that controls visibility is constrained to SHOWN or HIDDEN; it does not mean
++    // that the controls are necessarily visible.
++    //
++    // IME animation listener:
++    //   - onPrepare():
++    //       mImeAnimationRunning = true;
++    //       mImeClosing = keyboardWasVisible;
++    //   - onEnd():
++    //       mImeAnimationRunning = false;
++    //       mImeClosing is intentionally retained.
++    //
++
++    // Receives IME animation lifecycle events and keeps the protected transition state aligned.
++    private final WindowInsetsAnimationListener mInsetsAnimationListener =
++            new WindowInsetsAnimationListener() {
++                @Override
++                public void onPrepare(WindowInsetsAnimationCompat animation) {
++                    if (!isImeAnimation(animation)) return;
++                    boolean keyboardWasVisible =
++                            isProtectedKeyboardResizeWithoutEditableTopControls(getKeyboardInset());
++                    mImeClosing = keyboardWasVisible;
++                    if (!keyboardWasVisible
++                            && !mControlsState.mEditableTopControlsActive
++                            && !mControlsState.mEarlyShowCaptured) {
++                        captureCurrentBrowserControlsState(getViewportWidth());
++                    }
++                    mImeAnimationRunning = true;
++                    if (DEBUG_DIAGNOSTICS) {
++                        Log.i(
++                                TAG,
++                                "--imeAnimation prepare direction=%s",
++                                keyboardWasVisible ? "closing" : "opening");
++                    }
++                }
++
++                @Override
++                public void onStart(
++                        WindowInsetsAnimationCompat animation,
++                        WindowInsetsAnimationCompat.BoundsCompat bounds) {}
++
++                @Override
++                public void onProgress(
++                        WindowInsetsCompat insets,
++                        List<WindowInsetsAnimationCompat> runningAnimations) {}
++
++                @Override
++                public void onEnd(WindowInsetsAnimationCompat animation) {
++                    if (!isImeAnimation(animation)) return;
++                    mImeAnimationRunning = false;
++                    if (DEBUG_DIAGNOSTICS) {
++                        Log.i(TAG, "--imeAnimation end");
++                    }
++                }
++            };
++
++    /**
++     * Creates the physical viewport that can pan Chromium content independently of Blink.
++     *
++     * @param compositorScrollDelegate forwards motion that this physical viewport cannot consume
++     */
++    public ProtectedViewportScrollView(
++            Context context, CompositorScrollDelegate compositorScrollDelegate) {
++        super(context);
++
++        if (BuildConfig.ENABLE_ASSERTS) {
++            // Diagnostic color: exposed pixels belong to the native protected viewport rather
++            // than Blink, the compositor surface, or browser-controls UI.
++            setBackgroundColor(0xFFFF00FF);
++        }
++
++        mCompositorScrollDelegate = compositorScrollDelegate;
++
++        mViewConfiguration = ViewConfiguration.get(context);
++        setFillViewport(true);
++        setClipToPadding(true);
++        setOverScrollMode(OVER_SCROLL_NEVER);
++        setVerticalScrollBarEnabled(false);
++
++        mScrollContent = new FrameLayout(context);
++        super.addView(
++                mScrollContent,
++                new ScrollView.LayoutParams(
++                        LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
++
++        mContent = new FrameLayout(context);
++        mScrollContent.addView(
++                mContent,
++                new FrameLayout.LayoutParams(
++                        LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
++    }
++
++    /**
++     * Returns the container that must own CompositorView and ContentView.
++     *
++     * <p>Keeping Chromium content below {@link #mScrollContent} lets this view add physical scroll
++     * range without changing Blink's logical viewport dimensions.
++     */
++    public FrameLayout getContentContainer() {
++        return mContent;
++    }
++
++    /** Installs the delegate used to resolve per-document policy and Chromium-owned geometry. */
++    public void setProtectionDelegate(ProtectionDelegate protectionDelegate) {
++        mProtectionDelegate = protectionDelegate;
++    }
++
++    /** Discards transient geometry and lifecycle state owned by the previous document. */
++    public void resetCurrentDocumentState() {
++        mImeAnimationRunning = false;
++        mImeClosing = false;
++        mControlsState.reset();
++        mShownTopControlsHeight = 0;
++        resetViewportPan();
++    }
++
++    /**
++     * Re-evaluates the effective per-document policy and applies its view-level lifecycle.
++     *
++     * <p>Document-specific state is reset separately by {@link #resetCurrentDocumentState()}.
++     */
++    public void refreshEnabledState() {
++        boolean enabled =
++                mProtectionDelegate != null
++                        && mProtectionDelegate.isProtectedKeyboardGeometryEnabled();
++        if (mEnabled == enabled) return;
++        mEnabled = enabled;
++        mNeutralContentWidth = -1;
++        mNeutralContentHeight = 0;
++        if (enabled) {
++            registerInsetObserver();
++        } else {
++            unregisterInsetObserver();
++        }
++        requestLayout();
++    }
++
++    /** Supplies the live browser-controls geometry captured around an IME transition. */
++    public void setBrowserControlsStateProvider(
++            BrowserControlsStateProvider browserControlsStateProvider) {
++        mBrowserControlsStateProvider = browserControlsStateProvider;
++    }
++
++    /**
++     * Replaces the source of IME animation events.
++     *
++     * <p>Registration is deferred until protection is enabled and this view is attached.
++     */
++    public void setInsetObserver(@Nullable InsetObserver insetObserver) {
++        if (insetObserver == mInsetObserver) return;
++        unregisterInsetObserver();
++        mInsetObserver = insetObserver;
++        registerInsetObserver();
++    }
++
++    private void registerInsetObserver() {
++        if (!mEnabled
++                || mInsetObserver == null
++                || !isAttachedToWindow()) {
++            return;
++        }
++        mInsetObserver.addWindowInsetsAnimationListener(
++                mInsetsAnimationListener);
++    }
++
++    private void unregisterInsetObserver() {
++        if (mInsetObserver == null) return;
++        mInsetObserver.removeWindowInsetsAnimationListener(
++                mInsetsAnimationListener);
++    }
++
++    private static boolean isImeAnimation(WindowInsetsAnimationCompat animation) {
++        return (animation.getTypeMask() & WindowInsetsCompat.Type.ime()) != 0;
++    }
++
++    private int getKeyboardInset() {
++        return mProtectionDelegate != null ? mProtectionDelegate.getKeyboardInset() : 0;
++    }
++
++    private int getViewportWidth() {
++        return mProtectionDelegate != null ? mProtectionDelegate.getViewportWidth() : 0;
++    }
++
++    private int getVisibleBottomControlsHeight(int bottomControlsOffset) {
++        if (mBrowserControlsStateProvider == null) return 0;
++        return Math.max(
++                0, mBrowserControlsStateProvider.getBottomControlsHeight() - bottomControlsOffset);
++    }
++
++    /**
++     * Recomputes hidden bottom controls after a height-only notification.
++     *
++     * <p>That callback does not carry an offset, so use the provider's current value.
++     */
++    private void updateHiddenBottomControlsHeightFromProvider() {
++        if (mBrowserControlsStateProvider == null) return;
++        updateHiddenBottomControlsHeight(
++                Math.round(mBrowserControlsStateProvider.getBottomControlOffset()));
++    }
++
++    /**
++     * Recomputes hidden bottom controls from the offset carried by an applied offset update.
++     *
++     * <p>Using the callback value keeps this calculation in the same browser-controls update even
++     * if the provider's observable state is updated at a different point in that lifecycle.
++     */
++    private void updateHiddenBottomControlsHeight(int bottomControlsOffset) {
++        int visibleBottomControlsHeight = getVisibleBottomControlsHeight(bottomControlsOffset);
++        BrowserControlsSnapshot snapshot = mControlsState.mSnapshot;
++        int protectedVisibleBottomControlsHeight =
++                snapshot != null ? snapshot.mVisibleBottomHeight : 0;
++        int hiddenBottomControlsHeight =
++                snapshot != null
++                                && snapshot.mTrackingMode
++                                        == BrowserControlsTrackingMode.VISIBLE_CONTROLS
++                        ? 0
++                        : Math.max(
++                                0,
++                                protectedVisibleBottomControlsHeight
++                                        - visibleBottomControlsHeight);
++        setHiddenBottomControlsHeight(hiddenBottomControlsHeight);
++    }
++
++    /** Captures current controls geometry using the resize policy reported by the delegate. */
++    private void captureCurrentBrowserControlsState(int width) {
++        boolean controlsResizeView =
++                mProtectionDelegate != null && mProtectionDelegate.controlsResizeView();
++        captureBrowserControlsSnapshot(
++                width, controlsResizeView, /* preserveVisibleBottomControls= */ false);
++    }
++
++    /**
++     * Captures controls geometry using transition state already selected by the caller.
++     *
++     * <p><code>preserveVisibleBottomControls</code> keeps the initially visible bottom portion
++     * instead of reserving the full controls height, then tracks later visibility changes.
++     */
++    private void captureBrowserControlsSnapshot(
++            int width, boolean controlsResizeView, boolean preserveVisibleBottomControls) {
++        if (mBrowserControlsStateProvider == null || width <= 0) return;
++        int topControlsHeight = mBrowserControlsStateProvider.getTopControlsHeight();
++        int topControlsMinHeight = mBrowserControlsStateProvider.getTopControlsMinHeight();
++        int bottomControlsHeight = mBrowserControlsStateProvider.getBottomControlsHeight();
++        int bottomControlsMinHeight = mBrowserControlsStateProvider.getBottomControlsMinHeight();
++        int visibleBottomControlsHeight =
++                getVisibleBottomControlsHeight(
++                        Math.round(mBrowserControlsStateProvider.getBottomControlOffset()));
++        int controlsInsets =
++                controlsResizeView
++                        ? topControlsHeight
++                                + (preserveVisibleBottomControls
++                                        ? visibleBottomControlsHeight
++                                        : bottomControlsHeight)
++                        : topControlsMinHeight + bottomControlsMinHeight;
++        mControlsState.mSnapshot =
++                new BrowserControlsSnapshot(
++                        width,
++                        controlsInsets,
++                        topControlsHeight,
++                        topControlsMinHeight,
++                        bottomControlsHeight,
++                        bottomControlsMinHeight,
++                        visibleBottomControlsHeight,
++                        preserveVisibleBottomControls
++                                ? BrowserControlsTrackingMode.VISIBLE_CONTROLS
++                                : BrowserControlsTrackingMode.FIXED_INSETS);
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--captureBrowserControls top=%d/%d bottom=%d/%d visibleBottom=%d"
++                            + " preserveVisibleBottom=%b inset=%d",
++                    topControlsHeight,
++                    topControlsMinHeight,
++                    bottomControlsHeight,
++                    bottomControlsMinHeight,
++                    visibleBottomControlsHeight,
++                    preserveVisibleBottomControls,
++                    controlsInsets);
++        }
++    }
++
++    /** Evaluates protected resize using the keyboard inset supplied by the caller. */
++    private boolean isProtectedKeyboardResizeWithoutEditableTopControls(int keyboardInset) {
++        return mEnabled
++                && (mImeAnimationRunning
++                        || (mProtectionDelegate != null && mProtectionDelegate.isKeyboardShowing())
++                        || keyboardInset < 0
++                        || getHeight() < mContent.getHeight());
++    }
++
++    private boolean isProtectedKeyboardResize(int keyboardInset) {
++        return mControlsState.mEarlyShowCaptured
++                || mControlsState.mEditableTopControlsActive
++                || isProtectedKeyboardResizeWithoutEditableTopControls(keyboardInset);
++    }
++
++    private boolean isFocusedElementEditable() {
++        return mProtectionDelegate != null && mProtectionDelegate.isFocusedElementEditable();
++    }
++
++    /**
++     * Tracks the browser-controlled top-controls phase around a focused editable.
++     *
++     * <p><code>isVisibilityForced</code> comes from BrowserControlsManager. It means controls
++     * visibility is constrained to SHOWN or HIDDEN rather than driven by page scrolling; it does
++     * not by itself mean that the top controls are currently visible.
++     *
++     * <p>Protection treats that phase as relevant only while an editable is focused. Normal
++     * scroll-driven controls changes continue updating the unforced baseline. When protection
++     * starts, reuse the synchronous early snapshot if present; otherwise capture the last unforced
++     * state before layout. This keeps browser-controls motion out of Blink's keyboard geometry
++     * and compensates focused-element coordinates by the amount of top controls actually shown.
++     *
++     * @param isVisibilityForced whether Chromium has constrained controls visibility
++     */
++    private void updateEditableTopControlsState(boolean isVisibilityForced) {
++        boolean focusedEditable = isFocusedElementEditable();
++        boolean shouldProtect = isVisibilityForced && focusedEditable;
++        if (!shouldProtect) mControlsState.mEarlyShowCaptured = false;
++        if (mControlsState.mEditableTopControlsActive == shouldProtect) return;
++
++        if (shouldProtect
++                && !isProtectedKeyboardResizeWithoutEditableTopControls(getKeyboardInset())) {
++            if (!mControlsState.mEarlyShowCaptured) {
++                mControlsState.mEditableTopOffsetBaseline =
++                        mControlsState.mLastUnforcedTopOffset;
++                captureBrowserControlsSnapshot(
++                        getViewportWidth(),
++                        mControlsState.mLastUnforcedResizeView,
++                        /* preserveVisibleBottomControls= */ false);
++            }
++        }
++        mControlsState.mEditableTopControlsActive = shouldProtect;
++        updateShownTopControlsHeight();
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--editableTopControls active=%b forced=%b focusedEditable=%b earlyCapture=%b",
++                    mControlsState.mEditableTopControlsActive,
++                    isVisibilityForced,
++                    focusedEditable,
++                    mControlsState.mEarlyShowCaptured);
++        }
++    }
++
++    private void updateShownTopControlsHeight() {
++        if (mBrowserControlsStateProvider == null) return;
++        int currentTopVisibleContentOffset =
++                Math.round(mBrowserControlsStateProvider.getTopVisibleContentOffset());
++        int shownTopControlsHeight =
++                mControlsState.mEditableTopControlsActive
++                        ? Math.max(
++                                0,
++                                currentTopVisibleContentOffset
++                                        - mControlsState.mEditableTopOffsetBaseline)
++                        : 0;
++        setShownTopControlsHeight(shownTopControlsHeight);
++    }
++
++    /**
++     * Captures the last unforced top-controls state before Chromium applies a controls layout.
++     *
++     * <p>A forced show for an editable element must not change the geometry exposed to Blink.
++     */
++    public void onControlsOffsetChangedBeforeLayout(int topOffset, boolean isVisibilityForced) {
++        if (!mEnabled) return;
++        if (!isVisibilityForced && mBrowserControlsStateProvider != null) {
++            mControlsState.mLastUnforcedResizeView =
++                    BrowserControlsUtils.controlsResizeView(mBrowserControlsStateProvider);
++            mControlsState.mLastUnforcedTopOffset =
++                    Math.round(mBrowserControlsStateProvider.getTopVisibleContentOffset());
++        }
++        updateEditableTopControlsState(isVisibilityForced);
++        updateShownTopControlsHeight();
++        if (DEBUG_DIAGNOSTICS) {
++            logBrowserControlsState("before-layout", topOffset, isVisibilityForced);
++        }
++    }
++
++    /**
++     * Updates physical top/bottom controls compensation after their offsets have been applied.
++     */
++    public void onControlsOffsetChangedAfterLayout(
++            int topOffset, int bottomOffset, boolean isVisibilityForced) {
++        if (!mEnabled) return;
++        updateHiddenBottomControlsHeight(bottomOffset);
++        if (DEBUG_DIAGNOSTICS) {
++            logBrowserControlsState("after-update", topOffset, isVisibilityForced);
++            post(() -> logBrowserControlsState("after-layout", topOffset, isVisibilityForced));
++        }
++    }
++
++    private void logBrowserControlsState(
++            String phase, int callbackTopOffset, boolean isVisibilityForced) {
++        if (mBrowserControlsStateProvider == null) return;
++        logBrowserControlsState(
++                phase,
++                callbackTopOffset,
++                mBrowserControlsStateProvider.getTopControlOffset(),
++                mBrowserControlsStateProvider.getContentOffset(),
++                mBrowserControlsStateProvider.getTopVisibleContentOffset(),
++                isVisibilityForced);
++    }
++
++    /** Recomputes compensation when the physical bottom-controls height changes. */
++    public void onBottomControlsHeightChanged() {
++        if (!mEnabled) return;
++        updateHiddenBottomControlsHeightFromProvider();
++    }
++
++    /**
++     * Returns the browser-controls inset used to size WebContents.
++     *
++     * <p>Outside an IME transition the current value is observed and captured. While protection is
++     * active, the captured or deliberately tracked controls geometry is returned so Blink cannot
++     * infer the keyboard from a transient controls configuration.
++     */
++    public int protectControlsInsets(
++            int currentControlsInsets, int width, int keyboardInset, boolean controlsResizeView,
++            @VirtualKeyboardMode.EnumType int virtualKeyboardMode) {
++        if (!mEnabled) return currentControlsInsets;
++
++        assert virtualKeyboardMode == VirtualKeyboardMode.OVERLAYS_CONTENT;
++        boolean isProtectedKeyboardResize = isProtectedKeyboardResize(keyboardInset);
++
++        if (!isProtectedKeyboardResize) {
++            mControlsState.mLastUnforcedResizeView = controlsResizeView;
++            if (mBrowserControlsStateProvider != null) {
++                mControlsState.mLastUnforcedTopOffset =
++                        Math.round(mBrowserControlsStateProvider.getTopVisibleContentOffset());
++            }
++        }
++
++        BrowserControlsSnapshot snapshot = mControlsState.mSnapshot;
++        if (snapshot == null || width != snapshot.mWidth || !isProtectedKeyboardResize) {
++            captureCurrentBrowserControlsState(width);
++            snapshot = mControlsState.mSnapshot;
++        }
++        if (!isProtectedKeyboardResize || snapshot == null) {
++            return currentControlsInsets;
++        }
++
++        if (snapshot.mTrackingMode == BrowserControlsTrackingMode.VISIBLE_CONTROLS
++                && mBrowserControlsStateProvider != null) {
++            int visibleTopControlsHeight =
++                    Math.max(
++                            0,
++                            Math.round(mBrowserControlsStateProvider.getTopVisibleContentOffset()));
++            int reservedTopControlsHeight =
++                    mControlsState.mEarlyShowCaptured
++                            || mControlsState.mEditableTopControlsActive
++                            ? snapshot.mTopHeight
++                            : visibleTopControlsHeight;
++            int visibleBottomControlsHeight =
++                    getVisibleBottomControlsHeight(
++                            Math.round(mBrowserControlsStateProvider.getBottomControlOffset()));
++            int reservedBottomControlsHeight =
++                    !mImeClosing && mControlsState.mEarlyShowCaptured
++                            ? Math.min(
++                                    visibleBottomControlsHeight,
++                                    snapshot.mVisibleBottomHeight)
++                            : visibleBottomControlsHeight;
++            int trackedControlsInsets = reservedTopControlsHeight + reservedBottomControlsHeight;
++            if (trackedControlsInsets != snapshot.mInsets) {
++                if (DEBUG_DIAGNOSTICS) {
++                    Log.i(
++                            TAG,
++                            "--trackVisibleControls top=%d reservedTop=%d"
++                                    + " bottom=%d reservedBottom=%d closing=%b inset=%d->%d",
++                            visibleTopControlsHeight,
++                            reservedTopControlsHeight,
++                            visibleBottomControlsHeight,
++                            reservedBottomControlsHeight,
++                            mImeClosing,
++                            snapshot.mInsets,
++                            trackedControlsInsets);
++                }
++                snapshot.mInsets = trackedControlsInsets;
++            }
++        }
++        return snapshot.mInsets;
++    }
++
++    /** Returns the top-controls height that Blink should observe during protected IME resize. */
++    public int getProtectedTopControlsHeight(int currentValue) {
++        BrowserControlsSnapshot snapshot = mControlsState.mSnapshot;
++        return isProtectedKeyboardResize(getKeyboardInset()) && snapshot != null
++                ? snapshot.mTopHeight
++                : currentValue;
++    }
++
++    /** Returns the top-controls minimum height preserved for protected IME resize. */
++    public int getProtectedTopControlsMinHeight(int currentValue) {
++        BrowserControlsSnapshot snapshot = mControlsState.mSnapshot;
++        return isProtectedKeyboardResize(getKeyboardInset()) && snapshot != null
++                ? snapshot.mTopMinHeight
++                : currentValue;
++    }
++
++    /** Returns the bottom-controls height preserved for protected IME resize. */
++    public int getProtectedBottomControlsHeight(int currentValue) {
++        BrowserControlsSnapshot snapshot = mControlsState.mSnapshot;
++        return isProtectedKeyboardResize(getKeyboardInset()) && snapshot != null
++                ? snapshot.mBottomHeight
++                : currentValue;
++    }
++
++    /** Returns the bottom-controls minimum height preserved for protected IME resize. */
++    public int getProtectedBottomControlsMinHeight(int currentValue) {
++        BrowserControlsSnapshot snapshot = mControlsState.mSnapshot;
++        return isProtectedKeyboardResize(getKeyboardInset()) && snapshot != null
++                ? snapshot.mBottomMinHeight
++                : currentValue;
++    }
++
++    /**
++     * Captures browser-controls state synchronously before an editable forces their visibility.
++     *
++     * <p>This early snapshot closes the interval before Android reports the IME animation.
++     */
++    public void prepareForKeyboardShow() {
++        refreshEnabledState();
++        if (!isFocusedElementEditable()
++                || isProtectedKeyboardResizeWithoutEditableTopControls(getKeyboardInset())) {
++            return;
++        }
++        mImeClosing = false;
++        mControlsState.mEditableTopOffsetBaseline =
++                mBrowserControlsStateProvider != null
++                        ? Math.round(mBrowserControlsStateProvider.getTopVisibleContentOffset())
++                        : 0;
++        captureBrowserControlsSnapshot(
++                getViewportWidth(),
++                /* controlsResizeView= */ true,
++                /* preserveVisibleBottomControls= */ true);
++        mControlsState.mEarlyShowCaptured = true;
++    }
++
++    /**
++     * Keeps Chromium content at the largest neutral height observed for the current width.
++     *
++     * <p>An IME resize therefore creates physical scroll range around unchanged Blink content.
++     */
++    @Override
++    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
++        int viewportWidth =
++                Math.max(
++                        0,
++                        MeasureSpec.getSize(widthMeasureSpec)
++                                - getPaddingLeft()
++                                - getPaddingRight());
++        int viewportHeight =
++                Math.max(
++                        0,
++                        MeasureSpec.getSize(heightMeasureSpec)
++                                - getPaddingTop()
++                                - getPaddingBottom());
++
++        if (!mEnabled) {
++            mNeutralContentWidth = viewportWidth;
++            mNeutralContentHeight = viewportHeight;
++            FrameLayout.LayoutParams contentLayoutParams =
++                    (FrameLayout.LayoutParams) mContent.getLayoutParams();
++            contentLayoutParams.height = viewportHeight;
++            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
++            return;
++        }
++
++        // Keep Chromium at the largest (neutral) viewport height observed for this width. The IME
++        // may shrink this ScrollView, but it must only expose more physical scroll range; it must
++        // not resize mContent. A width change denotes a new configuration (for example rotation)
++        // and establishes a new neutral height.
++        if (viewportWidth != mNeutralContentWidth) {
++            mNeutralContentWidth = viewportWidth;
++            mNeutralContentHeight = viewportHeight;
++        } else {
++            mNeutralContentHeight = Math.max(mNeutralContentHeight, viewportHeight);
++        }
++
++        FrameLayout.LayoutParams contentLayoutParams =
++                (FrameLayout.LayoutParams) mContent.getLayoutParams();
++        contentLayoutParams.height = mNeutralContentHeight;
++
++        // Once the focus request has been cleared, no synthetic scroll range may survive the IME
++        // transition. Enforce this during measurement as well as in resetViewportPan().
++        if (!mPanState.hasRequest()) {
++            mPanState.mRequestedBottomClearance = 0;
++            mPanState.mUnlockedPhysicalPanY = 0;
++        }
++
++        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
++    }
++
++    void logBrowserControlsState(
++            String phase,
++            int callbackTopOffset,
++            int currentTopOffset,
++            int contentOffset,
++            float topVisibleContentOffset,
++            boolean isVisibilityForced) {
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--browserControls phase=%s callbackTopOffset=%d currentTopOffset=%d"
++                            + " contentOffset=%d topVisibleContentOffset=%.2f forced=%b"
++                            + " top=%d translationY=%.2f height=%d contentHeight=%d"
++                            + " scrollY=%d requestedRect=%s requestedBottomOnScreen=%d",
++                    phase,
++                    callbackTopOffset,
++                    currentTopOffset,
++                    contentOffset,
++                    topVisibleContentOffset,
++                    isVisibilityForced,
++                    getTop(),
++                    getTranslationY(),
++                    getHeight(),
++                    mContent.getHeight(),
++                    getScrollY(),
++                    mPanState.mRequestedRect,
++                    !mPanState.hasRequest() ? -1 : mPanState.mRequestedRect.bottom - getScrollY());
++        }
++    }
++
++    /** Claims an unused compositor sequence only while more physical pan exists. */
++    public boolean startCompositorOverscrollHandoff() {
++        if (!mEnabled) return false;
++        mCompositorHandoff.mPullStartY = getScrollY();
++        boolean canConsume =
++                mPanState.hasRequest() && getScrollY() < getMaximumScrollY();
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(TAG, "--startCompositorOverscrollHandoff canConsume=%b startY=%d max=%d",
++                    canConsume, mCompositorHandoff.mPullStartY, getMaximumScrollY());
++        }
++        return canConsume;
++    }
++
++    /** Applies cc's cumulative unused vertical delta to the remaining physical range. */
++    public void pullCompositorOverscroll(float accumulatedDeltaY) {
++        int oldScrollY = getScrollY();
++        int targetScrollY = Math.max(0, Math.min(
++                mCompositorHandoff.mPullStartY + Math.round(accumulatedDeltaY),
++                getMaximumScrollY()));
++        if (targetScrollY != oldScrollY) {
++            mPanState.mUnlockedPhysicalPanY =
++                    Math.max(mPanState.mUnlockedPhysicalPanY, targetScrollY);
++            scrollTo(0, targetScrollY);
++        }
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(TAG,
++                    "--pullCompositorOverscroll accumulatedDeltaY=%.2f start=%d old=%d"
++                            + " target=%d actual=%d max=%d",
++                    accumulatedDeltaY, mCompositorHandoff.mPullStartY, oldScrollY,
++                    targetScrollY, getScrollY(), getMaximumScrollY());
++        }
++    }
++
++    /** Clears the retained focus request and returns the physical viewport to its neutral origin. */
++    public void resetViewportPan() {
++        mPanState.reset();
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(TAG, "--resetViewportPan");
++        }
++        scrollTo(0, 0);
++    }
++
++    /**
++     * Updates the part of the bottom browser controls that has physically disappeared for the IME.
++     *
++     * <p>Blink retains the unobstructed controls geometry while the protected viewport is active,
++     * so the focused rectangle's neutral bottom clearance still contains this hidden UI. Remove
++     * only the physically hidden portion when positioning that rectangle above the keyboard.
++     */
++    private void setHiddenBottomControlsHeight(int hiddenBottomControlsHeight) {
++        int clampedHeight = Math.max(0, hiddenBottomControlsHeight);
++        if (mPanState.mHiddenBottomControlsHeight == clampedHeight) return;
++        mPanState.mHiddenBottomControlsHeight = clampedHeight;
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(TAG, "--hiddenBottomControls height=%d", mPanState.mHiddenBottomControlsHeight);
++        }
++        if (mPanState.hasRequest()) {
++            applyRequestedPan();
++        }
++    }
++
++    /** Updates the top-controls offset that Chromium has added to focused-element rectangles. */
++    private void setShownTopControlsHeight(int shownTopControlsHeight) {
++        int clampedHeight = Math.max(0, shownTopControlsHeight);
++        if (mShownTopControlsHeight == clampedHeight) return;
++        mShownTopControlsHeight = clampedHeight;
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(TAG, "--shownTopControls height=%d", mShownTopControlsHeight);
++        }
++    }
++
++    private void updateGestureRoutingState(MotionEvent event) {
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_DOWN) {
++            mGestureStartX = event.getX();
++            mGestureStartY = event.getY();
++            mGestureRoutingState = GestureRoutingState.UNDECIDED;
++            return;
++        }
++        if (action != MotionEvent.ACTION_MOVE
++                || mGestureRoutingState != GestureRoutingState.UNDECIDED) {
++            return;
++        }
++
++        float fingerDeltaX = event.getX() - mGestureStartX;
++        float fingerDeltaY = event.getY() - mGestureStartY;
++        float absoluteDeltaX = Math.abs(fingerDeltaX);
++        float absoluteDeltaY = Math.abs(fingerDeltaY);
++        if (Math.max(absoluteDeltaX, absoluteDeltaY)
++                <= mViewConfiguration.getScaledTouchSlop()) {
++            return;
++        }
++
++        mGestureRoutingState =
++                absoluteDeltaY > absoluteDeltaX
++                        ? GestureRoutingState.VERTICAL
++                        : GestureRoutingState.HORIZONTAL;
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--gestureAxis axis=%s fingerDeltaX=%f fingerDeltaY=%f",
++                    mGestureRoutingState == GestureRoutingState.VERTICAL
++                            ? "vertical"
++                            : "horizontal",
++                    fingerDeltaX,
++                    fingerDeltaY);
++        }
++    }
++
++    /**
++     * Returns whether CompositorViewHolder must leave the current sequence to this ScrollView.
++     *
++     * <p>The decision is latched for the rest of the gesture. Otherwise the parent layout could
++     * intercept immediately after the physical viewport reaches its edge, before overScrollBy()
++     * can forward the remaining motion to Blink.
++     */
++    public boolean shouldDeferParentInterception(MotionEvent event) {
++        if (!mEnabled) return false;
++        updateGestureRoutingState(event);
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_MOVE
++                && mGestureRoutingState == GestureRoutingState.VERTICAL
++                && getMaximumScrollY() > 0) {
++            mGestureRoutingState = GestureRoutingState.VERTICAL_PARENT_DEFERRED;
++            if (DEBUG_DIAGNOSTICS) {
++                Log.i(
++                        TAG,
++                        "--deferParentInterception scrollY=%d max=%d",
++                        getScrollY(),
++                        getMaximumScrollY());
++            }
++        }
++
++        boolean defer =
++                mGestureRoutingState == GestureRoutingState.VERTICAL_PARENT_DEFERRED;
++        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++            mGestureRoutingState = GestureRoutingState.UNDECIDED;
++        }
++        return defer;
++    }
++
++    /** Intercepts only gestures assigned to the vertical protected-viewport axis. */
++    @Override
++    public boolean onInterceptTouchEvent(MotionEvent event) {
++        if (!mEnabled) return false;
++        updateGestureRoutingState(event);
++        if (mGestureRoutingState == GestureRoutingState.HORIZONTAL) {
++            if (DEBUG_DIAGNOSTICS) {
++                Log.i(TAG, "--skipProtectedIntercept horizontal gesture");
++            }
++            return false;
++        }
++        return super.onInterceptTouchEvent(event);
++    }
++
++    /**
++     * Tracks velocity and completes any compositor scroll sequence attached to this touch gesture.
++     */
++    @Override
++    public boolean dispatchTouchEvent(MotionEvent event) {
++        if (!mEnabled) return super.dispatchTouchEvent(event);
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_DOWN) {
++            beginTrackingGesture(event);
++        } else if (mGestureVelocityTracker != null) {
++            mGestureVelocityTracker.addMovement(event);
++        }
++        mLastGestureEventTimeMs = event.getEventTime();
++        mLastGestureX = event.getX();
++        mLastGestureY = event.getY();
++
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--dispatchTouch before action=%s time=%d x=%.1f y=%.1f"
++                            + " blinkScroll=%b forwarded=%b scrollY=%d physicalLimit=%d",
++                    MotionEvent.actionToString(action),
++                    event.getEventTime(),
++                    event.getX(),
++                    event.getY(),
++                    mCompositorHandoff.mScrollInProgress,
++                    mCompositorHandoff.mCurrentGestureForwardedDelta,
++                    getScrollY(),
++                    getUnlockedPhysicalPanY());
++        }
++
++        boolean handOffAtNeutralEdge = false;
++        float fingerVelocityY = 0;
++        int unlockedPhysicalPanY = getUnlockedPhysicalPanY();
++        if (action == MotionEvent.ACTION_UP && mGestureVelocityTracker != null) {
++            mGestureVelocityTracker.computeCurrentVelocity(
++                    1000, mViewConfiguration.getScaledMaximumFlingVelocity());
++            fingerVelocityY = mGestureVelocityTracker.getYVelocity(mGesturePointerId);
++            int minimumFlingVelocity = mViewConfiguration.getScaledMinimumFlingVelocity();
++            handOffAtNeutralEdge =
++                    mCompositorHandoff.mCurrentGestureForwardedDelta
++                            && ((getScrollY() == 0
++                                            && fingerVelocityY > minimumFlingVelocity)
++                                    || (getScrollY() == unlockedPhysicalPanY
++                                            && fingerVelocityY < -minimumFlingVelocity));
++        }
++
++        boolean handled = super.dispatchTouchEvent(event);
++
++        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++            if (mCompositorHandoff.mScrollInProgress) {
++                float handoffVelocityY =
++                        action == MotionEvent.ACTION_UP && handOffAtNeutralEdge
++                                ? fingerVelocityY
++                                : 0;
++                if (DEBUG_DIAGNOSTICS) {
++                    Log.i(
++                            TAG,
++                            "--ccScrollEnd scrollY=%d fingerVelocityY=%f handoffVelocityY=%f",
++                            getScrollY(),
++                            fingerVelocityY,
++                            handoffVelocityY);
++                }
++                mCompositorScrollDelegate.endCompositorScroll(
++                        event.getEventTime(),
++                        event.getX(),
++                        event.getY(),
++                        handoffVelocityY);
++                mCompositorHandoff.mScrollInProgress = false;
++            }
++            endTrackingGesture();
++        }
++        return handled;
++    }
++
++    /**
++     * Splits vertical motion between the unlocked physical pan and Chromium's compositor.
++     *
++     * <p>Once the physical range reaches an edge, the unconsumed delta continues in cc rather than
++     * terminating the user's gesture at the ScrollView boundary.
++     */
++    @Override
++    protected boolean overScrollBy(
++            int deltaX,
++            int deltaY,
++            int scrollX,
++            int scrollY,
++            int scrollRangeX,
++            int scrollRangeY,
++            int maxOverScrollX,
++            int maxOverScrollY,
++            boolean isTouchEvent) {
++        if (!mEnabled) {
++            return super.overScrollBy(
++                    deltaX,
++                    deltaY,
++                    scrollX,
++                    scrollY,
++                    scrollRangeX,
++                    scrollRangeY,
++                    maxOverScrollX,
++                    maxOverScrollY,
++                    isTouchEvent);
++        }
++        int physicalPanLimitY = getUnlockedPhysicalPanY();
++        int targetY = scrollY + deltaY;
++        int clampedTargetY = Math.max(0, Math.min(targetY, physicalPanLimitY));
++        int consumedY =
++                mCompositorHandoff.mScrollInProgress ? 0 : clampedTargetY - scrollY;
++        int unconsumedY = deltaY - consumedY;
++
++        boolean clamped =
++                super.overScrollBy(
++                        deltaX,
++                        consumedY,
++                        scrollX,
++                        scrollY,
++                        scrollRangeX,
++                        scrollRangeY,
++                        maxOverScrollX,
++                        maxOverScrollY,
++                        isTouchEvent);
++
++        if (isTouchEvent && getMaximumScrollY() > 0 && unconsumedY != 0) {
++            mCompositorHandoff.mCurrentGestureForwardedDelta = true;
++            if (DEBUG_DIAGNOSTICS) {
++                Log.i(
++                        TAG,
++                        "--overscrollHandoff scrollY=%d range=%d physicalLimit=%d"
++                                + " deltaY=%d consumedY=%d unconsumedY=%d",
++                        scrollY,
++                        scrollRangeY,
++                        physicalPanLimitY,
++                        deltaY,
++                        consumedY,
++                        unconsumedY);
++            }
++
++            // EventForwarder expects widget coordinates. Adding the physical ScrollView offset
++            // can put cc's hit-test point outside the widget.
++            float contentY = mLastGestureY;
++            if (!mCompositorHandoff.mScrollInProgress) {
++                mCompositorScrollDelegate.beginCompositorScroll(
++                        mLastGestureEventTimeMs,
++                        mLastGestureX,
++                        contentY,
++                        unconsumedY);
++                mCompositorHandoff.mScrollInProgress = true;
++                if (DEBUG_DIAGNOSTICS) {
++                    Log.i(
++                            TAG,
++                            "--ccScrollBegin time=%d point=%.1f,%.1f deltaY=%d",
++                            mLastGestureEventTimeMs,
++                            mLastGestureX,
++                            contentY,
++                            unconsumedY);
++                }
++            }
++            mCompositorScrollDelegate.updateCompositorScroll(
++                    mLastGestureEventTimeMs, mLastGestureX, contentY, unconsumedY);
++
++            // ScrollView clears its VelocityTracker when this method reports a clamp. For this
++            // container the edge is not a barrier: the remaining motion continues in cc.
++            return false;
++        }
++        return clamped;
++    }
++
++    /**
++     * Converts the first focused-editable visibility request into a retained physical pan target.
++     *
++     * <p>Later requests are acknowledged without replacing the target while the same IME session is
++     * active, so page-side focus changes cannot repeatedly reposition the protected viewport.
++     */
++    @Override
++    public boolean requestChildRectangleOnScreen(
++            View child, Rect rectangle, boolean immediate) {
++        if (!mEnabled) {
++            return super.requestChildRectangleOnScreen(child, rectangle, immediate);
++        }
++        if (mPanState.hasRequest()) {
++            if (DEBUG_DIAGNOSTICS) {
++                Log.i(
++                        TAG,
++                        "--ignoreChildRectangleRequest child=%s sourceRect=%s retainedRect=%s scrollY=%d",
++                        child.getClass().getSimpleName(),
++                        rectangle,
++                        mPanState.mRequestedRect,
++                        getScrollY());
++            }
++            return true;
++        }
++        Rect target = new Rect(rectangle);
++        offsetDescendantRectToMyCoords(child, target);
++        target.offset(0, -mShownTopControlsHeight);
++
++        // ImeAdapterImpl includes Chromium's content Y offset in the focused editable rectangle.
++        // With a protected, full-height mContent this can place the requested rectangle below the
++        // physical content boundary. Preserve its size while bringing it back inside that boundary.
++        int bottomOverflow =
++                mContent.getHeight() > 0
++                        ? Math.max(0, target.bottom - mContent.getHeight())
++                        : 0;
++        if (bottomOverflow > 0) target.offset(0, -bottomOverflow);
++
++        // offsetDescendantRectToMyCoords() already returns coordinates in this ScrollView's
++        // content space. Adding scrollY again would double-count the physical pan.
++        mPanState.mRequestedRect.set(target);
++        int neutralVisibleBottom =
++                Math.max(0, mContent.getHeight() - getPaddingBottom());
++        mPanState.mRequestedBottomClearance =
++                Math.max(0, neutralVisibleBottom - mPanState.mRequestedRect.bottom);
++
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--requestChildRectangleOnScreen child=%s sourceRect=%s targetRect=%s"
++                            + " immediate=%b top=%d height=%d contentHeight=%d"
++                            + " scrollContentHeight=%d shownTopControls=%d"
++                            + " bottomClearance=%d scrollY=%d",
++                    child.getClass().getSimpleName(),
++                    rectangle,
++                    mPanState.mRequestedRect,
++                    immediate,
++                    getTop(),
++                    getHeight(),
++                    mContent.getHeight(),
++                    mScrollContent.getHeight(),
++                    mShownTopControlsHeight,
++                    mPanState.mRequestedBottomClearance,
++                    getScrollY());
++        }
++
++        // The focus request can arrive before the keyboard animation has updated this view.
++        post(() -> applyRequestedPan());
++        return true;
++    }
++
++    /** Reapplies a retained pan after Android has delivered the latest IME-driven view size. */
++    @Override
++    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
++        super.onSizeChanged(w, h, oldw, oldh);
++
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--onSizeChanged size=%dx%d oldSize=%dx%d top=%d contentHeight=%d"
++                            + " scrollY=%d requestedRect=%s",
++                    w,
++                    h,
++                    oldw,
++                    oldh,
++                    getTop(),
++                    mContent.getHeight(),
++                    getScrollY(),
++                    mPanState.mRequestedRect);
++        }
++
++        // The focus request normally arrives before Android finishes resizing for the keyboard.
++        if (mPanState.hasRequest()) {
++            post(() -> applyRequestedPan());
++        }
++    }
++
++    /**
++     * Positions the retained rectangle above the keyboard while preserving its neutral clearance.
++     *
++     * <p>Browser-controls UI that physically disappeared is removed from that clearance, and the
++     * resulting pan becomes the range that direct touch scrolling may consume.
++     */
++    private void applyRequestedPan() {
++        if (!mPanState.hasRequest() || getHeight() == 0) {
++            if (DEBUG_DIAGNOSTICS) {
++                Log.i(
++                                TAG,
++                                "--applyRequestedPan (exit1) rect=%s height=%d contentHeight=%d",
++                                mPanState.mRequestedRect,
++                                getHeight(),
++                                mContent.getHeight());
++            }
++            return;
++        }
++
++        int visibleBottom = getHeight() - getPaddingBottom();
++        int minimumScrollY = Math.max(0, mPanState.mRequestedRect.bottom - visibleBottom);
++        int effectiveBottomClearance =
++                Math.max(
++                        0,
++                        mPanState.mRequestedBottomClearance
++                                - mPanState.mHiddenBottomControlsHeight);
++        int requestedScrollY = minimumScrollY;
++        if (minimumScrollY > 0) {
++            requestedScrollY += effectiveBottomClearance;
++        }
++        int maximumScrollY = getMaximumScrollY();
++        requestedScrollY = Math.min(requestedScrollY, maximumScrollY);
++        mPanState.mUnlockedPhysicalPanY = requestedScrollY;
++
++        scrollTo(0, requestedScrollY);
++
++        if (DEBUG_DIAGNOSTICS) {
++            Log.i(
++                    TAG,
++                    "--applyRequestedPan rect=%s top=%d height=%d visibleBottom=%d"
++                            + " contentHeight=%d minimumScrollY=%d bottomClearance=%d"
++                            + " hiddenBottomControls=%d effectiveBottomClearance=%d"
++                            + " requestedScrollY=%d actualScrollY=%d max=%d"
++                            + " requestedBottomOnScreen=%d",
++                    mPanState.mRequestedRect,
++                    getTop(),
++                    getHeight(),
++                    visibleBottom,
++                    mContent.getHeight(),
++                    minimumScrollY,
++                    mPanState.mRequestedBottomClearance,
++                    mPanState.mHiddenBottomControlsHeight,
++                    effectiveBottomClearance,
++                    requestedScrollY,
++                    getScrollY(),
++                    maximumScrollY,
++                    mPanState.mRequestedRect.bottom - getScrollY());
++        }
++    }
++
++    /** Starts IME animation observation when policy and attachment state both allow it. */
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        registerInsetObserver();
++    }
++
++    /** Stops IME animation observation before the protected viewport leaves the hierarchy. */
++    @Override
++    protected void onDetachedFromWindow() {
++        unregisterInsetObserver();
++        mImeAnimationRunning = false;
++        super.onDetachedFromWindow();
++    }
++
++    private int getMaximumScrollY() {
++        return Math.max(
++                0, mScrollContent.getHeight() - getHeight() + getPaddingTop() + getPaddingBottom());
++    }
++
++    private int getUnlockedPhysicalPanY() {
++        return Math.min(mPanState.mUnlockedPhysicalPanY, getMaximumScrollY());
++    }
++
++    private void beginTrackingGesture(MotionEvent event) {
++        if (mGestureVelocityTracker == null) {
++            mGestureVelocityTracker = VelocityTracker.obtain();
++        } else {
++            mGestureVelocityTracker.clear();
++        }
++        mGestureVelocityTracker.addMovement(event);
++        mGesturePointerId = event.getPointerId(0);
++        mCompositorHandoff.mCurrentGestureForwardedDelta = false;
++    }
++
++    private void endTrackingGesture() {
++        if (mGestureVelocityTracker != null) {
++            mGestureVelocityTracker.recycle();
++            mGestureVelocityTracker = null;
++        }
++        mGesturePointerId = INVALID_POINTER_ID;
++        mCompositorHandoff.mCurrentGestureForwardedDelta = false;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabWebContentsObserver.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabWebContentsObserver.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabWebContentsObserver.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabWebContentsObserver.java
+@@ -64,6 +64,7 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
+     private final ObserverList<Callback<WebContents>> mInitObservers = new ObserverList<>();
+     private @Nullable Observer mObserver;
+     private @Nullable GURL mLastUrl;
++    private @Nullable Boolean mProtectedKeyboardGeometryEnabled;
+ 
+     public static TabWebContentsObserver from(Tab tab) {
+         TabWebContentsObserver observer = get(tab);
+@@ -109,6 +110,7 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
+ 
+     @Override
+     public void initWebContents(WebContents webContents) {
++        mProtectedKeyboardGeometryEnabled = null;
+         mObserver = new Observer(webContents);
+ 
+         for (Callback<WebContents> callback : mInitObservers) callback.onResult(webContents);
+@@ -123,6 +125,17 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
+         }
+     }
+ 
++    /** Returns the protected keyboard geometry decision cached for the current document. */
++    public @Nullable Boolean getProtectedKeyboardGeometryEnabledForCurrentDocument() {
++        return mProtectedKeyboardGeometryEnabled;
++    }
++
++    /** Caches the protected keyboard geometry decision for the current document. */
++    public void setProtectedKeyboardGeometryEnabledForCurrentDocument(
++            @Nullable Boolean enabled) {
++        mProtectedKeyboardGeometryEnabled = enabled;
++    }
++
+     public void simulateRendererKilledForTesting() {
+         if (mObserver != null) {
+             mObserver.primaryMainFrameRenderProcessGone(TerminationStatus.PROCESS_WAS_KILLED);
+@@ -304,6 +317,10 @@ public class TabWebContentsObserver extends TabWebContentsUserData {
+ 
+         @Override
+         public void didFinishNavigationInPrimaryMainFrame(NavigationHandle navigation) {
++            if (navigation.hasCommitted()) {
++                mProtectedKeyboardGeometryEnabled = null;
++            }
++
+             RewindableIterator<TabObserver> observers = mTab.getTabObservers();
+             while (observers.hasNext()) {
+                 observers.next().onDidFinishNavigationInPrimaryMainFrame(mTab, navigation);
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
+--- a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/ChromeFeatureList.java
+@@ -1453,7 +1453,7 @@ public abstract class ChromeFeatureList {
+     public static final MutableFlagWithSafeDefault sAndroidZoomImmersive =
+             newMutableFlagWithSafeDefault(ANDROID_ZOOM_IMMERSIVE, false);
+     public static final MutableFlagWithSafeDefault sBrowserControlsEarlyResize =
+-            newMutableFlagWithSafeDefault(BROWSER_CONTROLS_EARLY_RESIZE, false);
++            newMutableFlagWithSafeDefault(BROWSER_CONTROLS_EARLY_RESIZE, true);
+     public static final MutableFlagWithSafeDefault sBrowserControlsPersistsOnCvh =
+             newMutableFlagWithSafeDefault(BROWSER_CONTROLS_PERSISTS_ON_CVH, true);
+     // Default to false. The logic behind the flag is not relevant when native is not initialized.
+diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sAndroidProtectedKeyboardGeometry.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sAndroidProtectedKeyboardGeometry.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sAndroidProtectedKeyboardGeometry.java
+@@ -0,0 +1,35 @@
++/*
++    This file is part of Cromite.
++
++    Cromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Cromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Cromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.chrome.browser.flags.cromite;
++
++import org.chromium.chrome.browser.flags.ChromeFeatureMap;
++import org.chromium.components.cached_flags.CachedFlag;
++
++public class sAndroidProtectedKeyboardGeometry {
++    private static final CachedFlag sInstance =
++            new CachedFlag(
++                    ChromeFeatureMap.getInstance(),
++                    "AndroidProtectedKeyboardGeometry",
++                    true);
++
++    private sAndroidProtectedKeyboardGeometry() {}
++
++    public static CachedFlag getInstance() {
++        return sInstance;
++    }
++}
+diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/CromiteProtectedKeyboardGeometryContentSetting.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/CromiteProtectedKeyboardGeometryContentSetting.java
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/CromiteProtectedKeyboardGeometryContentSetting.java
+@@ -0,0 +1,94 @@
++/*
++    This file is part of Bromite.
++
++    Bromite is free software: you can redistribute it and/or modify
++    it under the terms of the GNU General Public License as published by
++    the Free Software Foundation, either version 3 of the License, or
++    (at your option) any later version.
++
++    Bromite is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++
++    You should have received a copy of the GNU General Public License
++    along with Bromite. If not, see <https://www.gnu.org/licenses/>.
++*/
++
++package org.chromium.components.browser_ui.site_settings.impl;
++
++import org.chromium.components.browser_ui.site_settings.R;
++
++import org.chromium.components.browser_ui.site_settings.BromiteCustomContentSetting;
++import org.chromium.components.browser_ui.site_settings.ContentSettingsResources;
++import org.chromium.components.browser_ui.site_settings.SiteSettingsCategory;
++import org.chromium.components.content_settings.ContentSetting;
++import org.chromium.components.content_settings.ContentSettingsType;
++import org.chromium.content_public.browser.BrowserContextHandle;
++
++import androidx.annotation.Nullable;
++import androidx.preference.Preference;
++import androidx.preference.PreferenceScreen;
++
++import java.util.ArrayList;
++
++public class CromiteProtectedKeyboardGeometryContentSetting extends BromiteCustomContentSetting {
++    public CromiteProtectedKeyboardGeometryContentSetting() {
++        super(/*contentSettingsType*/ ContentSettingsType.PROTECTED_KEYBOARD_GEOMETRY,
++              /*defaultEnabledValue*/ ContentSetting.ALLOW,
++              /*defaultDisabledValue*/ ContentSetting.BLOCK,
++              /*allowException*/ true,
++              /*preferenceKey*/ "keyboard_size_protection",
++              /*profilePrefKey*/ "keyboard_size_protection");
++    }
++
++    @Override
++    public ContentSettingsResources.ResourceItem getResourceItem() {
++        return new ContentSettingsResources.ResourceItem(
++            /*icon*/ R.drawable.web_asset,
++            /*title*/ R.string.protected_keyboard_geometry_permission_title,
++            /*defaultEnabledValue*/ getDefaultEnabledValue(),
++            /*defaultDisabledValue*/ getDefaultDisabledValue(),
++            /*enabledSummary*/ R.string.website_settings_category_protected_keyboard_geometry_enabled,
++            /*disabledSummary*/ R.string.website_settings_category_protected_keyboard_geometry_disabled,
++            /*summaryOverrideForScreenReader*/ 0);
++    }
++
++    @Override
++    public int getCategorySummary(@Nullable @ContentSetting int value) {
++        switch (value) {
++            case ContentSetting.ALLOW:
++                return R.string.website_settings_category_protected_keyboard_geometry_enabled;
++            case ContentSetting.BLOCK:
++                return R.string.website_settings_category_protected_keyboard_geometry_disabled;
++            default:
++                // this will cause a runtime exception
++                return 0;
++        }
++    }
++
++    @Override
++    public int getCategoryDescription() {
++        return R.string.settings_site_settings_protected_keyboard_geometry_description;
++    }
++
++    @Override
++    public boolean requiresTriStateContentSetting() {
++        return false;
++    }
++
++    @Override
++    public boolean showOnlyDescriptions() {
++        return true;
++    }
++
++    @Override
++    public int getAddExceptionDialogMessage() {
++        return R.string.website_settings_category_protected_keyboard_geometry_enabled;
++    }
++
++    @Override
++    public @Nullable Boolean considerException(SiteSettingsCategory category, @ContentSetting int value) {
++        return value != ContentSetting.BLOCK;
++    }
++}
+diff --git a/components/browser_ui/strings/bromite_content_settings/protected_keyboard_geometry.grdp b/components/browser_ui/strings/bromite_content_settings/protected_keyboard_geometry.grdp
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/strings/bromite_content_settings/protected_keyboard_geometry.grdp
+@@ -0,0 +1,27 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++  <message name="IDS_SITE_SETTINGS_TYPE_PROTECTED_KEYBOARD_GEOMETRY" desc="The label used for site settings controls." formatter_data="android_java">
++    Keyboard Size Protection
++  </message>
++  <message name="IDS_PROTECTED_KEYBOARD_GEOMETRY_PERMISSION_TITLE" desc="Title of the permission to use [CHAR-LIMIT=32]" formatter_data="android_java">
++    Keyboard Size Protection
++  </message>
++  <message name="IDS_SITE_SETTINGS_TYPE_PROTECTED_KEYBOARD_GEOMETRY_MID_SENTENCE" desc="The label used for site settings controls when used mid-sentence." formatter_data="android_java">
++    Keyboard Size Protection
++  </message>
++  <message name="IDS_SETTINGS_SITE_SETTINGS_PROTECTED_KEYBOARD_GEOMETRY_DESCRIPTION" desc="Description of the content setting." formatter_data="android_java">
++    Hides the keyboard size
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_PROTECTED_KEYBOARD_GEOMETRY_ENABLED" desc="Summary text explaining is full enabled." formatter_data="android_java">
++    Enabled
++  </message>
++  <message name="IDS_WEBSITE_SETTINGS_CATEGORY_PROTECTED_KEYBOARD_GEOMETRY_DISABLED" desc="Summary text explaining that is full disabled." formatter_data="android_java">
++    Disabled
++  </message>
++  <message name="IDS_SETTINGS_SITE_SETTINGS_PROTECTED_KEYBOARD_GEOMETRY_ALLOWED_EXCEPTIONS" desc="Label for the allowed exceptions site list.">
++    Keyboard size is protected
++  </message>
++  <message name="IDS_SETTINGS_SITE_SETTINGS_PROTECTED_KEYBOARD_GEOMETRY_BLOCKED_EXCEPTIONS" desc="Label for the blocked exceptions site list.">
++    Keyboard size is not protected
++  </message>
++</grit-part>
+diff --git a/components/content_settings/core/browser/bromite_content_settings/protected_keyboard_geometry.inc b/components/content_settings/core/browser/bromite_content_settings/protected_keyboard_geometry.inc
+new file mode 100644
+--- /dev/null
++++ b/components/content_settings/core/browser/bromite_content_settings/protected_keyboard_geometry.inc
+@@ -0,0 +1,21 @@
++  Register(ContentSettingsType::PROTECTED_KEYBOARD_GEOMETRY, "keyboard_size_protection", CONTENT_SETTING_ALLOW,
++           WebsiteSettingsInfo::SYNCABLE,
++           /*allowlisted_schemes=*/{},
++           /*valid_settings=*/{CONTENT_SETTING_ALLOW,
++                               CONTENT_SETTING_BLOCK},
++           WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
++           WebsiteSettingsRegistry::PLATFORM_ANDROID,
++           ContentSettingsInfo::INHERIT_IN_INCOGNITO,
++           PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_AND_INSECURE_ORIGINS);
++
++  content_settings::WebsiteSettingsRegistry::GetInstance()
++    ->GetMutable(ContentSettingsType::PROTECTED_KEYBOARD_GEOMETRY)
++    ->set_show_into_info_page()
++    .set_is_renderer_content_setting()
++    .set_title_ui(IDS_SITE_SETTINGS_TYPE_PROTECTED_KEYBOARD_GEOMETRY)
++    .set_description_ui(IDS_SETTINGS_SITE_SETTINGS_PROTECTED_KEYBOARD_GEOMETRY_DESCRIPTION)
++    .set_allowed_ui(IDS_WEBSITE_SETTINGS_CATEGORY_PROTECTED_KEYBOARD_GEOMETRY_ENABLED)
++    .set_blocked_ui(IDS_WEBSITE_SETTINGS_CATEGORY_PROTECTED_KEYBOARD_GEOMETRY_DISABLED)
++    .set_allowed_exceptions_ui(IDS_SETTINGS_SITE_SETTINGS_PROTECTED_KEYBOARD_GEOMETRY_ALLOWED_EXCEPTIONS)
++    .set_blocked_exceptions_ui(IDS_SETTINGS_SITE_SETTINGS_PROTECTED_KEYBOARD_GEOMETRY_BLOCKED_EXCEPTIONS)
++    .set_mid_sentence_ui(IDS_SITE_SETTINGS_TYPE_PROTECTED_KEYBOARD_GEOMETRY_MID_SENTENCE);
+diff --git a/components/content_settings/core/common/bromite_content_settings/protected_keyboard_geometry.inc b/components/content_settings/core/common/bromite_content_settings/protected_keyboard_geometry.inc
+new file mode 100644
+--- /dev/null
++++ b/components/content_settings/core/common/bromite_content_settings/protected_keyboard_geometry.inc
+@@ -0,0 +1,2 @@
++PROTECTED_KEYBOARD_GEOMETRY,
++
+diff --git a/content/browser/android/overscroll_controller_android.cc b/content/browser/android/overscroll_controller_android.cc
+--- a/content/browser/android/overscroll_controller_android.cc
++++ b/content/browser/android/overscroll_controller_android.cc
+@@ -124,6 +124,15 @@ OverscrollControllerAndroid::OverscrollControllerAndroid(
+ OverscrollControllerAndroid::~OverscrollControllerAndroid() {
+ }
+ 
++void OverscrollControllerAndroid::EndProtectedViewportHandoff() {
++  if (protected_viewport_handoff_active_) {
++    refresh_effect_->EndProtectedViewportHandoff();
++  }
++
++  protected_viewport_scroll_sequence_ = false;
++  protected_viewport_handoff_active_ = false;
++}
++
+ void OverscrollControllerAndroid::OnGestureEvent(
+     const blink::WebGestureEvent& event) {
+   if (!ShouldHandleInputEvents()) {
+@@ -132,8 +141,15 @@ void OverscrollControllerAndroid::OnGestureEvent(
+ 
+   switch (event.GetType()) {
+     case blink::WebInputEvent::Type::kGestureScrollBegin:
++      EndProtectedViewportHandoff();
+       refresh_effect_->OnScrollBegin(
+           gfx::ScalePoint(event.PositionInWidget(), dpi_scale_));
++      // Do not call Java reentrantly while the synthetic GestureScrollBegin
++      // is still being routed. Remember only that this is a candidate
++      // sequence; the first DidOverscroll asks Java whether it can consume.
++      protected_viewport_scroll_sequence_ =
++          !event.data.scroll_begin.target_viewport &&
++          event.data.scroll_begin.pointer_count == 0;
+       break;
+     case blink::WebInputEvent::Type::kGestureScrollUpdate: {
+       if (event.SourceDevice() == blink::WebGestureDevice::kTouchpad) {
+@@ -143,6 +159,7 @@ void OverscrollControllerAndroid::OnGestureEvent(
+       }
+     } break;
+     case blink::WebInputEvent::Type::kGestureScrollEnd: {
++      EndProtectedViewportHandoff();
+       if (event.SourceDevice() == blink::WebGestureDevice::kTouchpad) {
+         refresh_effect_->OnScrollEnd(gfx::Vector2dF());
+       }
+@@ -150,6 +167,7 @@ void OverscrollControllerAndroid::OnGestureEvent(
+     }
+ 
+     case blink::WebInputEvent::Type::kGestureFlingStart: {
++      EndProtectedViewportHandoff();
+       if (refresh_effect_->IsActive()) {
+         gfx::Vector2dF scroll_velocity(event.data.fling_start.velocity_x,
+                                        event.data.fling_start.velocity_y);
+@@ -202,6 +220,26 @@ void OverscrollControllerAndroid::OnOverscrolled(
+   if (!enabled_)
+     return;
+ 
++  if (protected_viewport_scroll_sequence_ &&
++      params.latest_overscroll_delta.y() != 0.0f) {
++    if (!protected_viewport_handoff_active_) {
++      protected_viewport_handoff_active_ =
++          refresh_effect_->StartProtectedViewportHandoff();
++      if (!protected_viewport_handoff_active_) {
++        protected_viewport_scroll_sequence_ = false;
++      }
++    }
++    if (protected_viewport_handoff_active_) {
++      // The protected sequence uses an absolute accumulated value. This makes
++      // delivery idempotent if DidOverscroll is observed more than once.
++      refresh_effect_->UpdateProtectedViewportHandoff(
++          params.accumulated_overscroll.y());
++      // Do not set is_handling_sequence_: the physical touch remains owned by
++      // ProtectedViewportScrollView and must not be transferred back from Viz.
++      return;
++    }
++  }
++
+   if (refresh_effect_) {
+     refresh_effect_->OnOverscrolled(params.overscroll_behavior,
+                                     params.accumulated_overscroll,
+@@ -290,6 +328,8 @@ void OverscrollControllerAndroid::Enable() {
+ void OverscrollControllerAndroid::Disable() {
+   if (!enabled_)
+     return;
++  protected_viewport_scroll_sequence_ = false;
++  protected_viewport_handoff_active_ = false;
+   enabled_ = false;
+   if (!enabled_) {
+     if (refresh_effect_)
+diff --git a/content/browser/android/overscroll_controller_android.h b/content/browser/android/overscroll_controller_android.h
+--- a/content/browser/android/overscroll_controller_android.h
++++ b/content/browser/android/overscroll_controller_android.h
+@@ -107,6 +107,7 @@ class CONTENT_EXPORT OverscrollControllerAndroid
+                            ConsumedBeginDoesNotResetEnabledRefresh);
+ 
+   bool ShouldHandleInputEvents();
++  void EndProtectedViewportHandoff();
+   void OnGestureEvent(const blink::WebGestureEvent& event);
+ 
+   // To be called upon receipt of a gesture event ack.
+@@ -135,6 +136,16 @@ class CONTENT_EXPORT OverscrollControllerAndroid
+   // action (ACTION_UP/ACTION_CANCEL) occurs.
+   bool is_handling_sequence_ = false;
+ 
++  // State for returning unused compositor scrolling to the protected viewport:
++  //   false, false: no eligible sequence;
++  //   true,  false: eligible sequence, waiting for Java to accept the handoff;
++  //   true,  true: Java accepted; forward unused vertical scroll deltas.
++  // `protected_viewport_handoff_active_` therefore always implies
++  // `protected_viewport_scroll_sequence_`. A terminal gesture, a replacement
++  // scroll begin, or Disable() resets both values to false.
++  bool protected_viewport_scroll_sequence_ = false;
++  bool protected_viewport_handoff_active_ = false;
++
+   // Stores the last seen position of a touch input event (in pix) to correctly
+   // calculate scroll deltas for `refresh_effect_`.
+   gfx::Vector2dF last_pos_;
+diff --git a/content/browser/web_contents/web_contents_android.cc b/content/browser/web_contents/web_contents_android.cc
+--- a/content/browser/web_contents/web_contents_android.cc
++++ b/content/browser/web_contents/web_contents_android.cc
+@@ -547,6 +547,12 @@ void WebContentsAndroid::ScrollFocusedEditableNodeIntoView(JNIEnv* env) {
+     input_handler->ScrollFocusedEditableNodeIntoView();
+ }
+ 
++void WebContentsAndroid::UpdateFocusedElementBounds(JNIEnv* env) {
++  auto* input_handler = web_contents_->GetFocusedFrameWidgetInputHandler();
++  if (input_handler)
++    input_handler->UpdateFocusedElementBounds();
++}
++
+ void WebContentsAndroid::SelectAroundCaretAck(
+     int startOffset,
+     int endOffset,
+diff --git a/content/browser/web_contents/web_contents_android.h b/content/browser/web_contents/web_contents_android.h
+--- a/content/browser/web_contents/web_contents_android.h
++++ b/content/browser/web_contents/web_contents_android.h
+@@ -111,6 +111,7 @@ class CONTENT_EXPORT WebContentsAndroid {
+   bool IsFullscreenForCurrentTab(JNIEnv* env);
+   void ExitFullscreen(JNIEnv* env);
+   void ScrollFocusedEditableNodeIntoView(JNIEnv* env);
++  void UpdateFocusedElementBounds(JNIEnv* env);
+   void SelectAroundCaret(JNIEnv* env,
+                          int32_t granularity,
+                          bool should_show_handle,
+diff --git a/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java b/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java
+--- a/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java
++++ b/content/public/android/java/src/org/chromium/content/browser/input/ImeAdapterImpl.java
+@@ -183,6 +183,13 @@ public class ImeAdapterImpl
+     // Used to tell View#onSizeChanged to focus a form element.
+     private final Rect mFocusPreOSKViewportRect = new Rect();
+ 
++    // Bounds of the focused Blink editable in container-view pixels. Used as a fallback pan
++    // target when caret geometry is unavailable.
++    private final Rect mFocusedEditableRectPix = new Rect();
++
++    // Last caret bounds received through CursorAnchorInfo, in container-view pixels.
++    private final Rect mFocusedEditableCaretRectPix = new Rect();
++
+     // Keep the current configuration to detect the change when onConfigurationChanged() is called.
+     private Configuration mCurrentConfig;
+ 
+@@ -922,6 +929,11 @@ public class ImeAdapterImpl
+             // doesn't affect the size of the web contents.
+             mWebContents.scrollFocusedEditableNodeIntoView();
+         }
++
++        if (resultCode == InputMethodManager.RESULT_SHOWN
++                || resultCode == InputMethodManager.RESULT_UNCHANGED_SHOWN) {
++            containerView.post(this::requestFocusedTextInputRectangleOnScreen);
++        }
+     }
+ 
+     @CalledByNative
+@@ -933,6 +945,29 @@ public class ImeAdapterImpl
+         mFocusPreOSKViewportRect.setEmpty();
+     }
+ 
++    private void requestFocusedTextInputRectangleOnScreen() {
++        if (!isValid()) return;
++
++        boolean usingCaret = !mFocusedEditableCaretRectPix.isEmpty();
++        Rect requestedRect = usingCaret ? mFocusedEditableCaretRectPix : mFocusedEditableRectPix;
++        if (requestedRect.isEmpty()) return;
++
++        boolean handled =
++                getContainerView()
++                        .requestRectangleOnScreen(
++                                new Rect(requestedRect),
++                                /* immediate= */ false);
++
++        if (DEBUG_LOGS) {
++            Log.i(
++                TAG,
++                "--requestRectangleOnScreen source=%s rect=%s handled=%b",
++                usingCaret ? "caret" : "editable",
++                requestedRect,
++                handled);
++        }
++    }
++
+     @Override
+     public ResultReceiver getNewShowKeyboardReceiver() {
+         if (mShowKeyboardResultReceiver == null) {
+@@ -1526,6 +1561,31 @@ public class ImeAdapterImpl
+ 
+         View containerView = getContainerView();
+ 
++        mFocusedEditableCaretRectPix.setEmpty();
++        if (isEditable) {
++            mFocusedEditableRectPix.set(
++                    fromCssToDevicePix(nodeLeftDip, nodeTopDip, nodeRightDip, nodeBottomDip));
++            if (DEBUG_LOGS) {
++                Log.i(
++                    TAG,
++                    "--focusedEditableGeometry css=[%d,%d - %d,%d] pix=%s",
++                    nodeLeftDip,
++                    nodeTopDip,
++                    nodeRightDip,
++                    nodeBottomDip,
++                    mFocusedEditableRectPix);
++            }
++            if (isValid()) {
++                ImeAdapterImplJni.get()
++                        .requestCursorUpdate(
++                                mNativeImeAdapterAndroid,
++                                true /* immediate request */,
++                                false /* disable monitoring */);
++            }
++        } else {
++            mFocusedEditableRectPix.setEmpty();
++        }
++
+         // Update edit bounds to stylus writing service.
+         if (mWebContents.getStylusWritingHandler() != null) {
+             RenderCoordinatesImpl coords = mWebContents.getRenderCoordinates();
+@@ -1783,6 +1843,35 @@ public class ImeAdapterImpl
+                 mCursorAnchorInfoController.updateCursorAnchorInfoData(
+                         cursorAnchorInfo, containerView);
+ 
++        if (cursorAnchorInfo.insertionMarker != null) {
++            var caretCss = cursorAnchorInfo.insertionMarker;
++            Rect cachedCaretPix =
++                    fromCssToDevicePix(
++                            caretCss.x,
++                            caretCss.y,
++                            caretCss.x + caretCss.width,
++                            caretCss.y + caretCss.height);
++            // A collapsed caret is a vertical line, but Rect.isEmpty() also treats a
++            // zero-width rectangle as empty. Preserve it as a one-pixel pan target.
++            cachedCaretPix.right = Math.max(cachedCaretPix.left + 1, cachedCaretPix.right);
++            mFocusedEditableCaretRectPix.set(cachedCaretPix);
++            if (DEBUG_LOGS) {
++                Log.i(
++                    TAG,
++                    "--cursorAnchorGeometry selectionMove=%b css=[%d,%d %dx%d]"
++                            + " focusedPix=%s caretPix=%s",
++                    isSelectionMove,
++                    caretCss.x,
++                    caretCss.y,
++                    caretCss.width,
++                    caretCss.height,
++                    mFocusedEditableRectPix,
++                    mFocusedEditableCaretRectPix);
++            }
++        } else {
++            mFocusedEditableCaretRectPix.setEmpty();
++        }
++
+         // Request view system keep caret on screen when moved.
+         if (isSelectionMove
+                 && cursorAnchorInfo.insertionMarker != null
+@@ -1795,6 +1884,7 @@ public class ImeAdapterImpl
+                             caretCss.y,
+                             caretCss.x + caretCss.width,
+                             caretCss.y + caretCss.height);
++            if (DEBUG_LOGS) Log.i(TAG, "--cursorRectangleOnScreen pix=%s", caretPix);
+ 
+             // Note: `SDK_INT_FULL` added in `BAKLAVA`, hence two checks.
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA
+diff --git a/content/public/android/java/src/org/chromium/content/browser/webcontents/WebContentsImpl.java b/content/public/android/java/src/org/chromium/content/browser/webcontents/WebContentsImpl.java
+--- a/content/public/android/java/src/org/chromium/content/browser/webcontents/WebContentsImpl.java
++++ b/content/public/android/java/src/org/chromium/content/browser/webcontents/WebContentsImpl.java
+@@ -689,6 +689,12 @@ public class WebContentsImpl
+         WebContentsImplJni.get().scrollFocusedEditableNodeIntoView(mNativeWebContentsAndroid);
+     }
+ 
++    @Override
++    public void updateFocusedElementBounds() {
++        checkNotDestroyed();
++        WebContentsImplJni.get().updateFocusedElementBounds(mNativeWebContentsAndroid);
++    }
++
+     @Override
+     public void selectAroundCaret(
+             @SelectionGranularity int granularity,
+@@ -1420,6 +1426,8 @@ public class WebContentsImpl
+ 
+         void scrollFocusedEditableNodeIntoView(long nativeWebContentsAndroid);
+ 
++        void updateFocusedElementBounds(long nativeWebContentsAndroid);
++
+         void selectAroundCaret(
+                 long nativeWebContentsAndroid,
+                 int granularity,
+diff --git a/content/public/android/java/src/org/chromium/content_public/browser/WebContents.java b/content/public/android/java/src/org/chromium/content_public/browser/WebContents.java
+--- a/content/public/android/java/src/org/chromium/content_public/browser/WebContents.java
++++ b/content/public/android/java/src/org/chromium/content_public/browser/WebContents.java
+@@ -310,6 +310,9 @@ public interface WebContents extends Parcelable {
+     /** Brings the Editable to the visible area while IME is up to make easier for inputing text. */
+     void scrollFocusedEditableNodeIntoView();
+ 
++    /** Recomputes the focused element bounds after a renderer viewport resize. */
++    void updateFocusedElementBounds();
++
+     /**
+      * Selects at the specified granularity around the caret and potentially shows the selection
+      * handles and context menu. The caller can check if selection actually occurred by listening to
+diff --git a/content/public/test/android/javatests/src/org/chromium/content_public/browser/test/mock/MockWebContents.java b/content/public/test/android/javatests/src/org/chromium/content_public/browser/test/mock/MockWebContents.java
+--- a/content/public/test/android/javatests/src/org/chromium/content_public/browser/test/mock/MockWebContents.java
++++ b/content/public/test/android/javatests/src/org/chromium/content_public/browser/test/mock/MockWebContents.java
+@@ -205,6 +205,9 @@ public class MockWebContents implements WebContents, WebContentsObserver.Observa
+     @Override
+     public void scrollFocusedEditableNodeIntoView() {}
+ 
++    @Override
++    public void updateFocusedElementBounds() {}
++
+     @Override
+     public void selectAroundCaret(
+             @SelectionGranularity int granularity,
+diff --git a/cromite_flags/chrome/browser/about_flags_cc/Android-Protected-Keyboard-Geometry.inc b/cromite_flags/chrome/browser/about_flags_cc/Android-Protected-Keyboard-Geometry.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/about_flags_cc/Android-Protected-Keyboard-Geometry.inc
+@@ -0,0 +1,10 @@
++#ifdef FLAG_SECTION
++
++    {"android-protected-keyboard-geometry",
++     "Android Protected Keyboard Geometry",
++     "Protects Android on-screen keyboard geometry from being exposed to web "
++     "content. The per-site Viewport Protection setting is also respected.",
++     kOsAndroid,
++     FEATURE_VALUE_TYPE(blink::features::kAndroidProtectedKeyboardGeometry)},
++
++#endif
+diff --git a/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/protected_keyboard_geometry.inc b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/protected_keyboard_geometry.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/protected_keyboard_geometry.inc
+@@ -0,0 +1,5 @@
++#if BUILDFLAG(IS_ANDROID)
++
++SET_CROMITE_FEATURE_ENABLED(kBrowserControlsEarlyResize);
++
++#endif
+diff --git a/cromite_flags/third_party/blink/common/features_cc/Android-Protected-Keyboard-Geometry.inc b/cromite_flags/third_party/blink/common/features_cc/Android-Protected-Keyboard-Geometry.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/third_party/blink/common/features_cc/Android-Protected-Keyboard-Geometry.inc
+@@ -0,0 +1,3 @@
++CROMITE_FEATURE(kAndroidProtectedKeyboardGeometry,
++                "AndroidProtectedKeyboardGeometry",
++                base::FEATURE_ENABLED_BY_DEFAULT);
+diff --git a/cromite_flags/third_party/blink/common/features_h/Android-Protected-Keyboard-Geometry.inc b/cromite_flags/third_party/blink/common/features_h/Android-Protected-Keyboard-Geometry.inc
+new file mode 100644
+--- /dev/null
++++ b/cromite_flags/third_party/blink/common/features_h/Android-Protected-Keyboard-Geometry.inc
+@@ -0,0 +1,2 @@
++// Conceals Android on-screen keyboard geometry from web content.
++BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kAndroidProtectedKeyboardGeometry);
+diff --git a/third_party/blink/public/mojom/input/input_handler.mojom b/third_party/blink/public/mojom/input/input_handler.mojom
+--- a/third_party/blink/public/mojom/input/input_handler.mojom
++++ b/third_party/blink/public/mojom/input/input_handler.mojom
+@@ -422,6 +422,10 @@ interface FrameWidgetInputHandler {
+   // editable divs).
+   ScrollFocusedEditableNodeIntoView();
+ 
++  // Recomputes and sends the current focused element bounds to the browser.
++  // Used when browser UI resizes the renderer viewport without changing focus.
++  UpdateFocusedElementBounds();
++
+   // Replies when the next PageScaleAnimation has completed. Can only be called
+   // on the outermost main frame. Can be used to reliably wait for a
+   // ScrollFocusedEditableNodeIntoView to complete since that may create a
+diff --git a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
+--- a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
++++ b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
+@@ -55,6 +55,7 @@
+ #include "third_party/blink/renderer/core/frame/remote_frame_owner.h"
+ #include "third_party/blink/renderer/core/frame/reporting_context.h"
+ #include "third_party/blink/renderer/core/frame/savable_resources.h"
++#include "third_party/blink/renderer/core/frame/web_frame_widget_impl.h"
+ #include "third_party/blink/renderer/core/frame/web_local_frame_impl.h"
+ #include "third_party/blink/renderer/core/fullscreen/fullscreen.h"
+ #include "third_party/blink/renderer/core/html/html_element.h"
+@@ -597,7 +598,11 @@ void LocalFrameMojoHandler::NotifyVirtualKeyboardOverlayRect(
+                         keyboard_rect.width() / scale_factor,
+                         keyboard_rect.height() / scale_factor);
+ 
+-  frame_->NotifyVirtualKeyboardOverlayRectObservers(scaled_rect);
++  if (page->IsAndroidProtectedKeyboardGeometryEnabled(frame_)) {
++    frame_->NotifyVirtualKeyboardOverlayRectObservers(gfx::Rect());
++  } else {
++    frame_->NotifyVirtualKeyboardOverlayRectObservers(scaled_rect);
++  }
+ }
+ 
+ void LocalFrameMojoHandler::ShowInterestInElement(int nodeID) {
+diff --git a/third_party/blink/renderer/core/frame/viewport_data.cc b/third_party/blink/renderer/core/frame/viewport_data.cc
+--- a/third_party/blink/renderer/core/frame/viewport_data.cc
++++ b/third_party/blink/renderer/core/frame/viewport_data.cc
+@@ -76,7 +76,7 @@ ViewportDescription ViewportData::GetViewportDescription() const {
+ 
+   // Setting `navigator.virtualKeyboard.overlaysContent` should override the
+   // virtual-keyboard mode set from the viewport meta tag.
+-  if (virtual_keyboard_overlays_content_) {
++  if (GetVirtualKeyboardOverlaysContent()) {
+     applied_viewport_description.virtual_keyboard_mode =
+         ui::mojom::blink::VirtualKeyboardMode::kOverlaysContent;
+   }
+@@ -84,6 +84,17 @@ ViewportDescription ViewportData::GetViewportDescription() const {
+   return applied_viewport_description;
+ }
+ 
++bool ViewportData::GetVirtualKeyboardOverlaysContent() const {
++  // The bottom-controls policy keeps the author-controlled mode disabled. The
++  // protected keyboard policy is layered by GetVirtualKeyboardOverlaysContent().
++  if (document_->GetFrame() && document_->GetPage()
++        && document_->GetPage()->IsAndroidProtectedKeyboardGeometryEnabled(
++              document_->GetFrame())) {
++    return true;
++  }
++  return virtual_keyboard_overlays_content_;
++}
++
+ void ViewportData::UpdateViewportDescription() {
+   if (!document_->GetFrame())
+     return;
+diff --git a/third_party/blink/renderer/core/frame/viewport_data.h b/third_party/blink/renderer/core/frame/viewport_data.h
+--- a/third_party/blink/renderer/core/frame/viewport_data.h
++++ b/third_party/blink/renderer/core/frame/viewport_data.h
+@@ -47,9 +47,7 @@ class ViewportData final : public GarbageCollected<ViewportData> {
+   }
+ 
+   CORE_EXPORT void SetVirtualKeyboardOverlaysContent(bool overlays_content);
+-  CORE_EXPORT bool GetVirtualKeyboardOverlaysContent() const {
+-    return virtual_keyboard_overlays_content_;
+-  }
++  CORE_EXPORT bool GetVirtualKeyboardOverlaysContent() const;
+ 
+  private:
+   Member<Document> document_;
+diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+--- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
++++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+@@ -1863,6 +1863,8 @@ void WebFrameWidgetImpl::UpdateVisualProperties(
+              widget_base_->VisibleViewportSize()](RemoteFrame* remote_frame) {
+           remote_frame->DidChangeVisibleViewportSize(visible_viewport_size);
+         });
++
++    UpdateFocusedElementBounds();
+   }
+ 
+ #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+@@ -4635,6 +4637,24 @@ void WebFrameWidgetImpl::ScrollFocusedEditableNodeIntoView() {
+   local_frame->ScrollFocusedEditableElementIntoView();
+ }
+ 
++void WebFrameWidgetImpl::UpdateFocusedElementBounds() {
++  Element* focused_element = FocusedElement();
++  if (!focused_element)
++    return;
++
++  EditContext* edit_context =
++      focused_element->GetDocument()
++          .GetFrame()
++          ->GetInputMethodController()
++          .GetActiveEditContext();
++
++  if (!WebElement(focused_element).IsEditable() && !edit_context)
++    return;
++
++  focused_element->GetDocument().SendFocusNotification(
++      focused_element, mojom::blink::FocusType::kNone);
++}
++
+ void WebFrameWidgetImpl::WaitForPageScaleAnimationForTesting(
+     WaitForPageScaleAnimationForTestingCallback callback) {
+   DCHECK(ForMainFrame());
+diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.h b/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
+--- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
++++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.h
+@@ -934,6 +934,7 @@ class CORE_EXPORT WebFrameWidgetImpl
+       mojom::blink::SelectionMenuBehavior behavior) override;
+   void MoveRangeSelectionExtent(const gfx::Point& extent_in_dips) override;
+   void ScrollFocusedEditableNodeIntoView() override;
++  void UpdateFocusedElementBounds() override;
+   void WaitForPageScaleAnimationForTesting(
+       WaitForPageScaleAnimationForTestingCallback callback) override;
+   void MoveCaret(const gfx::Point& point_in_dips) override;
+diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/renderer/core/page/page.cc
+--- a/third_party/blink/renderer/core/page/page.cc
++++ b/third_party/blink/renderer/core/page/page.cc
+@@ -1289,6 +1289,31 @@ void Page::UpdateAcceleratedCompositingSettings() {
+   }
+ }
+ 
++bool Page::IsAndroidProtectedKeyboardGeometryEnabled(LocalFrame* frame) const {
++#if !BUILDFLAG(IS_ANDROID)
++  return false;
++#else
++  if (!frame) return true;
++  if (!base::FeatureList::IsEnabled(
++                    features::kAndroidProtectedKeyboardGeometry)) {
++    return false;
++  }
++
++  WebContentSettingsClient* settings = frame->GetContentSettingsClient();
++  if (!settings) return true;
++  if (!settings->AllowContentSetting(
++                       ContentSettingsType::PROTECTED_KEYBOARD_GEOMETRY,
++                       /*default_value=*/false)) {
++    return false;
++  }
++
++  const String protocol =
++      frame->GetSecurityContext()->GetSecurityOrigin()->Protocol();
++  return !SchemeRegistry::IsWebUIScheme(protocol) &&
++         !CommonSchemeRegistry::IsExtensionScheme(protocol.Ascii());
++#endif
++}
++
+ void Page::CalculateEmulatedScreenSetting(LocalFrame* frame, bool force) {
+   bool isEnabled = base::FeatureList::IsEnabled(features::kViewportProtection);
+   blink::WebContentSettingsClient* settings = frame->GetContentSettingsClient();
+diff --git a/third_party/blink/renderer/core/page/page.h b/third_party/blink/renderer/core/page/page.h
+--- a/third_party/blink/renderer/core/page/page.h
++++ b/third_party/blink/renderer/core/page/page.h
+@@ -511,6 +511,8 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
+     return *v8_compile_hints_consumer_;
+   }
+ 
++  bool IsAndroidProtectedKeyboardGeometryEnabled(LocalFrame* frame) const;
++
+   // Returns the token uniquely identifying the browsing context group this page
+   // lives in.
+   const base::UnguessableToken& BrowsingContextGroupToken();
+diff --git a/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.cc b/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.cc
+--- a/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.cc
++++ b/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.cc
+@@ -447,6 +447,15 @@ void FrameWidgetInputHandlerImpl::ScrollFocusedEditableNodeIntoView() {
+       main_thread_frame_widget_input_handler_));
+ }
+ 
++void FrameWidgetInputHandlerImpl::UpdateFocusedElementBounds() {
++  RunOnMainThread(base::BindOnce(
++      [](base::WeakPtr<mojom::blink::FrameWidgetInputHandler> handler) {
++        if (handler)
++          handler->UpdateFocusedElementBounds();
++      },
++      main_thread_frame_widget_input_handler_));
++}
++
+ void FrameWidgetInputHandlerImpl::WaitForPageScaleAnimationForTesting(
+     WaitForPageScaleAnimationForTestingCallback callback) {
+   // Ensure the Mojo callback is invoked from the thread on which the message
+diff --git a/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.h b/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.h
+--- a/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.h
++++ b/third_party/blink/renderer/platform/widget/input/frame_widget_input_handler_impl.h
+@@ -101,6 +101,7 @@ class PLATFORM_EXPORT FrameWidgetInputHandlerImpl
+       blink::mojom::SelectionMenuBehavior selection_menu_behavior) override;
+   void MoveRangeSelectionExtent(const gfx::Point& extent) override;
+   void ScrollFocusedEditableNodeIntoView() override;
++  void UpdateFocusedElementBounds() override;
+   void WaitForPageScaleAnimationForTesting(
+       WaitForPageScaleAnimationForTestingCallback callback) override;
+   void MoveCaret(const gfx::Point& point) override;
+diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
+--- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
++++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.cc
+@@ -1199,6 +1199,13 @@ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollBegin(
+     InputHandlerScrollEnd(std::nullopt);
+   }
+ 
++  // These synthetic events have no physical pointers. Viewport protection is
++  // selected through content settings rather than kViewportProtection.
++  protected_viewport_scroll_sequence_ =
++      !gesture_event.data.scroll_begin.target_viewport &&
++      gesture_event.data.scroll_begin.pointer_count == 0;
++  protected_viewport_accumulated_overscroll_ = gfx::Vector2dF();
++
+   cc::ScrollState scroll_state(CreateScrollStateDataForGesture(gesture_event));
+   cc::InputHandler::ScrollStatus scroll_status;
+   if (gesture_event.data.scroll_begin.target_viewport) {
+@@ -1359,6 +1366,8 @@ InputHandlerProxy::HandleGestureScrollUpdate(
+ InputHandlerProxy::EventDisposition InputHandlerProxy::HandleGestureScrollEnd(
+     const WebGestureEvent& gesture_event) {
+   TRACE_EVENT0("input", "InputHandlerProxy::HandleGestureScrollEnd");
++  protected_viewport_scroll_sequence_ = false;
++  protected_viewport_accumulated_overscroll_ = gfx::Vector2dF();
+ 
+   const cc::ElementId latched_element_id =
+       input_handler_->LatchedScrollerElementId();
+@@ -1981,15 +1990,28 @@ void InputHandlerProxy::HandleOverscroll(
+     const cc::InputHandlerScrollResult& scroll_result,
+     const blink::WebGestureDevice source_device) {
+   DCHECK(client_);
+-  if (!scroll_result.did_overscroll_root)
++  const bool forward_protected_unused_delta =
++      protected_viewport_scroll_sequence_ &&
++      !scroll_result.unused_scroll_delta.IsZero();
++  if (!scroll_result.did_overscroll_root &&
++      !forward_protected_unused_delta) {
+     return;
++  }
+ 
+   TRACE_EVENT("input", "InputHandlerProxy::DidOverscroll");
+ 
+   // Bundle overscroll message with triggering event response, saving an IPC.
+   current_overscroll_params_ = std::make_unique<DidOverscrollParams>();
+-  current_overscroll_params_->accumulated_overscroll =
+-      scroll_result.accumulated_root_overscroll;
++  if (forward_protected_unused_delta &&
++      !scroll_result.did_overscroll_root) {
++    protected_viewport_accumulated_overscroll_ +=
++        scroll_result.unused_scroll_delta;
++    current_overscroll_params_->accumulated_overscroll =
++        protected_viewport_accumulated_overscroll_;
++  } else {
++    current_overscroll_params_->accumulated_overscroll =
++        scroll_result.accumulated_root_overscroll;
++  }
+   current_overscroll_params_->latest_overscroll_delta =
+       scroll_result.unused_scroll_delta;
+   current_overscroll_params_->causal_event_viewport_point =
+diff --git a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.h b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.h
+--- a/third_party/blink/renderer/platform/widget/input/input_handler_proxy.h
++++ b/third_party/blink/renderer/platform/widget/input/input_handler_proxy.h
+@@ -420,6 +420,14 @@ class PLATFORM_EXPORT InputHandlerProxy : public cc::InputHandlerClient,
+   // bundled in the event ack, saving an IPC.
+   std::unique_ptr<DidOverscrollParams> current_overscroll_params_;
+ 
++  // True only for the compositor scroll sequence synthesized by the protected
++  // Android viewport after its automatic physical pan reaches its limit.
++  bool protected_viewport_scroll_sequence_ = false;
++
++  // Cumulative unused delta for the protected sequence. Unlike root
++  // overscroll, cc does not populate accumulated_root_overscroll here.
++  gfx::Vector2dF protected_viewport_accumulated_overscroll_;
++
+   std::unique_ptr<CompositorThreadEventQueue> compositor_event_queue_;
+ 
+   // Set only when the compositor input handler is handling a gesture. Tells
+diff --git a/ui/android/event_forwarder.cc b/ui/android/event_forwarder.cc
+--- a/ui/android/event_forwarder.cc
++++ b/ui/android/event_forwarder.cc
+@@ -352,6 +352,69 @@ void EventForwarder::ScrollBy(JNIEnv* env, float delta_x, float delta_y) {
+   view_->ScrollBy(delta_x, delta_y);
+ }
+ 
++void EventForwarder::BeginCompositorScroll(JNIEnv* env,
++                                           int64_t time_ms,
++                                           float x,
++                                           float y,
++                                           float initial_delta_y) {
++  CancelFling(env, time_ms, /*prevent_boosting=*/true,
++              /*is_touchpad_event=*/false);
++  const float dip_scale = view_->GetDipScaleFactor();
++  const gfx::PointF location(x / dip_scale, y / dip_scale);
++
++  // Do not target the root viewport: cc must hit-test the gesture location and
++  // select the scroll node under it (for example a WebUI's inner scroller).
++  view_->OnGestureEvent(GestureEventAndroid(
++      GESTURE_EVENT_TYPE_SCROLL_START, location, location, time_ms,
++      ui::GestureDeviceType::DEVICE_TOUCHSCREEN, 0, 0,
++      -initial_delta_y / dip_scale, 0, 0,
++      /*target_viewport=*/false,
++      /*synthetic_scroll=*/false,
++      /*prevent_boosting=*/true));
++}
++
++void EventForwarder::UpdateCompositorScroll(JNIEnv* env,
++                                            int64_t time_ms,
++                                            float x,
++                                            float y,
++                                            float delta_y) {
++  const float dip_scale = view_->GetDipScaleFactor();
++  const gfx::PointF location(x / dip_scale, y / dip_scale);
++  view_->OnGestureEvent(GestureEventAndroid(
++      GESTURE_EVENT_TYPE_SCROLL_BY, location, location, time_ms,
++      ui::GestureDeviceType::DEVICE_TOUCHSCREEN, 0, 0, -delta_y / dip_scale,
++      0, 0,
++      /*target_viewport=*/false,
++      /*synthetic_scroll=*/false,
++      /*prevent_boosting=*/true));
++}
++
++void EventForwarder::EndCompositorScroll(JNIEnv* env,
++                                         int64_t time_ms,
++                                         float x,
++                                         float y,
++                                         float velocity_y) {
++  const float dip_scale = view_->GetDipScaleFactor();
++  const gfx::PointF location(x / dip_scale, y / dip_scale);
++  if (velocity_y != 0) {
++    view_->OnGestureEvent(GestureEventAndroid(
++        GESTURE_EVENT_TYPE_FLING_START, location, location, time_ms,
++        ui::GestureDeviceType::DEVICE_TOUCHSCREEN, 0, 0, 0, 0,
++        velocity_y / dip_scale,
++        /*target_viewport=*/false,
++        /*synthetic_scroll=*/false,
++        /*prevent_boosting=*/true));
++    return;
++  }
++
++  view_->OnGestureEvent(GestureEventAndroid(
++      GESTURE_EVENT_TYPE_SCROLL_END, location, location, time_ms,
++      ui::GestureDeviceType::DEVICE_TOUCHSCREEN, 0, 0, 0, 0, 0,
++      /*target_viewport=*/false,
++      /*synthetic_scroll=*/false,
++      /*prevent_boosting=*/true));
++}
++
+ void EventForwarder::ScrollTo(JNIEnv* env, float x, float y) {
+   view_->ScrollTo(x, y);
+ }
+diff --git a/ui/android/event_forwarder.h b/ui/android/event_forwarder.h
+--- a/ui/android/event_forwarder.h
++++ b/ui/android/event_forwarder.h
+@@ -101,6 +101,24 @@ class UI_ANDROID_EXPORT EventForwarder {
+ 
+   void ScrollBy(JNIEnv* env, float delta_x, float delta_y);
+ 
++  void BeginCompositorScroll(JNIEnv* env,
++                             int64_t time_ms,
++                             float x,
++                             float y,
++                             float initial_delta_y);
++
++  void UpdateCompositorScroll(JNIEnv* env,
++                              int64_t time_ms,
++                              float x,
++                              float y,
++                              float delta_y);
++
++  void EndCompositorScroll(JNIEnv* env,
++                           int64_t time_ms,
++                           float x,
++                           float y,
++                           float velocity_y);
++
+   void ScrollTo(JNIEnv* env, float x, float y);
+ 
+   void DoubleTap(JNIEnv* env, int64_t time_ms, int32_t x, int32_t y);
+diff --git a/ui/android/java/src/org/chromium/ui/OverscrollRefreshHandler.java b/ui/android/java/src/org/chromium/ui/OverscrollRefreshHandler.java
+--- a/ui/android/java/src/org/chromium/ui/OverscrollRefreshHandler.java
++++ b/ui/android/java/src/org/chromium/ui/OverscrollRefreshHandler.java
+@@ -60,6 +60,22 @@ public interface OverscrollRefreshHandler {
+     @CalledByNative
+     void reset();
+ 
++    /** Starts returning unused compositor scrolling to the protected Android viewport. */
++    @CalledByNative
++    boolean startProtectedViewportHandoff();
++
++    /**
++     * Updates the protected viewport using the cumulative unused vertical compositor delta.
++     *
++     * @param accumulatedDeltaY Cumulative unused vertical delta in device pixels.
++     */
++    @CalledByNative
++    void updateProtectedViewportHandoff(float accumulatedDeltaY);
++
++    /** Ends an active protected viewport handoff. */
++    @CalledByNative
++    void endProtectedViewportHandoff();
++
+     /**
+      * Toggle whether the effect is active.
+      *
+diff --git a/ui/android/java/src/org/chromium/ui/base/EventForwarder.java b/ui/android/java/src/org/chromium/ui/base/EventForwarder.java
+--- a/ui/android/java/src/org/chromium/ui/base/EventForwarder.java
++++ b/ui/android/java/src/org/chromium/ui/base/EventForwarder.java
+@@ -879,6 +879,37 @@ public class EventForwarder {
+         EventForwarderJni.get().scrollBy(mNativeEventForwarder, dxPix, dyPix);
+     }
+ 
++    /**
++     * Starts a compositor scroll at the supplied point. Unlike {@link #scrollBy}, this performs
++     * normal compositor hit testing instead of forcing the root viewport.
++     */
++    public void beginCompositorScroll(
++            long timeMs, float xPix, float yPix, float initialDeltaYPix) {
++        if (mNativeEventForwarder == 0) return;
++        EventForwarderJni.get()
++                .beginCompositorScroll(
++                        mNativeEventForwarder, timeMs, xPix, yPix, initialDeltaYPix);
++    }
++
++    /** Updates the compositor scroll sequence started by {@link #beginCompositorScroll}. */
++    public void updateCompositorScroll(
++            long timeMs, float xPix, float yPix, float deltaYPix) {
++        if (mNativeEventForwarder == 0) return;
++        EventForwarderJni.get()
++                .updateCompositorScroll(mNativeEventForwarder, timeMs, xPix, yPix, deltaYPix);
++    }
++
++    /**
++     * Finishes a compositor scroll sequence, optionally continuing it as a fling when velocity is
++     * non-zero.
++     */
++    public void endCompositorScroll(
++            long timeMs, float xPix, float yPix, float velocityYPix) {
++        if (mNativeEventForwarder == 0) return;
++        EventForwarderJni.get()
++                .endCompositorScroll(mNativeEventForwarder, timeMs, xPix, yPix, velocityYPix);
++    }
++
+     /**
+      * @see View#scrollTo()
+      */
+@@ -1009,6 +1040,23 @@ public class EventForwarder {
+ 
+         void scrollBy(long nativeEventForwarder, float deltaX, float deltaY);
+ 
++        void beginCompositorScroll(
++                long nativeEventForwarder,
++                long timeMs,
++                float x,
++                float y,
++                float initialDeltaY);
++
++        void updateCompositorScroll(
++                long nativeEventForwarder, long timeMs, float x, float y, float deltaY);
++
++        void endCompositorScroll(
++                long nativeEventForwarder,
++                long timeMs,
++                float x,
++                float y,
++                float velocityY);
++
+         void scrollTo(long nativeEventForwarder, float x, float y);
+ 
+         void doubleTap(long nativeEventForwarder, long timeMs, int x, int y);
+diff --git a/ui/android/overscroll_refresh.cc b/ui/android/overscroll_refresh.cc
+--- a/ui/android/overscroll_refresh.cc
++++ b/ui/android/overscroll_refresh.cc
+@@ -207,6 +207,21 @@ void OverscrollRefresh::SetTouchpadOverscrollHistoryNavigation(bool enabled) {
+   touchpad_overscroll_history_navigation_enabled_ = enabled;
+ }
+ 
++bool OverscrollRefresh::StartProtectedViewportHandoff() {
++  return handler_ && handler_->StartProtectedViewportHandoff();
++}
++
++void OverscrollRefresh::UpdateProtectedViewportHandoff(
++    float accumulated_delta_y) {
++  CHECK(handler_);
++  handler_->UpdateProtectedViewportHandoff(accumulated_delta_y);
++}
++
++void OverscrollRefresh::EndProtectedViewportHandoff() {
++  CHECK(handler_);
++  handler_->EndProtectedViewportHandoff();
++}
++
+ void OverscrollRefresh::Release(bool allow_refresh) {
+   if (scroll_consumption_state_ == ScrollConsumptionState::kEnabled)
+     handler_->PullRelease(allow_refresh);
+diff --git a/ui/android/overscroll_refresh.h b/ui/android/overscroll_refresh.h
+--- a/ui/android/overscroll_refresh.h
++++ b/ui/android/overscroll_refresh.h
+@@ -100,6 +100,11 @@ class UI_ANDROID_EXPORT OverscrollRefresh {
+ 
+   void SetTouchpadOverscrollHistoryNavigation(bool enabled);
+ 
++  // Returns unused compositor scrolling to the protected Android viewport.
++  virtual bool StartProtectedViewportHandoff();
++  virtual void UpdateProtectedViewportHandoff(float accumulated_delta_y);
++  virtual void EndProtectedViewportHandoff();
++
+  protected:
+   // This constructor is for mocking only.
+   OverscrollRefresh();
+diff --git a/ui/android/overscroll_refresh_handler.cc b/ui/android/overscroll_refresh_handler.cc
+--- a/ui/android/overscroll_refresh_handler.cc
++++ b/ui/android/overscroll_refresh_handler.cc
+@@ -66,6 +66,30 @@ void OverscrollRefreshHandler::PullReset() {
+   Java_OverscrollRefreshHandler_reset(env, GetRefreshHandlerChecked(env));
+ }
+ 
++bool OverscrollRefreshHandler::StartProtectedViewportHandoff() {
++  if (!has_handler_) {
++    return false;
++  }
++  auto* env = AttachCurrentThread();
++  return Java_OverscrollRefreshHandler_startProtectedViewportHandoff(
++      env, GetRefreshHandlerChecked(env));
++}
++
++void OverscrollRefreshHandler::UpdateProtectedViewportHandoff(
++    float accumulated_delta_y) {
++  CHECK(has_handler_);
++  auto* env = AttachCurrentThread();
++  Java_OverscrollRefreshHandler_updateProtectedViewportHandoff(
++      env, GetRefreshHandlerChecked(env), accumulated_delta_y);
++}
++
++void OverscrollRefreshHandler::EndProtectedViewportHandoff() {
++  CHECK(has_handler_);
++  auto* env = AttachCurrentThread();
++  Java_OverscrollRefreshHandler_endProtectedViewportHandoff(
++      env, GetRefreshHandlerChecked(env));
++}
++
+ ScopedJavaLocalRef<jobject> OverscrollRefreshHandler::GetRefreshHandlerChecked(
+     JNIEnv* env) const {
+   auto refresh_handler = Java_OverscrollRefreshHandler_getRef(
+diff --git a/ui/android/overscroll_refresh_handler.h b/ui/android/overscroll_refresh_handler.h
+--- a/ui/android/overscroll_refresh_handler.h
++++ b/ui/android/overscroll_refresh_handler.h
+@@ -43,6 +43,11 @@ class UI_ANDROID_EXPORT OverscrollRefreshHandler {
+   // Reset the active pull state.
+   virtual void PullReset();
+ 
++  // Returns unused compositor scrolling to the protected Android viewport.
++  virtual bool StartProtectedViewportHandoff();
++  virtual void UpdateProtectedViewportHandoff(float accumulated_delta_y);
++  virtual void EndProtectedViewportHandoff();
++
+  private:
+   base::android::ScopedJavaLocalRef<jobject> GetRefreshHandlerChecked(
+       JNIEnv* env) const;
+--
