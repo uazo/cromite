@@ -499,11 +499,6 @@ bool ContentBrowserClient::ShouldTryToUpdateServiceWorkerRegistration(
   return true;
 }
 
-void ContentBrowserClient::UpdateEnabledBlinkRuntimeFeaturesInIsolatedWorker(
-    BrowserContext* context,
-    const GURL& script_url,
-    std::vector<std::string>& out_forced_enabled_runtime_features) {}
-
 bool ContentBrowserClient::AllowSharedWorker(
     const GURL& worker_url,
     const net::SiteForCookies& site_for_cookies,
@@ -543,6 +538,11 @@ bool ContentBrowserClient::IsServiceWorkerAutoPreloadAllowed(
 }
 
 bool ContentBrowserClient::AllowSharedWorkerBlobURLFix(
+    BrowserContext* context) {
+  return true;
+}
+
+bool ContentBrowserClient::AllowSharedWorkerExtendedLifetime(
     BrowserContext* context) {
   return true;
 }
@@ -611,19 +611,6 @@ bool ContentBrowserClient::AllowWorkerWebLocks(
     const std::vector<GlobalRenderFrameHostId>& render_frames,
     const blink::StorageKey& storage_key) {
   return true;
-}
-
-ContentBrowserClient::AllowWebBluetoothResult
-ContentBrowserClient::AllowWebBluetooth(
-    content::BrowserContext* browser_context,
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin) {
-  DCHECK(browser_context);
-  return AllowWebBluetoothResult::ALLOW;
-}
-
-std::string ContentBrowserClient::GetWebBluetoothBlocklist() {
-  return std::string();
 }
 
 bool ContentBrowserClient::IsInterestGroupAPIAllowed(
@@ -706,14 +693,6 @@ bool ContentBrowserClient::IsSharedStorageSelectURLAllowed(
   return false;
 }
 
-bool ContentBrowserClient::IsFencedStorageReadAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin) {
-  return false;
-}
-
 bool ContentBrowserClient::IsPrivateAggregationAllowed(
     content::BrowserContext* browser_context,
     const url::Origin& top_frame_origin,
@@ -748,13 +727,6 @@ bool ContentBrowserClient::IsServiceWorkerSyntheticResponseAllowed(
     const GURL& url) {
   return false;
 }
-
-void ContentBrowserClient::GrantCookieAccessDueToHeuristic(
-    content::BrowserContext* browser_context,
-    const net::SchemefulSite& top_frame_site,
-    const net::SchemefulSite& accessing_site,
-    base::TimeDelta ttl,
-    bool ignore_schemes) {}
 
 bool ContentBrowserClient::AreThirdPartyCookiesGenerallyAllowed(
     content::BrowserContext* browser_context,
@@ -864,6 +836,11 @@ MediaObserver* ContentBrowserClient::GetMediaObserver() {
 
 FeatureObserverClient* ContentBrowserClient::GetFeatureObserverClient() {
   return nullptr;
+}
+
+bool ContentBrowserClient::IsPopupBypassAllowed(
+    RenderFrameHost* render_frame_host) {
+  return false;
 }
 
 bool ContentBrowserClient::CanCreateWindow(
@@ -1538,18 +1515,6 @@ int ContentBrowserClient::NumVersionsInTopicsEpochs(
   return 0;
 }
 
-bool ContentBrowserClient::IsBluetoothScanningBlocked(
-    content::BrowserContext* browser_context,
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin) {
-  return false;
-}
-
-void ContentBrowserClient::BlockBluetoothScanning(
-    content::BrowserContext* browser_context,
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin) {}
-
 void ContentBrowserClient::GetMediaDeviceIDSalt(
     content::RenderFrameHost* rfh,
     const net::SiteForCookies& site_for_cookies,
@@ -2065,6 +2030,15 @@ void ContentBrowserClient::UpdateCorsExemptHeaderForPrefetch(
 bool ContentBrowserClient::OriginSupportsConcreteCrossOriginIsolation(
     const url::Origin& origin) {
   return true;
+}
+
+bool ContentBrowserClient::IsAttributionInternalsWebUIEnabled() {
+  return true;
+}
+
+bool ContentBrowserClient::IsFullscreenAllowedForUnfocusedWebContents(
+    content::WebContents* unfocused_web_contents) {
+  return false;
 }
 
 }  // namespace content
