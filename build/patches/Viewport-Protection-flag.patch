@@ -9,8 +9,8 @@ The feature is controlled by a feature flag (default enabled)
 
 Require: Content-settings-infrastructure.patch
 ---
- .../impl/BromiteViewportContentSetting.java   |  94 ++++++++++++++++
- .../bromite_content_settings/viewport.grdp    |  27 +++++
+ .../impl/BromiteViewportContentSetting.java   |  94 ++++++++++++++
+ .../bromite_content_settings/viewport.grdp    |  27 ++++
  .../bromite_content_settings/viewport.inc     |  22 ++++
  .../bromite_content_settings/VIEWPORT.inc     |   1 +
  .../guest_view/browser/guest_view_base.cc     |   8 ++
@@ -19,23 +19,24 @@ Require: Content-settings-infrastructure.patch
  .../features_h/Viewport-Protection-flag.inc   |   2 +
  .../common/widget/device_emulation_params.h   |   6 +-
  .../renderer/core/css/css_properties.json5    |   2 +-
- .../blink/renderer/core/css/media_values.cc   |   2 +-
+ .../blink/renderer/core/css/media_values.cc   |   9 +-
  .../core/css/resolver/style_resolver.cc       |   7 +-
- .../blink/renderer/core/events/mouse_event.h  |  19 +++-
+ .../blink/renderer/core/events/mouse_event.h  |  19 ++-
  .../renderer/core/events/pointer_event.h      |  11 ++
  .../renderer/core/exported/web_view_impl.cc   |   2 +-
- .../renderer/core/frame/local_dom_window.cc   |  43 +++++++-
+ .../renderer/core/frame/local_dom_window.cc   |  52 +++++++-
  .../blink/renderer/core/frame/local_frame.cc  |  17 ++-
  .../blink/renderer/core/frame/local_frame.h   |   6 +-
- .../core/frame/screen_metrics_emulator.cc     |  18 +++-
+ .../core/frame/local_frame_mojo_handler.cc    |   5 +-
+ .../core/frame/screen_metrics_emulator.cc     |  18 ++-
  .../core/frame/screen_metrics_emulator.h      |  14 +++
  .../core/frame/web_frame_widget_impl.cc       |   9 ++
  .../core/frame/web_remote_frame_impl.cc       |   3 +-
  .../blink/renderer/core/input/touch.cc        |  17 ++-
- third_party/blink/renderer/core/page/page.cc  | 100 ++++++++++++++++++
- third_party/blink/renderer/core/page/page.h   |   9 ++
- .../renderer/core/style/computed_style.h      |   6 ++
- 26 files changed, 438 insertions(+), 20 deletions(-)
+ third_party/blink/renderer/core/page/page.cc  | 117 ++++++++++++++++++
+ third_party/blink/renderer/core/page/page.h   |  11 ++
+ .../renderer/core/style/computed_style.h      |   6 +
+ 27 files changed, 476 insertions(+), 22 deletions(-)
  create mode 100644 components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/impl/BromiteViewportContentSetting.java
  create mode 100644 components/browser_ui/strings/bromite_content_settings/viewport.grdp
  create mode 100644 components/content_settings/core/browser/bromite_content_settings/viewport.inc
@@ -301,12 +302,19 @@ diff --git a/third_party/blink/renderer/core/css/css_properties.json5 b/third_pa
 diff --git a/third_party/blink/renderer/core/css/media_values.cc b/third_party/blink/renderer/core/css/media_values.cc
 --- a/third_party/blink/renderer/core/css/media_values.cc
 +++ b/third_party/blink/renderer/core/css/media_values.cc
-@@ -193,7 +193,7 @@ bool MediaValues::CalculateStrictMode(LocalFrame* frame) {
+@@ -193,7 +193,14 @@ bool MediaValues::CalculateStrictMode(LocalFrame* frame) {
  }
  
  float MediaValues::CalculateDevicePixelRatio(LocalFrame* frame) {
 -  return frame->DevicePixelRatio();
-+  return frame->DevicePixelRatio(false);
++  const double original_dpr =
++      frame->DevicePixelRatio(/*with_zoom_factor=*/false);
++
++  Page* page = frame->GetPage();
++  if (!page)
++    return 0;
++
++  return page->DevicePixelRatioForWeb(original_dpr);
  }
  
  bool MediaValues::CalculateDeviceSupportsHDR(LocalFrame* frame) {
@@ -439,17 +447,28 @@ diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_p
    Page* page = frame->GetPage();
    if (!page)
      return 0;
-@@ -1802,7 +1812,8 @@ double LocalDOMWindow::devicePixelRatio() const {
-   if (!GetFrame())
+@@ -1799,10 +1809,18 @@ CSSStyleDeclaration* LocalDOMWindow::getComputedStyle(
+ }
+ 
+ double LocalDOMWindow::devicePixelRatio() const {
+-  if (!GetFrame())
++  LocalFrame* frame = GetFrame();
++  if (!frame)
      return 0.0;
  
 -  return GetFrame()->DevicePixelRatio();
-+  // never send the zoom factor override value
-+  return GetFrame()->DevicePixelRatio(/*with_zoom_factor*/false);
++  const double original_dpr =
++      frame->DevicePixelRatio(/*with_zoom_factor=*/false);
++
++  Page* page = frame->GetPage();
++  if (!page)
++    return 0.0;
++
++  return page->DevicePixelRatioForWeb(original_dpr);
  }
  
  ScriptPromise<ScrollResult> LocalDOMWindow::scrollBy(ScriptState* script_state,
-@@ -2439,6 +2450,23 @@ DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
+@@ -2439,6 +2457,23 @@ DOMWindow* LocalDOMWindow::open(v8::Isolate* isolate,
    if (!completed_url.IsEmpty() || result.new_window)
      result.frame->Navigate(frame_request, WebFrameLoadType::kStandard);
  
@@ -473,7 +492,7 @@ diff --git a/third_party/blink/renderer/core/frame/local_dom_window.cc b/third_p
    // TODO(japhet): window-open-noopener.html?_top and several tests in
    // html/browsers/windows/browsing-context-names/ appear to require that
    // the special case target names (_top, _parent, _self) ignore opener
-@@ -2490,6 +2518,15 @@ DOMWindow* LocalDOMWindow::openPictureInPictureWindow(
+@@ -2490,6 +2525,15 @@ DOMWindow* LocalDOMWindow::openPictureInPictureWindow(
    DCHECK(result.new_window);
  
    result.frame->Navigate(frame_request, WebFrameLoadType::kStandard);
@@ -564,6 +583,21 @@ diff --git a/third_party/blink/renderer/core/frame/local_frame.h b/third_party/b
    float text_zoom_factor_;
    float css_zoom_factor_;
  
+diff --git a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
+--- a/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
++++ b/third_party/blink/renderer/core/frame/local_frame_mojo_handler.cc
+@@ -576,7 +576,10 @@ void LocalFrameMojoHandler::NotifyVirtualKeyboardOverlayRect(
+   const float window_to_viewport_factor =
+       page->GetChromeClient().WindowToViewportScalar(&local_frame_root, 1.0f);
+   const float zoom_factor = local_frame_root.LayoutZoomFactor();
+-  const float scale_factor = zoom_factor / window_to_viewport_factor;
++  float emulator_scale = WebLocalFrameImpl::FromFrame(local_frame_root)
++                                  ->LocalRootFrameWidget()
++                                  ->GetEmulatorScale();
++  const float scale_factor = zoom_factor / window_to_viewport_factor * emulator_scale;
+   gfx::Rect scaled_rect(keyboard_rect.x() / scale_factor,
+                         keyboard_rect.y() / scale_factor,
+                         keyboard_rect.width() / scale_factor,
 diff --git a/third_party/blink/renderer/core/frame/screen_metrics_emulator.cc b/third_party/blink/renderer/core/frame/screen_metrics_emulator.cc
 --- a/third_party/blink/renderer/core/frame/screen_metrics_emulator.cc
 +++ b/third_party/blink/renderer/core/frame/screen_metrics_emulator.cc
@@ -749,7 +783,7 @@ diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/re
  namespace blink {
  
  namespace {
-@@ -1280,7 +1287,100 @@ void Page::UpdateAcceleratedCompositingSettings() {
+@@ -1280,7 +1287,117 @@ void Page::UpdateAcceleratedCompositingSettings() {
    }
  }
  
@@ -806,6 +840,16 @@ diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/re
 +      // scale the widget size (and the screen size) by half_random scale factor
 +      params.scale = 1 / (1.0 + half_random);
 +
++      const double original_dpr =
++          frame->DevicePixelRatio(/*with_zoom_factor=*/false);
++
++      if (override_device_pixel_ratio_ == 0) {
++        constexpr double kDprBucketSize = 0.5;
++
++        override_device_pixel_ratio_ =
++            std::round(original_dpr / kDprBucketSize) * kDprBucketSize;
++      }
++
 +      GetChromeClient().GetWebView()->EnableDeviceEmulation(params);
 +
 +      // set zoom factor
@@ -838,6 +882,13 @@ diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/re
 +  }
 +}
 +
++double Page::DevicePixelRatioForWeb(double original_dpr) const {
++  if (!is_screen_emulated_ || override_device_pixel_ratio_ == 0)
++    return original_dpr;
++
++  return override_device_pixel_ratio_;
++}
++
 +void Page::DisableScreenEmulated() {
 +  disable_screen_emulated_ = true;
 +  GetChromeClient().GetWebView()->DisableDeviceEmulation();
@@ -853,18 +904,19 @@ diff --git a/third_party/blink/renderer/core/page/page.cc b/third_party/blink/re
 diff --git a/third_party/blink/renderer/core/page/page.h b/third_party/blink/renderer/core/page/page.h
 --- a/third_party/blink/renderer/core/page/page.h
 +++ b/third_party/blink/renderer/core/page/page.h
-@@ -536,6 +536,10 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
+@@ -536,6 +536,11 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
    // related pages will include the new page instead of the old page, etc.
    void TakePropertiesForLocalMainFrameSwap(Page* old_page);
  
 +  void CalculateEmulatedScreenSetting(LocalFrame* frame, bool force = false);
 +  bool IsScreenEmulated() { return is_screen_emulated_; }
 +  void DisableScreenEmulated();
++  double DevicePixelRatioForWeb(double original_dpr) const;
 +
   private:
    friend class ScopedPagePauser;
    class CloseTaskHandler;
-@@ -708,6 +712,11 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
+@@ -708,6 +713,12 @@ class CORE_EXPORT Page final : public GarbageCollected<Page>,
    // browser side FrameTree has the FrameTree::Type of kFencedFrame.
    bool is_fenced_frame_tree_ = false;
  
@@ -872,6 +924,7 @@ diff --git a/third_party/blink/renderer/core/page/page.h b/third_party/blink/ren
 +  bool disable_screen_emulated_ = false;
 +  double override_window_scale_factor_ = 0;
 +  double override_zoom_factor_ = 0;
++  double override_device_pixel_ratio_ = 0;
 +
    // This tracks the mode that the fenced frame is set to.
    blink::FencedFrame::DeprecatedFencedFrameMode fenced_frame_mode_ =
