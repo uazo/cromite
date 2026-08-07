@@ -17,11 +17,11 @@ Subject: bromite build utils
  .../flags/android/cromite_native_utils.cc     |  94 +++++++++++++++
  .../flags/android/cromite_native_utils.h      |  14 +++
  .../browser/flags/CromiteNativeUtils.java     |  46 ++++++++
- mojo/public/tools/mojom/mojom_parser.py       |  22 +++-
+ mojo/public/tools/mojom/mojom_parser.py       |  26 ++++-
  tools/grit/grit/grd_reader.py                 |  27 ++++-
  tools/grit/grit_rule.gni                      |   2 +-
  tools/grit/preprocess_if_expr.py              |  32 +++++-
- 18 files changed, 539 insertions(+), 20 deletions(-)
+ 18 files changed, 543 insertions(+), 20 deletions(-)
  create mode 100644 build/bromite/bromite_utils.gni
  create mode 100644 build/bromite/gyp/cpp_bromite_include.py
  create mode 100644 build/bromite/gyp/cpp_bromite_include.pydeps
@@ -425,7 +425,7 @@ new file mode 100644
 diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
 --- a/build/config/BUILDCONFIG.gn
 +++ b/build/config/BUILDCONFIG.gn
-@@ -830,3 +830,5 @@ if (is_component_build) {
+@@ -865,3 +865,5 @@ if (is_component_build) {
  set_defaults("component") {
    configs = default_component_configs
  }
@@ -434,7 +434,7 @@ diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
 diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
 --- a/build/config/android/rules.gni
 +++ b/build/config/android/rules.gni
-@@ -224,6 +224,10 @@ if (!is_robolectric && enable_java_templates) {
+@@ -229,6 +229,10 @@ if (!is_robolectric && enable_java_templates) {
        _rebased_sources = rebase_path(invoker.sources, root_build_dir)
  
        args = [ "--srcjar=$_rebased_srcjar_path" ] + _rebased_sources
@@ -445,7 +445,7 @@ diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
        outputs = [ _srcjar_path ]
      }
    }
-@@ -278,7 +282,7 @@ if (!is_robolectric && enable_java_templates) {
+@@ -283,7 +287,7 @@ if (!is_robolectric && enable_java_templates) {
    #   my.java.package.
    template("java_cpp_strings") {
      action_with_pydeps(target_name) {
@@ -457,7 +457,7 @@ diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/accessibility/settings/ChromeAccessibilitySettingsDelegate.java
-@@ -17,6 +17,11 @@ import org.chromium.components.dom_distiller.core.DistilledPagePrefs;
+@@ -16,6 +16,11 @@ import org.chromium.components.dom_distiller.core.DistilledPagePrefs;
  import org.chromium.components.user_prefs.UserPrefs;
  import org.chromium.content_public.browser.BrowserContextHandle;
  
@@ -681,16 +681,17 @@ diff --git a/mojo/public/tools/mojom/mojom_parser.py b/mojo/public/tools/mojom/m
  from collections import defaultdict
  
  from mojom.generate import module
-@@ -180,11 +181,26 @@ def _CollectAllowedImportsFromBuildMetadata(build_metadata_filename):
-   collect(build_metadata_filename)
+@@ -181,14 +182,33 @@ def _CollectAllowedImportsFromBuildMetadata(build_metadata_filename):
    return allowed_imports
  
+ 
 +def _ResolveInclude(mojom_abspath, input_root_paths):
-+  mojom_abspath = _ResolveRelativeImportPath(mojom_abspath, mojom_abspath, input_root_paths)
++  mojom_abspath = _ResolveRelativeImportPath(mojom_abspath, mojom_abspath,
++                                             input_root_paths)
 +  with open(mojom_abspath, encoding='utf-8') as f:
 +    src = f.read()
 +
-+    lines = src.splitlines();
++    lines = src.splitlines()
 +    for idx, i in enumerate(lines):
 +      if i.startswith("#include"):
 +        include_file = re.findall(r'"([^"]*)"', i)[0]
@@ -699,24 +700,30 @@ diff --git a/mojo/public/tools/mojom/mojom_parser.py b/mojo/public/tools/mojom/m
 +        lines[idx] = _ResolveInclude(include_file, input_root_paths)
 +
 +  return "\n".join(lines)
- 
++
++
  # multiprocessing helper.
--def _ParseAstHelper(mojom_abspath, enabled_features):
-+def _ParseAstHelper(mojom_abspath, enabled_features, input_root_paths):
+-def _ParseAstHelper(mojom_abspath, mojom_path, enabled_features):
++def _ParseAstHelper(mojom_abspath, mojom_path, enabled_features,
++                    input_root_paths):
    with open(mojom_abspath, encoding='utf-8') as f:
--    ast = parser.Parse(f.read(), mojom_abspath)
 +    src = _ResolveInclude(mojom_abspath, input_root_paths)
-+    ast = parser.Parse(src, mojom_abspath)
+     # Label the AST with the relative mojom_path, not the absolute path. This
+     # filename is baked into the serialized .mojom-module (via source
+     # locations), so an abspath would make the module vary by build root and
+     # break remote-cache hits for downstream bindings actions.
+-    ast = parser.Parse(f.read(), mojom_path)
++    ast = parser.Parse(src, mojom_path)
      conditional_features.RemoveDisabledDefinitions(ast, enabled_features)
      return mojom_abspath, ast
  
-@@ -304,7 +320,7 @@ def _ParseMojoms(mojom_files,
+@@ -308,7 +328,7 @@ def _ParseMojoms(mojom_files,
        (path, abs_path) for abs_path, path in mojom_files_to_parse.items())
  
    logging.info('Parsing %d .mojom into ASTs', len(mojom_files_to_parse))
--  map_args = ((mojom_abspath, enabled_features)
-+  map_args = ((mojom_abspath, enabled_features, input_root_paths)
-               for mojom_abspath in mojom_files_to_parse)
+-  map_args = ((mojom_abspath, mojom_path, enabled_features)
++  map_args = ((mojom_abspath, mojom_path, enabled_features, input_root_paths)
+               for mojom_abspath, mojom_path in mojom_files_to_parse.items())
    for mojom_abspath, ast in _Shard(_ParseAstHelper, map_args):
      loaded_mojom_asts[mojom_abspath] = ast
 diff --git a/tools/grit/grit/grd_reader.py b/tools/grit/grit/grd_reader.py

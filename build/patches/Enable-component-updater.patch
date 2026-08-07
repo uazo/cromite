@@ -9,9 +9,8 @@ Only cromite-specific components can be enabled.
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
  .../browser/aw_browser_main_parts.cc          |  7 +++
- .../component_updater/registration.cc         | 12 +++--
  .../nonembedded/webview_apk_application.cc    |  2 +-
- .../nonembedded/webview_apk_process.cc        | 20 +++++---
+ .../nonembedded/webview_apk_process.cc        | 24 ++++++----
  .../nonembedded/webview_apk_process.h         |  4 +-
  .../browser/component_updater/registration.cc |  2 +
  .../elevated_recovery_impl.cc                 |  2 +-
@@ -37,12 +36,12 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  components/update_client/update_engine.cc     |  9 ++++
  components/update_client/utils.cc             |  4 ++
  extensions/browser/sandboxed_unpacker.cc      |  2 +-
- 29 files changed, 158 insertions(+), 65 deletions(-)
+ 28 files changed, 151 insertions(+), 64 deletions(-)
 
 diff --git a/android_webview/browser/aw_browser_main_parts.cc b/android_webview/browser/aw_browser_main_parts.cc
 --- a/android_webview/browser/aw_browser_main_parts.cc
 +++ b/android_webview/browser/aw_browser_main_parts.cc
-@@ -73,6 +73,9 @@
+@@ -82,6 +82,9 @@
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/gl/gl_surface.h"
  
@@ -52,7 +51,7 @@ diff --git a/android_webview/browser/aw_browser_main_parts.cc b/android_webview/
  // Must come after all headers that specialize FromJniType() / ToJniType().
  #include "android_webview/browser_jni_headers/AwBrowserMainParts_jni.h"
  #include "android_webview/browser_jni_headers/AwInterfaceRegistrar_jni.h"
-@@ -486,6 +489,10 @@ int AwBrowserMainParts::PreMainMessageLoopRun() {
+@@ -426,6 +429,10 @@ int AwBrowserMainParts::PreMainMessageLoopRun() {
    Java_AwInterfaceRegistrar_registerMojoInterfaces(
        base::android::AttachCurrentThread());
  
@@ -61,38 +60,6 @@ diff --git a/android_webview/browser/aw_browser_main_parts.cc b/android_webview/
 +    base::DoNothing(), false);
 +
    return content::RESULT_CODE_NORMAL_EXIT;
- }
- 
-diff --git a/android_webview/nonembedded/component_updater/registration.cc b/android_webview/nonembedded/component_updater/registration.cc
---- a/android_webview/nonembedded/component_updater/registration.cc
-+++ b/android_webview/nonembedded/component_updater/registration.cc
-@@ -33,19 +33,25 @@ void RegisterComponentsForUpdate(
-   std::vector<std::unique_ptr<component_updater::ComponentInstallerPolicy>>
-       component_installer_list;
- 
-+  std::vector<std::unique_ptr<component_updater::ComponentInstallerPolicy>>
-+      component_installer_list_cromite;
-+
-   component_installer_list.push_back(
-       std::make_unique<
-           component_updater::OriginTrialsComponentInstallerPolicy>());
- 
-   base::RepeatingClosure barrier_closure = base::BarrierClosure(
--      component_installer_list.size(), std::move(on_finished));
--  for (auto& component : component_installer_list) {
-+    component_installer_list_cromite.size(), std::move(on_finished));
-+  for (auto& component : component_installer_list_cromite) {
-     base::MakeRefCounted<component_updater::ComponentInstaller>(
-         std::make_unique<AwComponentInstallerPolicyShim>(std::move(component)))
-         ->Register(base::OnceCallback<bool(
-                        const component_updater::ComponentRegistration&)>(
-                        register_callback),
--                   base::OnceClosure(barrier_closure));
-+                   base::OnceClosure(barrier_closure),
-+                   /* registered_version */ base::Version(component_updater::kNullVersion),
-+                   /* max_previous_product_version */ base::Version(component_updater::kNullVersion),
-+                   /* allowed */ true);
-   }
  }
  
 diff --git a/android_webview/nonembedded/webview_apk_application.cc b/android_webview/nonembedded/webview_apk_application.cc
@@ -110,7 +77,7 @@ diff --git a/android_webview/nonembedded/webview_apk_application.cc b/android_we
 diff --git a/android_webview/nonembedded/webview_apk_process.cc b/android_webview/nonembedded/webview_apk_process.cc
 --- a/android_webview/nonembedded/webview_apk_process.cc
 +++ b/android_webview/nonembedded/webview_apk_process.cc
-@@ -36,30 +36,36 @@ WebViewApkProcess* WebViewApkProcess::GetInstance() {
+@@ -33,27 +33,33 @@ WebViewApkProcess* WebViewApkProcess::GetInstance() {
  
  // static
  // Must be called exactly once during the process startup.
@@ -128,10 +95,11 @@ diff --git a/android_webview/nonembedded/webview_apk_process.cc b/android_webvie
  
 -WebViewApkProcess::WebViewApkProcess() {
 -  base::ThreadPoolInstance::CreateAndStartWithDefaultParams(
+-      "WebViewApkProcess");
 +WebViewApkProcess::WebViewApkProcess(bool embedded) {
 +  if (!embedded) {
 +    base::ThreadPoolInstance::CreateAndStartWithDefaultParams(
-       "WebViewApkProcess");
++        "WebViewApkProcess");
 +  }
  
    // There's no UI message pump in nonembedded WebView, using
@@ -139,21 +107,19 @@ diff --git a/android_webview/nonembedded/webview_apk_process.cc b/android_webvie
    // to the java thread the `WebViewApkProcess` is created on.
 -  main_task_executor_ = std::make_unique<base::SingleThreadTaskExecutor>(
 -      base::MessagePumpType::JAVA);
+-
+-  RegisterPathProvider();
 +  if (!embedded) {
 +    main_task_executor_ = std::make_unique<base::SingleThreadTaskExecutor>(
 +        base::MessagePumpType::JAVA);
 +  }
-   // WebView is not compatible with new compression protocols.
-   base::CommandLine::ForCurrentProcess()->AppendSwitch(
-       update_client::switches::kComponentUpdaterCompatProtocols);
- 
--  RegisterPathProvider();
++
 +  if (!embedded) {
 +    RegisterPathProvider();
 +  }
-   component_updater::RegisterPathProvider(
-       /*components_system_root_key=*/android_webview::DIR_COMPONENTS_ROOT,
-       /*components_system_root_key_alt=*/android_webview::DIR_COMPONENTS_ROOT,
+   CreatePrefService();
+ }
+ 
 diff --git a/android_webview/nonembedded/webview_apk_process.h b/android_webview/nonembedded/webview_apk_process.h
 --- a/android_webview/nonembedded/webview_apk_process.h
 +++ b/android_webview/nonembedded/webview_apk_process.h
@@ -176,7 +142,7 @@ diff --git a/android_webview/nonembedded/webview_apk_process.h b/android_webview
 diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/component_updater/registration.cc
 --- a/chrome/browser/component_updater/registration.cc
 +++ b/chrome/browser/component_updater/registration.cc
-@@ -136,6 +136,8 @@ void DeleteOldComponents(const base::FilePath& user_data_dir) {
+@@ -134,6 +134,8 @@ void DeleteOldComponents(const base::FilePath& user_data_dir) {
  void RegisterComponentsForUpdate() {
    auto* const cus = g_browser_process->component_updater();
  
@@ -188,7 +154,7 @@ diff --git a/chrome/browser/component_updater/registration.cc b/chrome/browser/c
 diff --git a/chrome/elevation_service/elevated_recovery_impl.cc b/chrome/elevation_service/elevated_recovery_impl.cc
 --- a/chrome/elevation_service/elevated_recovery_impl.cc
 +++ b/chrome/elevation_service/elevated_recovery_impl.cc
-@@ -183,7 +183,7 @@ HRESULT ValidateAndUnpackCRX(const base::FilePath& from_crx_path,
+@@ -197,7 +197,7 @@ HRESULT ValidateAndUnpackCRX(const base::FilePath& from_crx_path,
  
    std::string public_key;
    if (crx_file::Verify(to_crx_path, crx_format, {crx_hash}, {}, &public_key,
@@ -337,7 +303,7 @@ diff --git a/components/component_updater/component_installer.cc b/components/co
               << installer_policy_->GetName() << " (" << base_dir.MaybeAsASCII()
               << ").";
      return std::nullopt;
-@@ -534,14 +542,14 @@ void ComponentInstaller::UninstallOnTaskRunner() {
+@@ -526,14 +534,14 @@ void ComponentInstaller::UninstallOnTaskRunner() {
      }
  
      if (!base::DeletePathRecursively(path)) {
@@ -354,7 +320,7 @@ diff --git a/components/component_updater/component_installer.cc b/components/co
      }
    }
  
-@@ -585,7 +593,7 @@ void ComponentInstaller::FinishRegistration(
+@@ -577,7 +585,7 @@ void ComponentInstaller::FinishRegistration(
    if (registration_info->manifest) {
      ComponentReady(std::move(*registration_info->manifest));
    } else {
@@ -363,7 +329,7 @@ diff --git a/components/component_updater/component_installer.cc b/components/co
    }
  
    if (!callback.is_null()) {
-@@ -594,7 +602,7 @@ void ComponentInstaller::FinishRegistration(
+@@ -586,7 +594,7 @@ void ComponentInstaller::FinishRegistration(
  }
  
  void ComponentInstaller::ComponentReady(base::DictValue manifest) {
@@ -489,7 +455,7 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
  #include "base/base64.h"
  #include "base/files/file.h"
  #include "base/files/file_path.h"
-@@ -35,11 +36,17 @@ namespace {
+@@ -36,11 +37,17 @@ namespace {
  using KeyHash = std::array<uint8_t, crypto::hash::kSha256Size>;
  
  // The SHA256 hash of the DER SPKI "ecdsa_2017_public" Crx3 key.
@@ -518,11 +484,12 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
    // Parse [header-size] and [header].
    int header_size =
        base::saturated_cast<int>(ReadAndHashLittleEndianUInt32(file, hash));
-@@ -192,9 +200,18 @@ VerifierResult VerifyCrx3(
+@@ -191,9 +199,18 @@ VerifierResult VerifyCrx3(
        }
        auto key_hash = crypto::hash::Sha256(key);
        required_key_set.erase(key_hash);
-+      auto kPublisherKey = is_extension ? kPublisherKeyHashGoogle : kPublisherKeyHashCromite;
++      auto kPublisherKey =
++          is_extension ? kPublisherKeyHashGoogle : kPublisherKeyHashCromite;
        found_publisher_key =
 -          found_publisher_key || key_hash == kPublisherKeyHash ||
 +          found_publisher_key || key_hash == kPublisherKey ||
@@ -534,11 +501,10 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
 +      LOG(INFO) << "---found_publisher_key: " << found_publisher_key;
 +      LOG(INFO) << "---sig: " << sig;
 +      LOG(INFO) << "---key: " << key;
-+
-       auto v = std::make_unique<crypto::SignatureVerifier>();
-       if (!v->VerifyInit(proof_type.second, base::as_byte_span(sig),
-                          base::as_byte_span(key))) {
-@@ -206,9 +223,11 @@ VerifierResult VerifyCrx3(
+       std::optional<crypto::keypair::PublicKey> pub_key =
+           crypto::keypair::PublicKey::FromSubjectPublicKeyInfo(
+               base::as_byte_span(key));
+@@ -220,9 +237,11 @@ VerifierResult VerifyCrx3(
        verifiers.push_back(std::move(v));
      }
    }
@@ -550,7 +516,7 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
  
    if (require_publisher_key && !found_publisher_key) {
      return VerifierResult::ERROR_REQUIRED_PROOF_MISSING;
-@@ -233,7 +252,7 @@ VerifierResult Verify(
+@@ -247,7 +266,7 @@ VerifierResult Verify(
      const std::vector<uint8_t>& required_file_hash,
      std::string* public_key,
      std::string* crx_id,
@@ -559,7 +525,7 @@ diff --git a/components/crx_file/crx_verifier.cc b/components/crx_file/crx_verif
    std::string public_key_local;
    std::string crx_id_local;
    base::File file(crx_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
-@@ -266,7 +285,7 @@ VerifierResult Verify(
+@@ -280,7 +299,7 @@ VerifierResult Verify(
      result = VerifyCrx3(
          &file, file_hash, required_key_hashes, &public_key_local, &crx_id_local,
          compressed_verified_contents, require_publisher_key,
@@ -595,7 +561,7 @@ diff --git a/components/optimization_guide/core/delivery/prediction_model_downlo
 diff --git a/components/update_client/component.cc b/components/update_client/component.cc
 --- a/components/update_client/component.cc
 +++ b/components/update_client/component.cc
-@@ -368,6 +368,19 @@ void Component::StateChecking::DoHandle() {
+@@ -379,6 +379,19 @@ void Component::StateChecking::DoHandle() {
      return;
    }
  
@@ -647,7 +613,7 @@ diff --git a/components/update_client/crx_downloader.cc b/components/update_clie
 diff --git a/components/update_client/net/network_impl.cc b/components/update_client/net/network_impl.cc
 --- a/components/update_client/net/network_impl.cc
 +++ b/components/update_client/net/network_impl.cc
-@@ -117,7 +117,7 @@ void NetworkFetcherImpl::PostRequest(
+@@ -122,7 +122,7 @@ void NetworkFetcherImpl::PostRequest(
      PostRequestCompleteCallback post_request_complete_callback) {
    auto resource_request = std::make_unique<network::ResourceRequest>();
    resource_request->url = url;
@@ -656,7 +622,7 @@ diff --git a/components/update_client/net/network_impl.cc b/components/update_cl
    resource_request->load_flags = net::LOAD_DISABLE_CACHE;
    resource_request->credentials_mode = network::mojom::CredentialsMode::kOmit;
    for (const auto& [name, value] : post_additional_headers) {
-@@ -131,7 +131,9 @@ void NetworkFetcherImpl::PostRequest(
+@@ -136,7 +136,9 @@ void NetworkFetcherImpl::PostRequest(
        network::SimpleURLLoader::RETRY_ON_NETWORK_CHANGE);
    // The `Content-Type` header set by |AttachStringForUpload| overwrites any
    // `Content-Type` header present in the |ResourceRequest| above.
@@ -719,7 +685,7 @@ diff --git a/components/update_client/protocol_parser_json.cc b/components/updat
 diff --git a/components/update_client/request_sender.cc b/components/update_client/request_sender.cc
 --- a/components/update_client/request_sender.cc
 +++ b/components/update_client/request_sender.cc
-@@ -101,7 +101,8 @@ void RequestSender::SendInternal() {
+@@ -116,7 +116,8 @@ void RequestSender::SendInternal() {
    }
    VLOG_IF(2, !url.is_valid()) << "url is not valid.";
  
@@ -729,7 +695,7 @@ diff --git a/components/update_client/request_sender.cc b/components/update_clie
  
    if (!fetcher_factory_) {
      // The request was cancelled.
-@@ -133,8 +134,8 @@ void RequestSender::SendInternalComplete(
+@@ -148,8 +149,8 @@ void RequestSender::SendInternalComplete(
      const std::string& response_set_cookie,
      int retry_after_sec) {
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);

@@ -121,9 +121,9 @@ suit Cromite logic.
  .../browser/bromite_content_settings/ads.inc  |    3 +
  components/error_page_strings.grdp            |   16 +
  .../resources/interstitial_enterprisewarn.css |    7 +
- .../websockets/websocket_connector_impl.cc    |    6 +-
+ .../websockets/websocket_connector_impl.cc    |    8 +-
  .../public/browser/content_browser_client.cc  |    4 +-
- .../public/browser/content_browser_client.h   |    4 +-
+ .../public/browser/content_browser_client.h   |    6 +-
  content/public/common/isolated_world_ids.h    |    2 +-
  .../about_flags_cc/Stricter-popup-blocker.inc |   14 +
  .../blink/renderer/core/css/style_engine.cc   |    8 +
@@ -132,7 +132,7 @@ suit Cromite logic.
  .../renderer/core/exported/web_document.cc    |   13 +-
  .../blink/renderer/core/html/html_element.cc  |    8 +-
  .../definitions/adblock_private.d.ts          |   14 +
- 127 files changed, 9442 insertions(+), 713 deletions(-)
+ 127 files changed, 9446 insertions(+), 713 deletions(-)
  rename chrome/browser/adblock/android/java/res/xml/{adblock_preferences.xml => eyeo_adblock_preferences.xml} (59%)
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.html
  create mode 100644 chrome/browser/resources/settings/adblock_page/adblock_page.ts
@@ -162,7 +162,7 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
  <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
      xmlns:app="http://schemas.android.com/apk/res-auto"
      android:orderingFromXml="false">
-@@ -98,11 +89,6 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
+@@ -87,11 +78,6 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
      <org.chromium.components.browser_ui.settings.ChromeBasePreference
          android:key="autofill_options"
          android:order="17" />
@@ -174,7 +174,7 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
  
      <PreferenceCategory
          android:key="advanced_section"
-@@ -129,6 +115,11 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
+@@ -113,6 +99,11 @@ Use of this source code is governed by the GPLv3 that can be found in the compon
          android:key="adblock"
          android:order="13"
          android:title="@string/prefs_adblock"/>
@@ -185,7 +185,7 @@ diff --git a/chrome/android/java/res/xml/main_preferences.xml b/chrome/android/j
 +        android:title="@string/adblock_settings_title" />
      <Preference
          android:key="notifications"
-         android:order="23"
+         android:order="22"
 diff --git a/chrome/browser/adblock/adblock_chrome_content_browser_client.cc b/chrome/browser/adblock/adblock_chrome_content_browser_client.cc
 --- a/chrome/browser/adblock/adblock_chrome_content_browser_client.cc
 +++ b/chrome/browser/adblock/adblock_chrome_content_browser_client.cc
@@ -886,7 +886,7 @@ diff --git a/chrome/browser/adblock/android/java/src/org/chromium/chrome/browser
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6637,7 +6637,9 @@ ChromeContentBrowserClient::
+@@ -6845,7 +6845,9 @@ ChromeContentBrowserClient::
  }
  
  bool ChromeContentBrowserClient::WillInterceptWebSocket(
@@ -897,7 +897,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
    if (!frame) {
      return false;
-@@ -6659,9 +6661,11 @@ bool ChromeContentBrowserClient::WillInterceptWebSocket(
+@@ -6883,9 +6885,11 @@ ChromeContentBrowserClient::GetWebSocketOptions(
  }
  
  void ChromeContentBrowserClient::CreateWebSocket(
@@ -912,7 +912,7 @@ diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/ch
 diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
 --- a/chrome/browser/chrome_content_browser_client.h
 +++ b/chrome/browser/chrome_content_browser_client.h
-@@ -723,11 +723,15 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+@@ -742,13 +742,17 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
    CreateURLLoaderHandlerForServiceWorkerInitiatedNavigationRequest(
        content::FrameTreeNodeId frame_tree_node_id,
        const network::ResourceRequest& resource_request) override;
@@ -920,6 +920,8 @@ diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chr
 +  bool WillInterceptWebSocket(content::RenderFrameHost* frame,
 +                              content::RenderProcessHost* process,
 +                              const url::Origin& origin) override;
+   content::ContentBrowserClient::WebSocketOptions GetWebSocketOptions(
+       content::RenderFrameHost* frame) override;
    void CreateWebSocket(
 +      content::RenderProcessHost* process,
        content::RenderFrameHost* frame,
@@ -1171,15 +1173,15 @@ diff --git a/chrome/browser/extensions/api/eyeo_filtering_private/eyeo_filtering
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -35,6 +35,7 @@
- #include "chrome/browser/ui/toolbar/toolbar_pref_names.h"
+@@ -36,6 +36,7 @@
+ #include "chrome/common/chrome_features.h"
  #include "chrome/common/extensions/api/settings_private.h"
  #include "chrome/common/pref_names.h"
 +#include "components/adblock/core/common/adblock_prefs.h"
  #include "components/autofill/core/common/autofill_prefs.h"
  #include "components/bookmarks/common/bookmark_pref_names.h"
  #include "components/browsing_data/core/pref_names.h"
-@@ -206,6 +207,19 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+@@ -212,6 +213,19 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
    }
    s_allowlist = new PrefsUtil::TypedPrefMap();
  
@@ -1202,7 +1204,7 @@ diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chro
 diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 --- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -279,7 +279,6 @@
+@@ -292,7 +292,6 @@
  #include "chrome/common/buildflags.h"
  #include "chrome/common/chrome_features.h"
  #include "components/adblock/content/browser/factories/adblock_request_throttle_factory.h"
@@ -1210,7 +1212,7 @@ diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
  #include "components/adblock/content/browser/factories/content_security_policy_injector_factory.h"
  #include "components/adblock/content/browser/factories/element_hider_factory.h"
  #include "components/adblock/content/browser/factories/resource_classification_runner_factory.h"
-@@ -998,7 +997,6 @@ void ChromeBrowserMainExtraPartsProfiles::
+@@ -1072,7 +1071,6 @@ void ChromeBrowserMainExtraPartsProfiles::
    FederatedIdentityApiPermissionContextFactory::GetInstance();
    FederatedIdentityAutoReauthnPermissionContextFactory::GetInstance();
    FederatedIdentityPermissionContextFactory::GetInstance();
@@ -1221,15 +1223,15 @@ diff --git a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
 --- a/chrome/browser/resources/settings/BUILD.gn
 +++ b/chrome/browser/resources/settings/BUILD.gn
-@@ -66,6 +66,7 @@ build_webui("build") {
-     "ai_page/ai_site_add_dialog.ts",
+@@ -65,6 +65,7 @@ build_webui("build") {
      "ai_page/history_search_page.ts",
      "ai_page/offer_writing_help_page.ts",
+     "ai_page/skills_page.ts",
 +    "adblock_page/adblock_page.ts",
      "appearance_page/appearance_fonts_page.ts",
      "appearance_page/appearance_page.ts",
      "appearance_page/appearance_page_index.ts",
-@@ -439,6 +440,7 @@ build_webui("build") {
+@@ -456,6 +457,7 @@ build_webui("build") {
    ts_definitions = [
      "//tools/typescript/definitions/autofill_private.d.ts",
      "//tools/typescript/definitions/chrome_event.d.ts",
@@ -1798,7 +1800,7 @@ diff --git a/chrome/browser/resources/settings/page_visibility.ts b/chrome/brows
 diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resources/settings/route.ts
 --- a/chrome/browser/resources/settings/route.ts
 +++ b/chrome/browser/resources/settings/route.ts
-@@ -275,6 +275,10 @@ function createRoutes(): SettingsRoutes {
+@@ -285,6 +285,10 @@ function createRoutes(): SettingsRoutes {
          '/onStartup', 'onStartup', loadTimeData.getString('onStartup'));
    }
  
@@ -1812,7 +1814,7 @@ diff --git a/chrome/browser/resources/settings/route.ts b/chrome/browser/resourc
 diff --git a/chrome/browser/resources/settings/router.ts b/chrome/browser/resources/settings/router.ts
 --- a/chrome/browser/resources/settings/router.ts
 +++ b/chrome/browser/resources/settings/router.ts
-@@ -13,6 +13,7 @@ import {loadTimeData} from './i18n_setup.js';
+@@ -14,6 +14,7 @@ import {loadTimeData} from './i18n_setup.js';
   */
  export interface SettingsRoutes {
    ABOUT: Route;
@@ -1823,7 +1825,7 @@ diff --git a/chrome/browser/resources/settings/router.ts b/chrome/browser/resour
 diff --git a/chrome/browser/resources/settings/settings.ts b/chrome/browser/resources/settings/settings.ts
 --- a/chrome/browser/resources/settings/settings.ts
 +++ b/chrome/browser/resources/settings/settings.ts
-@@ -67,6 +67,7 @@ export {HomeUrlInputElement} from './appearance_page/home_url_input.js';
+@@ -73,6 +73,7 @@ export {HomeUrlInputElement} from './appearance_page/home_url_input.js';
  export {SettingsAutofillAiEntriesListElement} from './autofill_page/autofill_ai_entries_list.js';
  export {SettingsAutofillPageElement} from './autofill_page/autofill_page.js';
  export {SettingsAutofillPageIndexElement} from './autofill_page/autofill_page_index.js';
@@ -1877,7 +1879,7 @@ diff --git a/chrome/browser/resources/settings/settings_menu/settings_menu.html 
 diff --git a/chrome/browser/ui/tab_helpers.cc b/chrome/browser/ui/tab_helpers.cc
 --- a/chrome/browser/ui/tab_helpers.cc
 +++ b/chrome/browser/ui/tab_helpers.cc
-@@ -365,7 +365,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
+@@ -363,7 +363,8 @@ void TabHelpers::AttachTabHelpers(WebContents* web_contents) {
    auto* original_profile = profile->GetOriginalProfile();
    adblock::EnsureBackgroundServicesStarted(original_profile);
    adblock::RegisterAdblockWebContentObserver<
@@ -1904,7 +1906,7 @@ diff --git a/chrome/common/extensions/api/_permission_features.json b/chrome/com
    "autofillPrivate": {
      "channel": "trunk",
      "extension_types": ["extension", "platform_app"],
-@@ -543,13 +536,6 @@
+@@ -582,13 +575,6 @@
        ]
      }
    ],
@@ -13107,29 +13109,26 @@ diff --git a/components/security_interstitials/core/browser/resources/interstiti
 diff --git a/content/browser/websockets/websocket_connector_impl.cc b/content/browser/websockets/websocket_connector_impl.cc
 --- a/content/browser/websockets/websocket_connector_impl.cc
 +++ b/content/browser/websockets/websocket_connector_impl.cc
-@@ -93,15 +93,15 @@ void WebSocketConnectorImpl::Connect(
-   const uint32_t options =
-       GetContentClient()->browser()->GetWebSocketOptions(frame);
+@@ -113,10 +113,12 @@ void WebSocketConnectorImpl::Connect(
+       client_security_state_->Clone(), options.options,
+       std::move(throttling_profile_id), network_restrictions_id_);
  
 -  if (GetContentClient()->browser()->WillInterceptWebSocket(frame)) {
-+  if (GetContentClient()->browser()->WillInterceptWebSocket(frame, process, origin_)) {
++  if (GetContentClient()->browser()->WillInterceptWebSocket(frame, process,
++                                                             origin_)) {
      GetContentClient()->browser()->CreateWebSocket(
--        frame,
-+        process, frame,
-         base::BindOnce(ConnectCalledByContentBrowserClient, requested_protocols,
-                        storage_access_api_status, isolation_info_, frame_id_,
-                        origin_, client_security_state_->Clone(), options,
-                        std::move(throttling_profile_id),
-                        network_restrictions_id_),
--        url, isolation_info_.site_for_cookies(), user_agent,
-+        url, origin_, isolation_info_.site_for_cookies(), user_agent,
-         std::move(handshake_client));
+-        frame, std::move(factory), url, isolation_info_.site_for_cookies(),
+-        user_agent, std::move(handshake_client), std::move(options));
++        process, frame, std::move(factory), url, origin_,
++        isolation_info_.site_for_cookies(), user_agent,
++        std::move(handshake_client), std::move(options));
      return;
    }
+ 
 diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
 --- a/content/public/browser/content_browser_client.cc
 +++ b/content/public/browser/content_browser_client.cc
-@@ -1134,7 +1134,7 @@ void ContentBrowserClient::WillCreateURLLoaderFactory(
+@@ -1161,7 +1161,7 @@ void ContentBrowserClient::WillCreateURLLoaderFactory(
    DCHECK(browser_context);
  }
  
@@ -13138,7 +13137,7 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
    return false;
  }
  
-@@ -1143,9 +1143,11 @@ uint32_t ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
+@@ -1178,9 +1178,11 @@ ContentBrowserClient::GetWebSocketOptions(RenderFrameHost* frame) {
  }
  
  void ContentBrowserClient::CreateWebSocket(
@@ -13153,16 +13152,18 @@ diff --git a/content/public/browser/content_browser_client.cc b/content/public/b
 diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
 --- a/content/public/browser/content_browser_client.h
 +++ b/content/public/browser/content_browser_client.h
-@@ -2101,7 +2101,7 @@ class CONTENT_EXPORT ContentBrowserClient {
+@@ -2136,7 +2136,9 @@ class CONTENT_EXPORT ContentBrowserClient {
        scoped_refptr<base::SequencedTaskRunner> navigation_response_task_runner);
  
    // Returns true when the embedder wants to intercept a websocket connection.
 -  virtual bool WillInterceptWebSocket(RenderFrameHost* frame);
-+  virtual bool WillInterceptWebSocket(RenderFrameHost* frame, RenderProcessHost* process, const url::Origin& origin);
++  virtual bool WillInterceptWebSocket(RenderFrameHost* frame,
++                                      RenderProcessHost* process,
++                                      const url::Origin& origin);
  
-   // Returns the WebSocket creation options.
-   virtual uint32_t GetWebSocketOptions(RenderFrameHost* frame);
-@@ -2123,9 +2123,11 @@ class CONTENT_EXPORT ContentBrowserClient {
+   struct CONTENT_EXPORT WebSocketOptions {
+     WebSocketOptions();
+@@ -2171,9 +2173,11 @@ class CONTENT_EXPORT ContentBrowserClient {
    // Always called on the UI thread and only when the Network Service is
    // enabled.
    virtual void CreateWebSocket(
@@ -13208,7 +13209,7 @@ new file mode 100644
 diff --git a/third_party/blink/renderer/core/css/style_engine.cc b/third_party/blink/renderer/core/css/style_engine.cc
 --- a/third_party/blink/renderer/core/css/style_engine.cc
 +++ b/third_party/blink/renderer/core/css/style_engine.cc
-@@ -653,6 +653,14 @@ void StyleEngine::PrepareUpdateActiveStyleSheetsInShadow(
+@@ -656,6 +656,14 @@ void StyleEngine::PrepareUpdateActiveStyleSheetsInShadow(
    collection->PrepareUpdateActiveStyleSheets(medium);
  }
  
@@ -13226,7 +13227,7 @@ diff --git a/third_party/blink/renderer/core/css/style_engine.cc b/third_party/b
 diff --git a/third_party/blink/renderer/core/css/style_engine.h b/third_party/blink/renderer/core/css/style_engine.h
 --- a/third_party/blink/renderer/core/css/style_engine.h
 +++ b/third_party/blink/renderer/core/css/style_engine.h
-@@ -289,6 +289,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
+@@ -292,6 +292,7 @@ class CORE_EXPORT StyleEngine final : public GarbageCollected<StyleEngine>,
        const ComputedStyle* embedder_style) const;
    void ViewportStyleSettingChanged();
  
@@ -13237,7 +13238,7 @@ diff --git a/third_party/blink/renderer/core/css/style_engine.h b/third_party/bl
 diff --git a/third_party/blink/renderer/core/dom/events/event_target.cc b/third_party/blink/renderer/core/dom/events/event_target.cc
 --- a/third_party/blink/renderer/core/dom/events/event_target.cc
 +++ b/third_party/blink/renderer/core/dom/events/event_target.cc
-@@ -856,10 +856,7 @@ bool EventTarget::dispatchEventForBindings(Event* event,
+@@ -855,10 +855,7 @@ bool EventTarget::dispatchEventForBindings(Event* event,
    if (!GetExecutionContext())
      return false;
  
@@ -13252,7 +13253,7 @@ diff --git a/third_party/blink/renderer/core/dom/events/event_target.cc b/third_
 diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_party/blink/renderer/core/exported/web_document.cc
 --- a/third_party/blink/renderer/core/exported/web_document.cc
 +++ b/third_party/blink/renderer/core/exported/web_document.cc
-@@ -326,6 +326,16 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
+@@ -330,6 +330,16 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
    Document* document = Unwrap<Document>();
    DCHECK(document);
  
@@ -13269,7 +13270,7 @@ diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_pa
    auto* parsed_sheet = MakeGarbageCollected<StyleSheetContents>(
        MakeGarbageCollected<CSSParserContext>(*document));
    parsed_sheet->ParseString(source_code);
-@@ -347,9 +357,6 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
+@@ -351,9 +361,6 @@ WebStyleSheetKey WebDocument::InsertAbpElemhideStylesheet(
          {SchedulingPolicy::DisableBackForwardCache()});
    }
  
@@ -13282,7 +13283,7 @@ diff --git a/third_party/blink/renderer/core/exported/web_document.cc b/third_pa
 diff --git a/third_party/blink/renderer/core/html/html_element.cc b/third_party/blink/renderer/core/html/html_element.cc
 --- a/third_party/blink/renderer/core/html/html_element.cc
 +++ b/third_party/blink/renderer/core/html/html_element.cc
-@@ -3031,13 +3031,7 @@ void HTMLElement::setSpellcheck(bool enable) {
+@@ -3485,13 +3485,7 @@ void HTMLElement::setSpellcheck(bool enable) {
  }
  
  void HTMLElement::click() {

@@ -10,19 +10,19 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../crash_upload_list_android.h               |   1 +
  chrome/browser/net/chrome_network_delegate.cc |   7 +
  chrome/browser/ui/BUILD.gn                    |   1 +
- chrome/browser/ui/webui/crashes/crashes_ui.cc | 176 ++++++++++++++++--
+ chrome/browser/ui/webui/crashes/crashes_ui.cc | 183 ++++++++++++++++--
  .../crash/core/browser/crashes_ui_util.h      |   4 +
  .../crash/core/browser/resources/crashes.css  |  71 ++++++-
  .../crash/core/browser/resources/crashes.html |  17 ++
- .../crash/core/browser/resources/crashes.ts   |  94 +++-------
+ .../crash/core/browser/resources/crashes.ts   |  94 +++------
  components/crash_strings.grdp                 |  22 ++-
  .../minidump_uploader/CrashFileManager.java   |   7 +-
  .../MinidumpUploadCallable.java               |  24 +--
- .../minidump_uploader/MinidumpUploader.java   |  31 +--
+ .../minidump_uploader/MinidumpUploader.java   |  34 +---
  .../upload_list/text_log_upload_list.cc       |   1 +
  components/upload_list/upload_list.cc         |  14 ++
  components/upload_list/upload_list.h          |   9 +
- 17 files changed, 382 insertions(+), 138 deletions(-)
+ 17 files changed, 389 insertions(+), 141 deletions(-)
 
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java
@@ -154,7 +154,7 @@ diff --git a/chrome/browser/net/chrome_network_delegate.cc b/chrome/browser/net/
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -680,6 +680,7 @@ static_library("ui") {
+@@ -941,6 +941,7 @@ static_library("ui") {
      "//third_party/re2",
      "//third_party/webrtc_overrides:webrtc_component",
      "//third_party/zlib",
@@ -285,22 +285,25 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
  
    bool system_crash_reporter = false;
  #if BUILDFLAG(IS_CHROMEOS)
-@@ -228,14 +278,117 @@ void CrashesDOMHandler::UpdateUI() {
+@@ -228,14 +278,124 @@ void CrashesDOMHandler::UpdateUI() {
  
  void CrashesDOMHandler::HandleRequestSingleCrashUpload(
      const base::ListValue& args) {
 -  // Only allow manual uploads if crash uploads aren’t disabled by policy.
 -  if (!ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled() &&
--      IsMetricsReportingPolicyManaged()) {
+-      metrics::IsMetricsReportingPolicyManaged()) {
 -    return;
 +  std::string local_id = args[0].GetString();
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, kLoadingTaskTraits,
-+      base::BindOnce(&CrashesDOMHandler::RequestSingleUpload, base::Unretained(this), local_id),
-+      base::BindOnce(&CrashesDOMHandler::RequestSingleUploadCallback, base::Unretained(this), local_id));
++      base::BindOnce(&CrashesDOMHandler::RequestSingleUpload,
++                     base::Unretained(this), local_id),
++      base::BindOnce(&CrashesDOMHandler::RequestSingleUploadCallback,
++                     base::Unretained(this), local_id));
 +}
 +
-+std::string CrashesDOMHandler::RequestSingleUpload(const std::string& local_id) const {
++std::string CrashesDOMHandler::RequestSingleUpload(
++    const std::string& local_id) const {
 +#if BUILDFLAG(IS_ANDROID)
 +  // get crash file path
 +  std::string info_file_path = upload_list_->GetFilePathByLocalId(local_id);
@@ -345,8 +348,9 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
 +
 +  // open zip file
 +  base::File zip_f(zip_file_name,
-+                      base::File::FLAG_CREATE | base::File::FLAG_WRITE);
-+  auto result = zip::ZipFiles(crash_file_path.DirName(), files_list, zip_f.GetPlatformFile());
++                   base::File::FLAG_CREATE | base::File::FLAG_WRITE);
++  auto result = zip::ZipFiles(crash_file_path.DirName(), files_list,
++                              zip_f.GetPlatformFile());
 +  zip_f.Close();
 +  if (result) {
 +    return zip_file_name.value();
@@ -356,8 +360,9 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
 +  return std::string();
 +}
 +
-+void CrashesDOMHandler::RequestSingleUploadCallback(const std::string& local_id,
-+                                                    const std::string& file_name) {
++void CrashesDOMHandler::RequestSingleUploadCallback(
++    const std::string& local_id,
++    const std::string& file_name) {
 +#if BUILDFLAG(IS_ANDROID)
 +  if (!file_name.empty()) {
 +    upload_list_->RequestSingleUploadAsync(local_id);
@@ -373,7 +378,8 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
 +    const base::ListValue& args) {
 +  base::ThreadPool::PostTask(
 +      FROM_HERE, kLoadingTaskTraits,
-+      base::BindOnce(&CrashesDOMHandler::RequestNewExtraction, base::Unretained(this)));
++      base::BindOnce(&CrashesDOMHandler::RequestNewExtraction,
++                     base::Unretained(this)));
 +}
 +
 +void CrashesDOMHandler::RequestNewExtraction() {
@@ -387,7 +393,8 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
 +  base::ThreadPool::PostTaskAndReply(
 +      FROM_HERE, kLoadingTaskTraits,
 +      base::BindOnce(&CrashesDOMHandler::ClearAll, base::Unretained(this)),
-+      base::BindOnce(&CrashesDOMHandler::RequestCrashesList, base::Unretained(this)));
++      base::BindOnce(&CrashesDOMHandler::RequestCrashesList,
++                     base::Unretained(this)));
 +}
 +
 +void CrashesDOMHandler::ClearAll() {
@@ -398,18 +405,18 @@ diff --git a/chrome/browser/ui/webui/crashes/crashes_ui.cc b/chrome/browser/ui/w
 +  base::FilePath upload_log_path = cache_dir.Append("Crash Reports");
 +
 +  base::FileEnumerator dir_enum(
-+    upload_log_path,
-+    /*recursive=*/false, base::FileEnumerator::FILES);
++      upload_log_path,
++      /*recursive=*/false, base::FileEnumerator::FILES);
 +  base::FilePath full_name;
 +  while (full_name = dir_enum.Next(), !full_name.empty()) {
 +    // remove all files, don't care for result
 +    base::DeleteFile(full_name);
-+   }
++  }
 +#endif
  }
  
  }  // namespace
-@@ -247,7 +400,8 @@ void CrashesDOMHandler::HandleRequestSingleCrashUpload(
+@@ -247,7 +407,8 @@ void CrashesDOMHandler::HandleRequestSingleCrashUpload(
  ///////////////////////////////////////////////////////////////////////////////
  
  CrashesUI::CrashesUI(content::WebUI* web_ui) : WebUIController(web_ui) {
@@ -844,12 +851,15 @@ diff --git a/components/minidump_uploader/android/java/src/org/chromium/componen
 diff --git a/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploader.java b/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploader.java
 --- a/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploader.java
 +++ b/components/minidump_uploader/android/java/src/org/chromium/components/minidump_uploader/MinidumpUploader.java
-@@ -123,33 +123,10 @@ public class MinidumpUploader {
+@@ -131,36 +131,10 @@ public class MinidumpUploader {
              if (fileToUpload == null || !fileToUpload.exists()) {
                  return Result.failure("Crash report does not exist");
              }
+-            if (sCrashUrlString == null || sCrashUrlString.isEmpty()) {
+-                return Result.failure("Crash upload URL is not configured");
+-            }
 -            HttpURLConnection connection =
--                    mHttpURLConnectionFactory.createHttpURLConnection(CRASH_URL_STRING);
+-                    mHttpURLConnectionFactory.createHttpURLConnection(sCrashUrlString);
 -            if (connection == null) {
 -                return Result.failure("Failed to create connection");
 -            }
@@ -875,8 +885,8 @@ diff --git a/components/minidump_uploader/android/java/src/org/chromium/componen
 -                connection.disconnect();
 -            }
 -        } catch (IOException | RuntimeException e) {
-+            // for us, it's always good
-+            // returns the file name without path, which will be registered as local_id
++            // For Cromite, local crash reports are handled without uploading to Google.
++            // Return the file name without its path as the local crash ID.
 +            return Result.success(fileToUpload.getName());
 +        } catch (RuntimeException e) {
              return Result.failure(e.toString());

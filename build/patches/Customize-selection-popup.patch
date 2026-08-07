@@ -8,12 +8,13 @@ Web search in tab group and Enable smart text selection
 License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
 ---
  .../SamsungSelectionActionMenuDelegate.java   |  7 +-
- .../browser/ChromeActionModeHandler.java      |  4 +-
- .../chrome/browser/ChromeTabbedActivity.java  | 15 +++-
+ .../browser/ChromeActionModeHandler.java      |  6 +-
+ .../chrome/browser/ChromeTabbedActivity.java  | 19 ++++-
+ .../chrome/browser/WebSearchDelegate.java     |  8 +-
  ...ActivityTabWebContentsDelegateAndroid.java | 10 ++-
  .../compositor/layouts/LayoutManagerImpl.java |  9 ++-
  .../tab/TabContextMenuItemDelegate.java       |  7 +-
- .../chrome/browser/ui/RootUiCoordinator.java  |  8 +-
+ .../chrome/browser/ui/RootUiCoordinator.java  |  1 +
  .../Customize-selection-popup.grdp            | 34 +++++++++
  .../AutofillSelectionMenuItemHelper.java      |  4 +-
  .../res/xml/accessibility_preferences.xml     | 24 ++++++
@@ -23,13 +24,13 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../browser/PendingSelectionMenu.java         |  8 +-
  .../browser/SelectionMenuItem.java            | 73 ++++++++++++-------
  .../SelectionActionMenuDelegate.java          | 32 +++++---
- 16 files changed, 194 insertions(+), 67 deletions(-)
+ 17 files changed, 199 insertions(+), 69 deletions(-)
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Customize-selection-popup.grdp
 
 diff --git a/android_webview/java/src/org/chromium/android_webview/selection/SamsungSelectionActionMenuDelegate.java b/android_webview/java/src/org/chromium/android_webview/selection/SamsungSelectionActionMenuDelegate.java
 --- a/android_webview/java/src/org/chromium/android_webview/selection/SamsungSelectionActionMenuDelegate.java
 +++ b/android_webview/java/src/org/chromium/android_webview/selection/SamsungSelectionActionMenuDelegate.java
-@@ -134,7 +134,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
+@@ -126,7 +126,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
                              .setIcon(null)
                              .setOrderAndCategory(
                                      Menu.CATEGORY_SECONDARY,
@@ -38,7 +39,7 @@ diff --git a/android_webview/java/src/org/chromium/android_webview/selection/Sam
                              .setShowAsActionFlags(MenuItem.SHOW_AS_ACTION_IF_ROOM)
                              .setIntent(createManageAppsIntent())
                              .build());
-@@ -167,7 +167,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
+@@ -159,7 +159,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
                              .setShowAsActionFlags(MenuItem.SHOW_AS_ACTION_IF_ROOM)
                              .setOrderAndCategory(
                                      DefaultItem.PASTE, // Show after paste.
@@ -47,7 +48,7 @@ diff --git a/android_webview/java/src/org/chromium/android_webview/selection/Sam
                              .setIntent(
                                      getTranslationActionIntent(selectedText, translateResolveInfo))
                              .build());
-@@ -180,7 +180,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
+@@ -172,7 +172,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
                              .setShowAsActionFlags(MenuItem.SHOW_AS_ACTION_ALWAYS)
                              .setOrderAndCategory(
                                      Menu.FIRST, // Show as first item after primary assist item.
@@ -56,7 +57,7 @@ diff --git a/android_webview/java/src/org/chromium/android_webview/selection/Sam
                              .setIntent(
                                      createWritingToolkitIntent(selectedText, isSelectionReadOnly))
                              .build());
-@@ -239,6 +239,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
+@@ -231,6 +231,7 @@ public class SamsungSelectionActionMenuDelegate extends AutofillSelectionActionM
      }
  
      public static boolean shouldUseSamsungMenuItemOrdering() {
@@ -67,21 +68,23 @@ diff --git a/android_webview/java/src/org/chromium/android_webview/selection/Sam
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeActionModeHandler.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeActionModeHandler.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeActionModeHandler.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeActionModeHandler.java
-@@ -173,9 +173,7 @@ public class ChromeActionModeHandler {
+@@ -172,11 +172,7 @@ public class ChromeActionModeHandler {
+             int allowedActionModes =
+                     ActionModeCallbackHelper.MENU_ITEM_PROCESS_TEXT
                              | ActionModeCallbackHelper.MENU_ITEM_SHARE;
-             // Disable options that expose additional Chrome functionality prior to the FRE being
-             // completed (i.e. creation of a new tab).
--            if (FirstRunStatus.getFirstRunFlowComplete() && mShowWebSearch) {
--                allowedActionModes |= ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH;
--            }
-+            allowedActionModes |= ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH;
+-            // Disable options that expose additional Chrome functionality prior to the FRE being
+-            // completed (i.e. creation of a new tab).
+-            if (FirstRunStatus.getFirstRunFlowComplete()
+-                    && mShowWebSearch
+-                    && DataProtectionBridge.isSearchWithAllowed(mTab.getWebContents())) {
++            if (DataProtectionBridge.isSearchWithAllowed(mTab.getWebContents())) {
+                 allowedActionModes |= ActionModeCallbackHelper.MENU_ITEM_WEB_SEARCH;
+             }
              mHelper.setAllowedMenuItems(allowedActionModes);
- 
-             mHelper.onCreateActionMode(mode, menu);
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -944,10 +944,17 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -967,10 +967,21 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                                  @TabLaunchType int type,
                                  @TabCreationState int creationState,
                                  boolean markedForSelection) {
@@ -90,23 +93,54 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
 -                                    || (type == TabLaunchType.FROM_RECENT_TABS
 -                                            && !DeviceClassManager.enableAnimations())) {
 +                            boolean selectionPopupTabsForeground =
-+                                ContextUtils.getAppSharedPreferences().getBoolean(
-+                                    "selection_popup_tabs_foreground", false);
-+                            boolean showToast = type == TabLaunchType.FROM_RECENT_TABS
-+                                    && !DeviceClassManager.enableAnimations();
++                                    ContextUtils.getAppSharedPreferences()
++                                            .getBoolean("selection_popup_tabs_foreground", false);
++                            boolean showToast =
++                                    type == TabLaunchType.FROM_RECENT_TABS
++                                            && !DeviceClassManager.enableAnimations();
 +                            if (!showToast && !selectionPopupTabsForeground) {
-+                                showToast = !DeviceClassManager.enableAnimations() &&
-+                                    (type == TabLaunchType.FROM_LONGPRESS_BACKGROUND
-+                                    || type == TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP);
++                                showToast =
++                                        !DeviceClassManager.enableAnimations()
++                                                && (type == TabLaunchType.FROM_LONGPRESS_BACKGROUND
++                                                        || type
++                                                                == TabLaunchType
++                                                                        .FROM_LONGPRESS_BACKGROUND_IN_GROUP);
 +                            }
 +                            if (showToast) {
-                                 Toast.makeText(
-                                                 ChromeTabbedActivity.this,
-                                                 R.string.open_in_new_tab_toast,
+                                 // Post the toast to allow the browser controls to start to update.
+                                 PostTask.postTask(
+                                         TaskTraits.UI_DEFAULT,
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/WebSearchDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/WebSearchDelegate.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/WebSearchDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/WebSearchDelegate.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.text.TextUtils;
+ 
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.supplier.MonotonicObservableSupplier;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.enterprise.util.DataProtectionBridge;
+@@ -60,9 +61,14 @@ public class WebSearchDelegate {
+                     Profile profile = tab.getProfile();
+                     TrackerFactory.getTrackerForProfile(profile)
+                             .notifyEvent(EventConstants.WEB_SEARCH_PERFORMED);
++                    boolean selection_popup_web_search_to_group =
++                            ContextUtils.getAppSharedPreferences()
++                                    .getBoolean("selection_popup_web_search_to_group", false);
+                     tabModelSelector.openNewTab(
+                             generateUrlParamsForSearch(profile, query),
+-                            TabLaunchType.FROM_LONGPRESS_FOREGROUND,
++                            selection_popup_web_search_to_group
++                                    ? TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP
++                                    : TabLaunchType.FROM_LONGPRESS_FOREGROUND,
+                             tab,
+                             tab.isIncognito());
+                 });
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java b/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activity_glue/ActivityTabWebContentsDelegateAndroid.java
-@@ -253,6 +253,14 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
+@@ -270,6 +270,14 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
          // Skip opening a new Tab if it doesn't make sense.
          if (mTab.isClosing()) return false;
  
@@ -121,7 +155,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activit
          if (ChromeFeatureList.isEnabled(ChromeFeatureList.DOCUMENT_PICTURE_IN_PICTURE_API)
                  && disposition == WindowOpenDisposition.NEW_PICTURE_IN_PICTURE) {
              assertNonNull(pictureInPictureWindowOptions);
-@@ -270,7 +278,7 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
+@@ -288,7 +296,7 @@ public class ActivityTabWebContentsDelegateAndroid extends TabWebContentsDelegat
                          mTab,
                          /* shouldPin= */ false,
                          webContents,
@@ -133,7 +167,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/app/tab_activit
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/compositor/layouts/LayoutManagerImpl.java
-@@ -20,6 +20,7 @@ import androidx.annotation.Px;
+@@ -21,6 +21,7 @@ import androidx.annotation.Px;
  import androidx.annotation.VisibleForTesting;
  
  import org.chromium.base.Callback;
@@ -141,7 +175,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layo
  import org.chromium.base.ObserverList;
  import org.chromium.base.TraceEvent;
  import org.chromium.base.supplier.MonotonicObservableSupplier;
-@@ -243,11 +244,17 @@ public class LayoutManagerImpl
+@@ -244,11 +245,17 @@ public class LayoutManagerImpl
              boolean willBeSelected = willAddedTabBeSelected(launchType, incognito);
              float lastTapX = LocalizationUtils.isLayoutRtl() ? mHost.getWidth() * mPxToDp : 0.f;
              float lastTapY = 0.f;
@@ -163,7 +197,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/layo
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextMenuItemDelegate.java
-@@ -404,8 +404,13 @@ public class TabContextMenuItemDelegate implements ContextMenuItemDelegate {
+@@ -439,8 +439,13 @@ public class TabContextMenuItemDelegate implements ContextMenuItemDelegate {
      public void onOpenImageInNewTab(GURL url, @Nullable Referrer referrer) {
          LoadUrlParams loadUrlParams = new LoadUrlParams(url.getSpec());
          loadUrlParams.setReferrer(referrer);
@@ -181,7 +215,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabContextM
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordinator.java
-@@ -34,6 +34,7 @@ import androidx.core.view.WindowInsetsCompat;
+@@ -33,6 +33,7 @@ import androidx.core.view.WindowInsetsCompat;
  
  import org.chromium.base.Callback;
  import org.chromium.base.CallbackController;
@@ -189,24 +223,6 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ui/RootUiCoordi
  import org.chromium.base.DeviceInfo;
  import org.chromium.base.TraceEvent;
  import org.chromium.base.lifetime.Destroyable;
-@@ -1083,11 +1084,16 @@ public class RootUiCoordinator
-                     TrackerFactory.getTrackerForProfile(tab.getProfile())
-                             .notifyEvent(EventConstants.WEB_SEARCH_PERFORMED);
- 
-+                    boolean selection_popup_web_search_to_group =
-+                        ContextUtils.getAppSharedPreferences().getBoolean(
-+                            "selection_popup_web_search_to_group", false);
-+
-                     mTabModelSelectorSupplier
-                             .get()
-                             .openNewTab(
-                                     generateUrlParamsForSearch(tab, query),
--                                    TabLaunchType.FROM_LONGPRESS_FOREGROUND,
-+                                    selection_popup_web_search_to_group ? TabLaunchType.FROM_LONGPRESS_BACKGROUND_IN_GROUP
-+                                                                        : TabLaunchType.FROM_LONGPRESS_FOREGROUND,
-                                     tab,
-                                     tab.isIncognito());
-                 },
 diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Customize-selection-popup.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Customize-selection-popup.grdp
 new file mode 100644
 --- /dev/null
@@ -249,7 +265,7 @@ new file mode 100644
 diff --git a/components/android_autofill/browser/java/src/org/chromium/components/autofill/AutofillSelectionMenuItemHelper.java b/components/android_autofill/browser/java/src/org/chromium/components/autofill/AutofillSelectionMenuItemHelper.java
 --- a/components/android_autofill/browser/java/src/org/chromium/components/autofill/AutofillSelectionMenuItemHelper.java
 +++ b/components/android_autofill/browser/java/src/org/chromium/components/autofill/AutofillSelectionMenuItemHelper.java
-@@ -39,7 +39,7 @@ public class AutofillSelectionMenuItemHelper {
+@@ -36,7 +36,7 @@ public class AutofillSelectionMenuItemHelper {
                              .setGroupId(R.id.select_action_menu_delegate_items)
                              .setOrderAndCategory(
                                      Menu.FIRST,
@@ -258,7 +274,7 @@ diff --git a/components/android_autofill/browser/java/src/org/chromium/component
                              .setShowAsActionFlags(
                                      MenuItem.SHOW_AS_ACTION_ALWAYS
                                              | MenuItem.SHOW_AS_ACTION_WITH_TEXT)
-@@ -52,7 +52,7 @@ public class AutofillSelectionMenuItemHelper {
+@@ -49,7 +49,7 @@ public class AutofillSelectionMenuItemHelper {
                              .setGroupId(R.id.select_action_menu_delegate_items)
                              .setOrderAndCategory(
                                      Menu.CATEGORY_SECONDARY, // Show at end of section.
@@ -395,7 +411,7 @@ diff --git a/content/public/android/java/src/org/chromium/content/browser/select
 diff --git a/content/public/android/java/src/org/chromium/content/browser/selection/SelectionPopupControllerImpl.java b/content/public/android/java/src/org/chromium/content/browser/selection/SelectionPopupControllerImpl.java
 --- a/content/public/android/java/src/org/chromium/content/browser/selection/SelectionPopupControllerImpl.java
 +++ b/content/public/android/java/src/org/chromium/content/browser/selection/SelectionPopupControllerImpl.java
-@@ -1149,7 +1149,7 @@ public class SelectionPopupControllerImpl extends ActionModeCallbackHelper
+@@ -1189,7 +1189,7 @@ public class SelectionPopupControllerImpl extends ActionModeCallbackHelper
  
      private boolean handleAssistMenuItemClick(int order) {
          // Primary assist action is always the first action in the list so offset by 1.
