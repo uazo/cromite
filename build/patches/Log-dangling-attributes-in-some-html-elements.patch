@@ -42,10 +42,10 @@ new file mode 100644
 diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink/renderer/core/dom/document.cc
 --- a/third_party/blink/renderer/core/dom/document.cc
 +++ b/third_party/blink/renderer/core/dom/document.cc
-@@ -5080,6 +5080,14 @@ void Document::ProcessBaseElement() {
+@@ -5086,6 +5086,14 @@ void Document::ProcessBaseElement() {
    KURL base_element_url;
-   if (href) {
-     StringView stripped_href = StripLeadingAndTrailingHtmlSpaces(*href);
+   if (!href.IsNull()) {
+     StringView stripped_href = StripLeadingAndTrailingHtmlSpaces(href);
 +    if (stripped_href.contains('\n') || stripped_href.contains('<')) {
 +      AddConsoleMessage(MakeGarbageCollected<ConsoleMessage>(
 +          mojom::ConsoleMessageSource::kSecurity,
@@ -57,7 +57,7 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
      if (!stripped_href.empty())
        base_element_url = KURL(FallbackBaseURL(), stripped_href);
    }
-@@ -5097,6 +5105,14 @@ void Document::ProcessBaseElement() {
+@@ -5103,6 +5111,14 @@ void Document::ProcessBaseElement() {
          !GetExecutionContext()->GetSecurityOrigin()->CanRequest(
              base_element_url)) {
        UseCounter::Count(*this, WebFeature::kBaseWithCrossOriginHref);
@@ -72,11 +72,11 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
      }
    }
  
-@@ -5129,6 +5145,8 @@ void Document::ProcessBaseElement() {
+@@ -5136,6 +5152,8 @@ void Document::ProcessBaseElement() {
        UseCounter::Count(*this, WebFeature::kBaseWithOpenBracketInTarget);
      }
-     base_target_ = *target;
-+    if (target->contains('\n') || target->contains('\r') || target->contains('<'))
+     base_target_ = target;
++    if (target.contains('\n') || target.contains('\r') || target.contains('<'))
 +      base_target_ = g_null_atom;
    } else {
      base_target_ = g_null_atom;
@@ -84,7 +84,7 @@ diff --git a/third_party/blink/renderer/core/dom/document.cc b/third_party/blink
 diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/renderer/core/dom/element.cc
 --- a/third_party/blink/renderer/core/dom/element.cc
 +++ b/third_party/blink/renderer/core/dom/element.cc
-@@ -4117,8 +4117,26 @@ void Element::StripScriptingAttributes(
+@@ -4132,8 +4132,26 @@ void Element::StripScriptingAttributes(
    attribute_vector.Shrink(destination);
  }
  
@@ -98,8 +98,8 @@ diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/
 +            mojom::ConsoleMessageSource::kSecurity,
 +            mojom::ConsoleMessageLevel::kWarning,
 +            "'" + value + "' is removed from attribute '" +
-+              attribute.GetName().ToString() + "' of element '" +
-+              tagName() + "' as may contains dangling markup"));
++                attribute.GetName().ToString() + "' of element '" +
++                tagName() + "' as may contains dangling markup"));
 +      }
 +      //attribute.SetValue(g_empty_atom);
 +    }
@@ -109,13 +109,13 @@ diff --git a/third_party/blink/renderer/core/dom/element.cc b/third_party/blink/
  void Element::ParserSetAttributes(
 -    const Vector<Attribute, kAttributePrealloc>& attribute_vector) {
 +    Vector<Attribute, kAttributePrealloc>& attribute_vector) {
-   DCHECK(!isConnected());
-   DCHECK(!parentNode());
-   DCHECK(!element_data_);
+   // We must start with a newly-created element.  If we don't, it would not be
+   // safe to batch the AttributeChanged notifications the way we do, since on
+   // elements that are not newly-created, AttributeChanged might run script.
 diff --git a/third_party/blink/renderer/core/dom/element.h b/third_party/blink/renderer/core/dom/element.h
 --- a/third_party/blink/renderer/core/dom/element.h
 +++ b/third_party/blink/renderer/core/dom/element.h
-@@ -817,7 +817,8 @@ class CORE_EXPORT Element : public ContainerNode {
+@@ -848,7 +848,8 @@ class CORE_EXPORT Element : public ContainerNode {
    virtual bool HasLegalLinkAttribute(const QualifiedName&) const;
  
    // Only called by the parser immediately after element construction.
@@ -151,13 +151,13 @@ diff --git a/third_party/blink/renderer/core/editing/serializers/markup_formatte
 +  //                 "' is not allowed as parameter value."));
 +  //   }
 +  // }
-   EntityMask entity_mask = document_is_html ? kEntityMaskInHTMLAttributeValue
+   EntityMask entity_mask = document_is_html ? kEntityMaskInHtmlAttributeValue
                                              : kEntityMaskInAttributeValue;
    AppendCharactersReplacingEntities(result, attribute, entity_mask);
 diff --git a/third_party/blink/renderer/core/html/forms/html_form_element.cc b/third_party/blink/renderer/core/html/forms/html_form_element.cc
 --- a/third_party/blink/renderer/core/html/forms/html_form_element.cc
 +++ b/third_party/blink/renderer/core/html/forms/html_form_element.cc
-@@ -547,7 +547,7 @@ void HTMLFormElement::PrepareForSubmission(
+@@ -647,7 +647,7 @@ void HTMLFormElement::PrepareForSubmission(const Event* event,
      if (form_control_element && form_control_element->BlocksFormSubmission()) {
        UseCounter::Count(GetDocument(),
                          WebFeature::kFormSubmittedWithUnclosedFormControl);
@@ -217,7 +217,7 @@ diff --git a/third_party/blink/renderer/core/html/html_frame_element_base.cc b/t
 diff --git a/third_party/blink/renderer/core/html/html_iframe_element.cc b/third_party/blink/renderer/core/html/html_iframe_element.cc
 --- a/third_party/blink/renderer/core/html/html_iframe_element.cc
 +++ b/third_party/blink/renderer/core/html/html_iframe_element.cc
-@@ -171,6 +171,12 @@ void HTMLIFrameElement::CollectStyleForPresentationAttribute(
+@@ -173,6 +173,12 @@ void HTMLIFrameElement::CollectStyleForPresentationAttribute(
    }
  }
  
@@ -230,7 +230,7 @@ diff --git a/third_party/blink/renderer/core/html/html_iframe_element.cc b/third
  void HTMLIFrameElement::ParseAttribute(
      const AttributeModificationParams& params) {
    const QualifiedName& name = params.name;
-@@ -185,6 +191,16 @@ void HTMLIFrameElement::ParseAttribute(
+@@ -187,6 +193,16 @@ void HTMLIFrameElement::ParseAttribute(
      }
      AtomicString old_name = name_;
      name_ = value;
@@ -250,7 +250,7 @@ diff --git a/third_party/blink/renderer/core/html/html_iframe_element.cc b/third
 diff --git a/third_party/blink/renderer/core/html/html_iframe_element.h b/third_party/blink/renderer/core/html/html_iframe_element.h
 --- a/third_party/blink/renderer/core/html/html_iframe_element.h
 +++ b/third_party/blink/renderer/core/html/html_iframe_element.h
-@@ -72,6 +72,8 @@ class CORE_EXPORT HTMLIFrameElement : public HTMLFrameElementBase,
+@@ -73,6 +73,8 @@ class CORE_EXPORT HTMLIFrameElement : public HTMLFrameElementBase,
    String srcdoc() const;
    void setSrcdoc(const V8UnionStringOrTrustedHTML*, ExceptionState&);
  
@@ -270,7 +270,7 @@ diff --git a/third_party/blink/renderer/core/loader/frame_load_request.cc b/thir
  #include "third_party/blink/renderer/core/fileapi/public_url_manager.h"
  #include "third_party/blink/renderer/core/frame/local_dom_window.h"
  #include "third_party/blink/renderer/core/html/forms/html_form_element.h"
-@@ -148,6 +149,14 @@ void FrameLoadRequest::ResolveBlobURLIfNeeded() {
+@@ -165,6 +166,14 @@ void FrameLoadRequest::ResolveBlobURLIfNeeded() {
  const AtomicString& FrameLoadRequest::CleanNavigationTarget(
      const AtomicString& target) const {
    if (ContainsNewLineAndLessThan(target)) {
@@ -333,7 +333,7 @@ diff --git a/third_party/blink/renderer/core/page/frame_tree.cc b/third_party/bl
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -3658,6 +3658,12 @@
+@@ -3914,6 +3914,12 @@
        name: "MacDisableCtrlHomeEnd",
        status: "stable",
      },
