@@ -27,10 +27,13 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../chrome/browser/app/ChromeActivity.java    | 21 ++++++++
  .../compositor/CompositorViewHolder.java      |  4 +-
  .../overlay_panel/OverlayPanelContent.java    |  2 +-
+ .../chrome/browser/tab/TabBuilder.java        |  2 +-
  .../chromium/chrome/browser/tab/TabImpl.java  |  2 +-
  .../tracing/settings/DeveloperSettings.java   | 10 ++++
- .../android/compositor/tab_content_manager.cc |  7 ++-
+ .../actor/OffscreenRenderingManager.java      |  2 +-
+ .../android/compositor/tab_content_manager.cc |  6 ++-
  .../overlay_panel/overlay_panel_content.cc    |  2 +-
+ .../WebViewResizingHelper.java                |  2 +-
  .../browser/flags/cromite/sPixelPerfect.java  | 33 +++++++++++++
  .../settings/ChromeBaseSettingsFragment.java  |  4 ++
  .../Pixel-perfect-mode.grdp                   |  9 ++++
@@ -106,7 +109,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  ui/display/mojom/screen_info_mojom_traits.h   |  4 ++
  ui/display/screen_info.h                      |  1 +
  ui/events/blink/blink_event_util.cc           |  2 +-
- 96 files changed, 526 insertions(+), 136 deletions(-)
+ 99 files changed, 529 insertions(+), 138 deletions(-)
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sPixelPerfect.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Pixel-perfect-mode.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/Pixel-perfect-mode.inc
@@ -569,6 +572,18 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/compositor/over
      }
  
      /** Destroy the native component of this class. */
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabBuilder.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabBuilder.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabBuilder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabBuilder.java
+@@ -357,7 +357,7 @@ public class TabBuilder {
+         int height = bounds.bottom - bounds.top;
+         webContents = tab.getWebContents();
+         assumeNonNull(webContents);
+-        webContents.setSize(width, height);
++        webContents.setSize(width, height, 0);
+ 
+         // Detach the tab from the current activity.
+         webContents.setTopLevelNativeWindow(null);
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/tab/TabImpl.java
@@ -614,19 +629,30 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tracing/setting
      }
  
      private static boolean shouldRemoveBetaStableHint() {
+diff --git a/chrome/browser/actor/android/java/src/org/chromium/chrome/browser/actor/OffscreenRenderingManager.java b/chrome/browser/actor/android/java/src/org/chromium/chrome/browser/actor/OffscreenRenderingManager.java
+--- a/chrome/browser/actor/android/java/src/org/chromium/chrome/browser/actor/OffscreenRenderingManager.java
++++ b/chrome/browser/actor/android/java/src/org/chromium/chrome/browser/actor/OffscreenRenderingManager.java
+@@ -85,7 +85,7 @@ public class OffscreenRenderingManager {
+         if (webContents == null || webContents.isDestroyed()) return;
+         tab.addObserver(mTabObserver);
+ 
+-        webContents.setSize(width, height);
++        webContents.setSize(width, height, 0);
+         OffscreenRenderingManagerJni.get()
+                 .startOffscreenRendering(mNativePtr, webContents, width, height);
+         tab.startOffscreenRendering();
 diff --git a/chrome/browser/android/compositor/tab_content_manager.cc b/chrome/browser/android/compositor/tab_content_manager.cc
 --- a/chrome/browser/android/compositor/tab_content_manager.cc
 +++ b/chrome/browser/android/compositor/tab_content_manager.cc
-@@ -37,7 +37,7 @@
- #include "chrome/browser/thumbnail/cc/thumbnail.h"
+@@ -38,6 +38,7 @@
  #include "components/sync_sessions/features.h"
  #include "components/sync_sessions/session_sync_service.h"
--#include "components/viz/common/frame_sinks/copy_output_result.h"
-+#include "components/viz/common/frame_sinks/copy_output_result.h"`n#include "content/public/common/content_features.h"
+ #include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "content/public/common/content_features.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/render_frame_host.h"
  #include "content/public/browser/render_view_host.h"
-@@ -192,7 +192,10 @@ class TabContentManager::TabReadbackRequest : public RetryableTask {
+@@ -192,7 +193,10 @@ class TabContentManager::TabReadbackRequest : public RetryableTask {
        std::move(result_callback).Run(content::CopyFromSurfaceResult());
        return;
      }
@@ -650,6 +676,18 @@ diff --git a/chrome/browser/android/overlay_panel/overlay_panel_content.cc b/chr
  }
  
  void OverlayPanelContent::SetWebContents(
+diff --git a/chrome/browser/context_sharing/tab_bottom_sheet/android/java/src/org/chromium/chrome/browser/tab_bottom_sheet/WebViewResizingHelper.java b/chrome/browser/context_sharing/tab_bottom_sheet/android/java/src/org/chromium/chrome/browser/tab_bottom_sheet/WebViewResizingHelper.java
+--- a/chrome/browser/context_sharing/tab_bottom_sheet/android/java/src/org/chromium/chrome/browser/tab_bottom_sheet/WebViewResizingHelper.java
++++ b/chrome/browser/context_sharing/tab_bottom_sheet/android/java/src/org/chromium/chrome/browser/tab_bottom_sheet/WebViewResizingHelper.java
+@@ -285,7 +285,7 @@ public class WebViewResizingHelper {
+         if (mThinWebView != null) {
+             mThinWebView.resizeWebContents(resizingContainerWidth, resizingContainerHeight);
+         } else {
+-            mWebContents.setSize(resizingContainerWidth, resizingContainerHeight);
++            mWebContents.setSize(resizingContainerWidth, resizingContainerHeight, 0);
+         }
+     }
+ }
 diff --git a/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sPixelPerfect.java b/chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sPixelPerfect.java
 new file mode 100644
 --- /dev/null

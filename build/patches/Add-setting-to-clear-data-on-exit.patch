@@ -11,10 +11,12 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../ClearBrowsingDataFragmentAtStart.java     | 79 +++++++++++++++++++
  chrome/app/settings_strings.grdp              |  8 ++
  chrome/browser/about_flags.cc                 |  1 +
- .../browsing_data/browsing_data_bridge.cc     | 19 ++++-
+ .../browsing_data/browsing_data_bridge.cc     | 20 ++++-
+ .../browsing_data_counter_bridge.cc           |  2 +-
  .../browsing_data/BrowsingDataBridge.java     | 12 +--
  .../chrome_browsing_data_lifetime_manager.cc  | 22 +++++-
  .../chrome_browsing_data_remover_delegate.cc  | 11 +++
+ .../api/browsing_data/browsing_data_api.cc    |  2 +-
  .../api/settings_private/prefs_util.cc        | 17 ++++
  .../browser/profiles/ProfileManagerUtils.java |  5 ++
  .../profiles/android/profile_manager_utils.cc |  5 ++
@@ -37,6 +39,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../core/browsing_data_policies_utils.cc      | 20 ++---
  .../core/browsing_data_policies_utils.h       | 11 +++
  .../browsing_data/core/browsing_data_utils.cc | 33 ++++++++
+ .../browsing_data/core/browsing_data_utils.h  |  2 +
  .../core/clear_browsing_data_tab.h            | 21 +++++
  components/browsing_data/core/pref_names.cc   | 17 ++++
  components/browsing_data/core/pref_names.h    | 16 ++++
@@ -47,7 +50,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  content/browser/storage_partition_impl.cc     |  2 +
  .../public/browser/browsing_data_remover.h    |  7 +-
  .../Add-setting-to-clear-data-on-exit.inc     |  8 ++
- 43 files changed, 497 insertions(+), 49 deletions(-)
+ 46 files changed, 502 insertions(+), 51 deletions(-)
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/browsing_data/ClearBrowsingDataFragmentAtStart.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Add-setting-to-clear-data-on-exit.grdp
  create mode 100644 components/browsing_data/core/clear_browsing_data_tab.h
@@ -90,7 +93,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
  import org.chromium.chrome.browser.profiles.ProfileProvider;
  import org.chromium.chrome.browser.quick_delete.QuickDeleteController;
  import org.chromium.chrome.browser.quick_delete.QuickDeleteDelegateImpl;
-@@ -2384,7 +2385,11 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -2383,7 +2384,11 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
              }
              if (!hadCipherData) {
                  hadCipherData =
@@ -313,14 +316,14 @@ diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
          Swipe between pages
        </message>
      </if>
-++  <if expr="is_win or is_linux">
-++    <message name="IDS_SETTINGS_CLEAR_BROWSING_DATA_AT_CLOSE" desc="The title of the tab showing the at close clear browsing data options.">
-++      Clear browsing data when closing Cromite
-++    </message>
-++    <message name="IDS_SETTINGS_CLEAR_DATA_AT_CLOSE_DESCRIPTION" desc="Description for delete browsing data button at close in Privacy options. 'History' refers to browsing history. 'Cookies' refers to the technical meaning of a cookie, i.e. data saved by a website on the user's computer, as in when a website saves your preferences.">
-++      Choose what to automatically delete when you close Cromite
-++    </message>
-++  </if>
++   <if expr="is_win or is_linux">
++     <message name="IDS_SETTINGS_CLEAR_BROWSING_DATA_AT_CLOSE" desc="The title of the tab showing the at close clear browsing data options.">
++       Clear browsing data when closing Cromite
++     </message>
++     <message name="IDS_SETTINGS_CLEAR_DATA_AT_CLOSE_DESCRIPTION" desc="Description for delete browsing data button at close in Privacy options. 'History' refers to browsing history. 'Cookies' refers to the technical meaning of a cookie, i.e. data saved by a website on the user's computer, as in when a website saves your preferences.">
++       Choose what to automatically delete when you close Cromite
++     </message>
++   </if>
      <if expr="is_win or is_linux">
        <message name="IDS_SETTINGS_OVERSCROLL_HISTORY_NAVIGATION_SUBTITLE" desc="Subtitle for the overscroll history navigation setting, which allows you to navigate back and forward by swiping left or right with a touch device.">
          Navigate back and forward with a swipe gesture
@@ -338,7 +341,15 @@ diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
 diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chrome/browser/android/browsing_data/browsing_data_bridge.cc
 --- a/chrome/browser/android/browsing_data/browsing_data_bridge.cc
 +++ b/chrome/browser/android/browsing_data/browsing_data_bridge.cc
-@@ -64,6 +64,15 @@ PrefService* GetPrefService(Profile* profile) {
+@@ -29,6 +29,7 @@
+ #include "components/browsing_data/content/android/browsing_data_model_android.h"
+ #include "components/browsing_data/content/browsing_data_model.h"
+ #include "components/browsing_data/core/browsing_data_utils.h"
++#include "components/browsing_data/core/clear_browsing_data_tab.h"
+ #include "components/browsing_data/core/history_notice_utils.h"
+ #include "components/browsing_data/core/pref_names.h"
+ #include "components/prefs/pref_service.h"
+@@ -64,6 +65,15 @@ PrefService* GetPrefService(Profile* profile) {
    return profile->GetOriginalProfile()->GetPrefs();
  }
  
@@ -354,7 +365,7 @@ diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chro
  void OnBrowsingDataModelBuilt(JNIEnv* env,
                                const ScopedJavaGlobalRef<jobject>& java_callback,
                                std::unique_ptr<BrowsingDataModel> model) {
-@@ -213,7 +222,8 @@ static void JNI_BrowsingDataBridge_MarkOriginAsImportantForTesting(
+@@ -213,7 +223,8 @@ static void JNI_BrowsingDataBridge_MarkOriginAsImportantForTesting(
  static bool JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
      JNIEnv* env,
      Profile* profile,
@@ -364,7 +375,7 @@ diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chro
    DCHECK_GE(data_type, 0);
    DCHECK_LE(data_type,
              static_cast<int>(browsing_data::BrowsingDataType::MAX_VALUE));
-@@ -224,7 +234,8 @@ static bool JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
+@@ -224,7 +235,8 @@ static bool JNI_BrowsingDataBridge_GetBrowsingDataDeletionPreference(
    // data types for consistency.
    std::string pref;
    if (!browsing_data::GetDeletionPreferenceFromDataType(
@@ -374,7 +385,7 @@ diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chro
      return false;
    }
  
-@@ -235,6 +246,7 @@ static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
+@@ -235,6 +247,7 @@ static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
      JNIEnv* env,
      Profile* profile,
      int32_t data_type,
@@ -382,13 +393,25 @@ diff --git a/chrome/browser/android/browsing_data/browsing_data_bridge.cc b/chro
      bool value) {
    DCHECK_GE(data_type, 0);
    DCHECK_LE(data_type,
-@@ -242,7 +254,8 @@ static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
+@@ -242,7 +255,8 @@ static void JNI_BrowsingDataBridge_SetBrowsingDataDeletionPreference(
  
    std::string pref;
    if (!browsing_data::GetDeletionPreferenceFromDataType(
 -          static_cast<browsing_data::BrowsingDataType>(data_type), &pref)) {
 +          static_cast<browsing_data::BrowsingDataType>(data_type),
 +          ToTabEnum(clear_browsing_data_tab), &pref)) {
+     return;
+   }
+ 
+diff --git a/chrome/browser/android/browsing_data/browsing_data_counter_bridge.cc b/chrome/browser/android/browsing_data/browsing_data_counter_bridge.cc
+--- a/chrome/browser/android/browsing_data/browsing_data_counter_bridge.cc
++++ b/chrome/browser/android/browsing_data/browsing_data_counter_bridge.cc
+@@ -34,7 +34,7 @@ BrowsingDataCounterBridge::BrowsingDataCounterBridge(
+ 
+   std::string pref;
+   if (!browsing_data::GetDeletionPreferenceFromDataType(
+-          static_cast<browsing_data::BrowsingDataType>(data_type), &pref)) {
++          static_cast<browsing_data::BrowsingDataType>(data_type), browsing_data::ClearBrowsingDataTab::AT_START, &pref)) {
      return;
    }
  
@@ -511,6 +534,18 @@ diff --git a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.
    }
  
    //////////////////////////////////////////////////////////////////////////////
+diff --git a/chrome/browser/extensions/api/browsing_data/browsing_data_api.cc b/chrome/browser/extensions/api/browsing_data/browsing_data_api.cc
+--- a/chrome/browser/extensions/api/browsing_data/browsing_data_api.cc
++++ b/chrome/browser/extensions/api/browsing_data/browsing_data_api.cc
+@@ -117,7 +117,7 @@ bool BrowsingDataSettingsFunction::isDataTypeSelected(
+   }
+ 
+   std::string pref_name;
+-  bool success = GetDeletionPreferenceFromDataType(data_type, &pref_name);
++  bool success = GetDeletionPreferenceFromDataType(data_type, browsing_data::ClearBrowsingDataTab::AT_START, &pref_name);
+   return success && prefs_->GetBoolean(pref_name);
+ }
+ 
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
@@ -1164,6 +1199,25 @@ diff --git a/components/browsing_data/core/browsing_data_utils.cc b/components/b
    switch (data_type) {
      case BrowsingDataType::HISTORY:
        *out_pref = prefs::kDeleteBrowsingHistory;
+diff --git a/components/browsing_data/core/browsing_data_utils.h b/components/browsing_data/core/browsing_data_utils.h
+--- a/components/browsing_data/core/browsing_data_utils.h
++++ b/components/browsing_data/core/browsing_data_utils.h
+@@ -10,6 +10,7 @@
+ 
+ #include "base/time/time.h"
+ #include "build/build_config.h"
++#include "components/browsing_data/core/clear_browsing_data_tab.h"
+ #include "components/browsing_data/core/counters/browsing_data_counter.h"
+ #include "net/cookies/cookie_constants.h"
+ 
+@@ -155,6 +156,7 @@ const char* GetTimePeriodPreferenceName();
+ // |data_type| to |out_pref|. Returns false if no such preference exists.
+ bool GetDeletionPreferenceFromDataType(
+     BrowsingDataType data_type,
++    ClearBrowsingDataTab clear_browsing_data_tab,
+     std::string* out_pref);
+ 
+ // Returns a BrowsingDataType if a type matching |pref_name| is found.
 diff --git a/components/browsing_data/core/clear_browsing_data_tab.h b/components/browsing_data/core/clear_browsing_data_tab.h
 new file mode 100644
 --- /dev/null

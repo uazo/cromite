@@ -31,10 +31,11 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../show-ntp-at-startup.grdp                  |  9 +++++
  chrome/browser/ui/browser_tabrestore.cc       |  2 +-
  .../startup/startup_browser_creator_impl.cc   |  8 +++++
+ chrome/browser/ui/tabs/tab_strip_model.cc     | 18 +++++++++-
  .../about_flags_cc/show-ntp-at-startup.inc    | 12 +++++++
  .../show-ntp-at-startup.inc                   |  5 +++
  .../show-ntp-at-startup.inc                   |  1 +
- 26 files changed, 151 insertions(+), 24 deletions(-)
+ 27 files changed, 168 insertions(+), 25 deletions(-)
  create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/cromite/sShowNtpAtStartupAndroid.java
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/show-ntp-at-startup.grdp
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc
@@ -104,7 +105,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeInactivit
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -3392,6 +3392,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3391,6 +3391,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
          mInactivityTrackerSupplier.set(
                  new ChromeInactivityTracker(
                          ChromePreferenceKeys.TABBED_ACTIVITY_LAST_BACKGROUNDED_TIME_MS_PREF));
@@ -113,7 +114,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
          TabUsageTracker.initialize(this.getLifecycleDispatcher(), tabModelSelector);
          TabGroupUsageTracker.initialize(
                  this.getLifecycleDispatcher(), tabModelSelector, this::isWarmOnResume);
-@@ -3423,13 +3425,13 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3422,13 +3424,13 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                          getTabModelSelectorSupplier(),
                          getTabContentManagerSupplier(),
                          SetupListModuleUtils::isSetupListActive);
@@ -129,7 +130,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
          }
  
          SafetyHubMagicStackBuilder safetyHubMagicStackBuilder =
-@@ -3438,7 +3440,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3437,7 +3439,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                          mTabModelProfileSupplier,
                          mTabModelSelector,
                          getModalDialogManagerSupplier());
@@ -138,7 +139,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedAct
  
          // Fetch and register the appropriate collection of educational tip or setup list modules.
          HomeTipsModulesProvider.registerTipModules(
-@@ -3455,7 +3457,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3454,7 +3456,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                              SettingsNavigationFactory.createSettingsNavigation()
                                      .startSettings(this, TabsSettings.class);
                          });
@@ -542,6 +543,38 @@ diff --git a/chrome/browser/ui/startup/startup_browser_creator_impl.cc b/chrome/
    }
  
    // Maybe add any tabs which the user has previously pinned.
+diff --git a/chrome/browser/ui/tabs/tab_strip_model.cc b/chrome/browser/ui/tabs/tab_strip_model.cc
+--- a/chrome/browser/ui/tabs/tab_strip_model.cc
++++ b/chrome/browser/ui/tabs/tab_strip_model.cc
+@@ -5361,11 +5361,27 @@ std::optional<int> TabStripModel::DetermineNewSelectedIndex(
+ 
+   // Third preference is the block's opener.
+   for (size_t i = block_tabs.start(); i < block_tabs.end(); ++i) {
+-    tabs::TabInterface* opener = GetTabModelAtIndex(i)->opener();
++    tabs::TabModel* tab = GetTabModelAtIndex(i);
++    tabs::TabInterface* opener = tab->opener();
+     int opener_index = opener ? GetIndexOfTab(opener) : TabStripModel::kNoTab;
+     if (opener_index != TabStripModel::kNoTab &&
+         !block_tabs.Contains(gfx::Range(opener_index)) &&
+         !IsTabCollapsed(opener_index)) {
++
++      tabs::TabInterface* tab_interface = tab;
++      const tabs::TabCollection* parent = tab_interface ? tab_interface->GetParentCollection() : nullptr;
++
++      bool is_detached_root_tab = parent &&
++                                  parent->type() != tabs::TabCollection::Type::GROUP &&
++                                  parent->type() != tabs::TabCollection::Type::SPLIT;
++
++      if (opener_index == 0 && is_detached_root_tab) {
++        if (block_tabs.start() > 0) {
++          int left_tab_index = static_cast<int>(block_tabs.start()) - 1;
++          return GetTabIndexAfterClosing(left_tab_index, block_tabs);
++        }
++      }
++
+       return GetTabIndexAfterClosing(opener_index, block_tabs);
+     }
+   }
 diff --git a/cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc b/cromite_flags/chrome/browser/about_flags_cc/show-ntp-at-startup.inc
 new file mode 100644
 --- /dev/null

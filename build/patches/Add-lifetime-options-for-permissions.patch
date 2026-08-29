@@ -59,7 +59,8 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../views/permissions/chip/chip_controller.cc |  2 +-
  ...exclusive_access_permission_prompt_view.cc |  2 +-
  .../permission_prompt_bubble_base_view.cc     |  2 +-
- .../site_settings/SingleWebsiteSettings.java  |  9 ++
+ .../site_settings/SingleWebsiteSettings.java  | 11 +++
+ .../android/website_preference_bridge.cc      |  3 +-
  .../strings/android/browser_ui_strings.grd    |  5 ++
  .../core/browser/content_settings_utils.cc    | 44 ++++++++--
  .../core/browser/content_settings_utils.h     |  6 ++
@@ -83,12 +84,12 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../embedded_permission_prompt_flow_model.cc  |  2 +-
  .../permissions/permission_context_base.cc    | 64 ++++++++++++--
  .../permissions/permission_context_base.h     | 30 ++++++-
- components/permissions/permission_prompt.h    |  3 +-
+ components/permissions/permission_prompt.h    |  4 +-
  components/permissions/permission_request.cc  | 43 +++++++++-
  components/permissions/permission_request.h   | 17 +++-
  .../permissions/permission_request_manager.cc | 53 +++++++-----
  .../permissions/permission_request_manager.h  | 10 ++-
- 36 files changed, 530 insertions(+), 74 deletions(-)
+ 37 files changed, 535 insertions(+), 75 deletions(-)
 
 diff --git a/chrome/browser/permissions/last_tab_standing_tracker.cc b/chrome/browser/permissions/last_tab_standing_tracker.cc
 --- a/chrome/browser/permissions/last_tab_standing_tracker.cc
@@ -268,19 +269,21 @@ diff --git a/chrome/browser/ui/views/permissions/permission_prompt_bubble_base_v
 diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java
 --- a/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java
 +++ b/components/browser_ui/site_settings/android/java/src/org/chromium/components/browser_ui/site_settings/SingleWebsiteSettings.java
-@@ -718,6 +718,11 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
+@@ -718,6 +718,13 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
      }
  
      @RequiresNonNull({"mSite"})
 +    private boolean isSessionPermission(@ContentSettingsType.EnumType int type) {
-+        return mSite.getPermissionInfo(type) != null &&
-+               mSite.getPermissionInfo(type).getSessionModel() == SessionModel.USER_SESSION;
++        var setting = mSite.getPermissionSetting(
++                getSiteSettingsDelegate().getBrowserContextHandle(),
++                type);
++        return setting != null && setting.isOneTime();
 +    }
 +
      private void setUpClearDataPreference() {
          ClearWebsiteStorage preference = findPreference(PREF_CLEAR_DATA);
          long usage = mSite.getTotalUsage();
-@@ -1434,6 +1439,10 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
+@@ -1434,6 +1441,10 @@ public class SingleWebsiteSettings extends BaseSiteSettingsFragment
                  switchPreference.setBackgroundColor(getContext().getColor(mHighlightColor));
              }
          }
@@ -291,6 +294,19 @@ diff --git a/components/browser_ui/site_settings/android/java/src/org/chromium/c
      }
  
      /**
+diff --git a/components/browser_ui/site_settings/android/website_preference_bridge.cc b/components/browser_ui/site_settings/android/website_preference_bridge.cc
+--- a/components/browser_ui/site_settings/android/website_preference_bridge.cc
++++ b/components/browser_ui/site_settings/android/website_preference_bridge.cc
+@@ -496,7 +496,8 @@ JNI_WebsitePreferenceBridge_GetPermissionSettingWithEmbargo(
+   }
+ 
+   bool is_one_time = info.metadata.session_model() ==
+-                     content_settings::mojom::SessionModel::ONE_TIME;
++                     content_settings::mojom::SessionModel::ONE_TIME
++    || info.metadata.session_model() == content_settings::mojom::SessionModel::USER_SESSION;
+ 
+   return Java_PermissionSetting_Constructor(
+       env, j_geo_setting, jni_zero::ToJniType(env, c_setting), is_one_time);
 diff --git a/components/browser_ui/strings/android/browser_ui_strings.grd b/components/browser_ui/strings/android/browser_ui_strings.grd
 --- a/components/browser_ui/strings/android/browser_ui_strings.grd
 +++ b/components/browser_ui/strings/android/browser_ui_strings.grd
@@ -1144,7 +1160,15 @@ diff --git a/components/permissions/permission_context_base.h b/components/permi
 diff --git a/components/permissions/permission_prompt.h b/components/permissions/permission_prompt.h
 --- a/components/permissions/permission_prompt.h
 +++ b/components/permissions/permission_prompt.h
-@@ -71,8 +71,9 @@ class PermissionPrompt {
+@@ -11,6 +11,7 @@
+ 
+ #include "base/functional/callback.h"
+ #include "base/memory/raw_ptr.h"
++#include "components/content_settings/core/common/content_settings_enums.mojom-shared.h"
+ #include "components/permissions/features.h"
+ #include "components/permissions/permission_request_data.h"
+ #include "components/permissions/permission_uma_constants.h"
+@@ -71,8 +72,9 @@ class PermissionPrompt {
      virtual GURL GetEmbeddingOrigin() const = 0;
  
      virtual void Accept(const PromptOptions& prompt_options) = 0;

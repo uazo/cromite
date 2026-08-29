@@ -10,7 +10,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../metrics/chrome_feature_list_creator.cc    |  12 ++
  .../search_engine_preconnector.cc             |   3 +
  .../policy/chrome_browser_policy_connector.cc |   3 -
- ...nfiguration_policy_handler_list_factory.cc |  11 +-
+ ...nfiguration_policy_handler_list_factory.cc |   7 +-
  .../account_consistency_mode_manager.cc       |   7 +-
  ...ccount_consistency_mode_manager_factory.cc |   2 +-
  .../throttled_gaia_auth_fetcher.cc            |   5 +
@@ -30,15 +30,14 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../ExtensionManifestV2Availability.yaml      |   5 +-
  .../Miscellaneous/SyncDisabled.yaml           |   2 +-
  .../policy/resources/webui/policy_row.html.ts |   3 +
- .../policy/resources/webui/policy_row.ts      |   1 +
+ .../policy/resources/webui/policy_row.ts      |   8 +
  components/policy_strings.grdp                |   4 +-
  components/search/ntp_features.cc             |   1 +
  components/signin/features.gni                |   2 +-
  .../gaia_cookie_manager_service.cc            |   4 +
- extensions/common/extension_features.cc       |   1 +
  google_apis/gaia/gaia_auth_fetcher.cc         |   1 +
- net/socket/ssl_client_socket_impl.cc          |   3 +
- 34 files changed, 316 insertions(+), 165 deletions(-)
+ net/socket/ssl_client_socket_impl.cc          |   1 +
+ 33 files changed, 316 insertions(+), 165 deletions(-)
 
 diff --git a/base/win/win_util.cc b/base/win/win_util.cc
 --- a/base/win/win_util.cc
@@ -161,7 +160,7 @@ diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/Andro
 diff --git a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
 --- a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
 +++ b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
-@@ -49,6 +49,11 @@ static void JNI_PrivacyPreferencesManagerImpl_SetMetricsReportingEnabled(
+@@ -50,6 +50,11 @@ static void JNI_PrivacyPreferencesManagerImpl_SetMetricsReportingEnabled(
  static bool
  JNI_PrivacyPreferencesManagerImpl_IsMetricsReportingDisabledByPolicy() {
    const PrefService* local_state = g_browser_process->local_state();
@@ -244,15 +243,11 @@ diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc 
  }
  
  }  // namespace
-@@ -3497,7 +3497,10 @@ std::unique_ptr<ConfigurationPolicyHandlerList> BuildHandlerList(
+@@ -3497,7 +3497,6 @@ std::unique_ptr<ConfigurationPolicyHandlerList> BuildHandlerList(
        key::kExtensionInstallCloudPolicyChecksEnabled,
        extensions::pref_names::kExtensionInstallCloudPolicyChecksEnabled,
        base::Value::Type::BOOLEAN));
 -
-+  handlers->AddHandler(std::make_unique<IntRangePolicyHandler>(
-+      key::kExtensionManifestV2Availability,
-+      extensions::pref_names::kManifestV2Availability, /*min=*/0, /*max=*/3,
-+      /*clamp=*/false));
  #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
  
  #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
@@ -912,7 +907,7 @@ diff --git a/components/policy/resources/webui/policy_row.html.ts b/components/p
        <span id="name">${this.policy?.name || ''}</span>
 +      <input type="checkbox" class="enabled_box"
 +          .checked="${!this.policy?.disabled}"
-+          @change="${this.onEnabledChanged}">
++          @change="${this.onEnabledChange}">
        <img src="chrome://resources/images/open_in_new.svg" alt="">
      </a>
    </div>
@@ -927,6 +922,20 @@ diff --git a/components/policy/resources/webui/policy_row.ts b/components/policy
    level: string;
    link?: string;
    scope: string;
+@@ -101,6 +102,13 @@ export class PolicyRowElement extends CrLitElement {
+   }
+ 
+ 
++  protected onEnabledChange(e: Event) {
++    if (!this.policy) {
++      return;
++    }
++    const target = e.currentTarget as HTMLInputElement;
++    chrome.send('setEnabledPolicy', [this.policy.name, target.checked]);
++  }
+ 
+   protected getShowMoreLessLabel(): string {
+     return loadTimeData.getString(this.expanded ? 'showLess' : 'showMore');
 diff --git a/components/policy_strings.grdp b/components/policy_strings.grdp
 --- a/components/policy_strings.grdp
 +++ b/components/policy_strings.grdp
@@ -985,17 +994,6 @@ diff --git a/components/signin/internal/identity_manager/gaia_cookie_manager_ser
    // Pop the completed request.
    requests_.pop_front();
    OptimizeListAccounts();
-diff --git a/extensions/common/extension_features.cc b/extensions/common/extension_features.cc
---- a/extensions/common/extension_features.cc
-+++ b/extensions/common/extension_features.cc
-@@ -97,6 +97,7 @@ BASE_FEATURE(kWebRequestPerContextEventDispatch,
- 
- BASE_FEATURE(kAllowWithholdingExtensionPermissionsOnInstall,
-              base::FEATURE_DISABLED_BY_DEFAULT);
-+SET_CROMITE_FEATURE_DISABLED(kExtensionsManifestV3Only);
- 
- BASE_FEATURE(kCheckingNoExtensionIdInExtensionIpcs,
-              "EMF_NO_EXTENSION_ID_FOR_EXTENSION_SOURCE",
 diff --git a/google_apis/gaia/gaia_auth_fetcher.cc b/google_apis/gaia/gaia_auth_fetcher.cc
 --- a/google_apis/gaia/gaia_auth_fetcher.cc
 +++ b/google_apis/gaia/gaia_auth_fetcher.cc
@@ -1018,13 +1016,4 @@ diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket
    // Disable SHA-1 server signatures.
    // TODO(crbug.com/boringssl/699): Once the default is flipped in BoringSSL, we
    // no longer need to override it.
-@@ -1283,6 +1284,8 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
- 
-   cert_verifier_request_.reset();
- 
-+  SSL_set_enforce_rsa_key_usage(ssl_.get(), true);
-+
-   // If the connection was good, check HPKP and CT status simultaneously,
-   // but prefer to treat the HPKP error as more serious, if there was one.
-   if (result == OK || result == ERR_CERTIFICATE_TRANSPARENCY_REQUIRED) {
 --

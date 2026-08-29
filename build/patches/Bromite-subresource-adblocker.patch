@@ -43,14 +43,14 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../component_updater/download_filters_task.h | 129 ++++++++
  ...ent_subresource_filter_throttle_manager.cc |  15 +
  ...tent_subresource_filter_throttle_manager.h |   2 +
- .../content/browser/ruleset_service.cc        |  44 ++-
+ .../content/browser/ruleset_service.cc        |  45 ++-
  .../content/browser/ruleset_service.h         |   8 +-
  .../unindexed_ruleset_stream_generator.cc     |   3 +
  .../core/browser/ruleset_version.h            |   4 +
  .../browser/subresource_filter_features.cc    | 118 +-------
  .../core/browser/verified_ruleset_dealer.cc   |   4 +
  .../core/common/indexed_ruleset.cc            |   5 +-
- 38 files changed, 1288 insertions(+), 127 deletions(-)
+ 38 files changed, 1289 insertions(+), 127 deletions(-)
  create mode 100644 chrome/android/java/res/layout/adblock_editor.xml
  create mode 100644 chrome/android/java/res/xml/adblock_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/settings/AdBlockEditor.java
@@ -1635,7 +1635,15 @@ diff --git a/components/subresource_filter/content/browser/content_subresource_f
 diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/components/subresource_filter/content/browser/ruleset_service.cc
 --- a/components/subresource_filter/content/browser/ruleset_service.cc
 +++ b/components/subresource_filter/content/browser/ruleset_service.cc
-@@ -51,12 +51,7 @@ namespace {
+@@ -16,6 +16,7 @@
+ #include "base/files/scoped_temp_dir.h"
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/rand_util.h"
+@@ -51,12 +52,7 @@ namespace {
  void RecordIndexAndWriteRulesetResult(
      std::string_view uma_tag,
      RulesetService::IndexAndWriteRulesetResult result) {
@@ -1649,7 +1657,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
  }
  
  // Implements operations on a `sentinel file`, which is used as a safeguard to
-@@ -253,11 +248,13 @@ RulesetService::RulesetService(
+@@ -253,11 +249,13 @@ RulesetService::RulesetService(
  RulesetService::~RulesetService() = default;
  
  void RulesetService::IndexAndStoreAndPublishRulesetIfNeeded(
@@ -1664,7 +1672,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
    // Trying to store a ruleset with the same version for a second time would
    // not only be futile, but would fail on Windows due to "File System
    // Tunneling" as long as the previously stored copy of the rules is still
-@@ -267,13 +264,16 @@ void RulesetService::IndexAndStoreAndPublishRulesetIfNeeded(
+@@ -267,13 +265,16 @@ void RulesetService::IndexAndStoreAndPublishRulesetIfNeeded(
    if (most_recently_indexed_version.IsCurrentFormatVersion() &&
        most_recently_indexed_version.content_version ==
            unindexed_ruleset_info.content_version) {
@@ -1681,7 +1689,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
      return;
    }
  
-@@ -293,6 +293,23 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
+@@ -293,6 +294,23 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
      const RulesetConfig& config,
      const base::FilePath& indexed_ruleset_base_dir,
      const UnindexedRulesetInfo& unindexed_ruleset_info) {
@@ -1705,7 +1713,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
    base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
                                                  base::BlockingType::MAY_BLOCK);
  
-@@ -300,6 +317,7 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
+@@ -300,6 +318,7 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
        unindexed_ruleset_info);
  
    if (!unindexed_ruleset_stream_generator.ruleset_stream()) {
@@ -1713,7 +1721,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
      RecordIndexAndWriteRulesetResult(
          config.uma_tag,
          IndexAndWriteRulesetResult::kFailedOpeningUnindexedRuleset);
-@@ -314,6 +332,7 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
+@@ -314,6 +333,7 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
            indexed_ruleset_base_dir, indexed_version);
  
    if (!base::CreateDirectory(indexed_ruleset_version_dir)) {
@@ -1721,7 +1729,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
      RecordIndexAndWriteRulesetResult(
          config.uma_tag, IndexAndWriteRulesetResult::kFailedCreatingVersionDir);
      return IndexedRulesetVersion(config.filter_tag);
-@@ -321,13 +340,11 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
+@@ -321,13 +341,11 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
  
    SentinelFile sentinel_file(indexed_ruleset_version_dir);
    if (sentinel_file.IsPresent()) {
@@ -1737,7 +1745,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
      RecordIndexAndWriteRulesetResult(
          config.uma_tag,
          IndexAndWriteRulesetResult::kFailedCreatingSentinelFile);
-@@ -342,6 +359,7 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
+@@ -342,6 +360,7 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
    RulesetIndexer indexer((*g_get_ruleset_id_func)());
    if (!(*g_index_ruleset_func)(config, &unindexed_ruleset_stream_generator,
                                 &indexer)) {
@@ -1745,7 +1753,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
      RecordIndexAndWriteRulesetResult(
          config.uma_tag,
          IndexAndWriteRulesetResult::kFailedParsingUnindexedRuleset);
-@@ -362,9 +380,12 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
+@@ -362,9 +381,12 @@ IndexedRulesetVersion RulesetService::IndexAndWriteRuleset(
                     unindexed_ruleset_info.license_path, indexer.data());
    RecordIndexAndWriteRulesetResult(config.uma_tag, result);
    if (result != IndexAndWriteRulesetResult::kSuccess) {
@@ -1758,7 +1766,7 @@ diff --git a/components/subresource_filter/content/browser/ruleset_service.cc b/
    CHECK(indexed_version.IsValid());
    return indexed_version;
  }
-@@ -493,6 +514,7 @@ void RulesetService::IndexAndStoreRuleset(
+@@ -493,6 +515,7 @@ void RulesetService::IndexAndStoreRuleset(
  void RulesetService::OnWrittenRuleset(WriteRulesetCallback result_callback,
                                        const IndexedRulesetVersion& version) {
    CHECK(!result_callback.is_null());

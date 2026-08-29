@@ -25,16 +25,17 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../feedback/ChromeFeedbackCollector.java     |   1 +
  .../feedback/SimplifiedNtpFeedbackSource.java |  38 +++
  .../identity_disc/IdentityDiscController.java |   2 +-
- .../native_page/NativePageFactory.java        |  16 +-
+ .../native_page/NativePageFactory.java        |  17 +-
  .../NativePageNavigationDelegateImpl.java     |   2 +-
  .../chrome/browser/ntp/NewTabPage.java        |   7 +-
- .../browser/ntp/NewTabPageCoordinator.java    |  25 +-
+ .../browser/ntp/NewTabPageCoordinator.java    |  49 ++-
  .../ntp/search/SearchBoxViewBinder.java       |   1 +
  .../suggestions/SuggestionsConfig.java        |   2 +-
  .../SuggestionsNavigationDelegate.java        |  27 +-
- .../tile/MostVisitedTilesCoordinator.java     |   8 +-
+ .../tile/MostVisitedTilesCoordinator.java     |   4 +-
  .../tile/MostVisitedTilesGridLayout.java      | 287 ++++++++++++++++++
  .../tile/MostVisitedTilesMediator.java        |  14 +-
+ .../tile/MostVisitedTilesViewBinder.java      |   8 +-
  .../tile/TileDragDelegateImpl.java            |  18 +-
  .../suggestions/tile/TileRenderer.java        |  12 +-
  .../suggestions/tile/TilesLinearLayout.java   |   2 +-
@@ -49,9 +50,9 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  components/omnibox/common/omnibox_features.cc |   2 +
  components/search_engines/template_url.h      |   4 +-
  .../Restore-Simplified-NTP-launch.inc         |  12 +
- .../Restore-Simplified-NTP-launch.inc         |   6 +
+ .../Restore-Simplified-NTP-launch.inc         |   3 +
  .../Restore-Simplified-NTP-launch.inc         |   1 +
- 45 files changed, 634 insertions(+), 68 deletions(-)
+ 46 files changed, 658 insertions(+), 70 deletions(-)
  create mode 100644 chrome/android/java/res/drawable-hdpi/ic_most_visited_placeholder.png
  create mode 100644 chrome/android/java/res/drawable-mdpi/ic_most_visited_placeholder.png
  create mode 100644 chrome/android/java/res/drawable-xhdpi/ic_most_visited_placeholder.png
@@ -371,7 +372,7 @@ new file mode 100644
 +    android:visibility="gone"
 +    android:orientation="vertical"
 +    android:layout_gravity="center_horizontal"
-+    android:layout_marginTop="@dimen/mvt_container_top_margin"
++    android:layout_marginTop="@dimen/ntp_section_top_margin"
 +    android:layout_marginLeft="@dimen/mvt_container_lateral_margin"
 +    android:layout_marginRight="@dimen/mvt_container_lateral_margin"
 +    android:paddingTop="@dimen/mvt_container_top_padding"
@@ -577,7 +578,7 @@ diff --git a/chrome/android/java/res/values/dimens.xml b/chrome/android/java/res
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
-@@ -3863,7 +3863,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+@@ -3862,7 +3862,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
                              getStartupMetricsTracker(),
                              mRootUiCoordinator.getExclusiveAccessManager(),
                              mBackPressManager,
@@ -757,7 +758,15 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
          }
          return mNativePageBuilder;
      }
-@@ -241,7 +246,8 @@ public class NativePageFactory {
+@@ -219,6 +224,7 @@ public class NativePageFactory {
+         private final StartupMetricsTracker mStartupMetricsTracker;
+         private final BackPressManager mBackPressManager;
+         private final RecentlyClosedEntriesManager mRecentlyClosedEntriesManager;
++        private final MonotonicObservableSupplier<BookmarkManagerOpener> mBookmarkManagerOpenerSupplier;
+ 
+         public NativePageBuilder(
+                 ChromeActivity activity,
+@@ -241,7 +247,8 @@ public class NativePageFactory {
                  TopInsetProvider topInsetProvider,
                  StartupMetricsTracker startupMetricsTracker,
                  BackPressManager backPressManager,
@@ -767,7 +776,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
              mActivity = activity;
              mNewTabPageCreationTracker = newTabPageCreationTracker;
              mBottomSheetController = sheetController;
-@@ -263,6 +269,7 @@ public class NativePageFactory {
+@@ -263,6 +270,7 @@ public class NativePageFactory {
              mStartupMetricsTracker = startupMetricsTracker;
              mBackPressManager = backPressManager;
              mRecentlyClosedEntriesManager = recentlyClosedEntriesManager;
@@ -775,7 +784,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/native_page/Nat
          }
  
          protected NativePage buildNewTabPage(Tab tab, String url) {
-@@ -306,7 +313,8 @@ public class NativePageFactory {
+@@ -306,7 +314,8 @@ public class NativePageFactory {
                      mEdgeToEdgeControllerSupplier,
                      mTopInsetProvider,
                      mStartupMetricsTracker,
@@ -843,24 +852,27 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageC
  
  import androidx.annotation.VisibleForTesting;
  
-@@ -74,6 +74,7 @@ import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
+@@ -74,6 +74,9 @@ import org.chromium.chrome.browser.setup_list.SetupListModuleUtils;
  import org.chromium.chrome.browser.signin.SigninAndHistorySyncActivityLauncherImpl;
  import org.chromium.chrome.browser.suggestions.tile.MostVisitedTilesCoordinator;
  import org.chromium.chrome.browser.suggestions.tile.TileGroup;
 +import org.chromium.chrome.browser.suggestions.tile.MostVisitedTilesGridLayout;
++import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager;
++import org.chromium.chrome.browser.ntp_customization.NtpCustomizationConfigManager.HomepageStateListener;
  import org.chromium.chrome.browser.tab.Tab;
  import org.chromium.chrome.browser.tab.TabLaunchType;
  import org.chromium.chrome.browser.tab.TabSelectionType;
-@@ -162,6 +163,8 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+@@ -162,6 +165,9 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
      private @Nullable Point mContextMenuStartPosition;
      private @Nullable NtpCustomizationCoordinator mNtpCustomizationCoordinator;
  
 +    private ViewGroup mShortcutsView;
++    private @Nullable HomepageStateListener mMvtVisibilityListener;
 +
      /**
       * Whether the tiles shown in the layout have finished loading. With {@link #mHasShownView},
       * it's one of the 2 flags used to track initialization progress.
-@@ -174,14 +177,14 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+@@ -174,14 +180,14 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
       */
      private boolean mHasShownView;
  
@@ -877,7 +889,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageC
  
      /** Flag used to request some layout changes after the next layout pass is completed. */
      private boolean mTileCountChanged;
-@@ -379,6 +382,7 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+@@ -379,6 +385,7 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
          mSearchEngineService.addIconObserver(mSearchEngineIconObserver);
          setSearchBoxTextAppearance();
  
@@ -885,7 +897,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageC
          initializeSearchBoxTextView();
  
          initializeComposeplateFlags(mProfile);
-@@ -748,6 +752,8 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+@@ -748,6 +755,8 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
       * @param isGoogle Whether the search provider is Google.
       */
      void setSearchProviderInfo(boolean hasLogo, boolean isGoogle) {
@@ -894,7 +906,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageC
          if (hasLogo == mSearchProviderHasLogo
                  && isGoogle == mSearchProviderIsGoogle
                  && mInitialized) {
-@@ -814,6 +820,7 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+@@ -814,6 +823,7 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
       * @param disable Whether to disable the animations.
       */
      void setUrlFocusAnimationsDisabled(boolean disable) {
@@ -902,7 +914,17 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageC
          if (disable == mDisableUrlFocusChangeAnimations) return;
          if (disable) {
              // Force reset layout translation Y to prevent elements from staying stuck off-screen.
-@@ -1377,6 +1384,18 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+@@ -1293,6 +1303,9 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
+ 
+     @SuppressWarnings("NullAway")
+     public void destroy() {
++        if (mMvtVisibilityListener != null) {
++            NtpCustomizationConfigManager.getInstance().removeListener(mMvtVisibilityListener);
++        }
+         if (mNtpCustomizationCoordinator != null) {
+             mNtpCustomizationCoordinator.destroy();
+             mNtpCustomizationCoordinator = null;
+@@ -1377,6 +1390,36 @@ public class NewTabPageCoordinator implements ModuleDelegateHost {
          }
      }
  
@@ -916,6 +938,24 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPageC
 +        mShortcutsView.findViewById(R.id.downloads_button)
 +                .setOnClickListener(
 +                        view -> mManager.getNavigationDelegate().navigateToDownloadManager());
++
++        updateMvtVisibility();
++        mMvtVisibilityListener =
++                new HomepageStateListener() {
++                    @Override
++                    public void onMvtToggleChanged() {
++                        updateMvtVisibility();
++                    }
++                };
++        NtpCustomizationConfigManager.getInstance()
++                .addListener(mMvtVisibilityListener, mNewTabPageLayout.getContext(), /* skipNotify= */ false);
++    }
++
++    private void updateMvtVisibility() {
++        mShortcutsView.setVisibility(
++            NtpCustomizationConfigManager.getInstance().getPrefIsMvtToggleOn()
++                ? View.VISIBLE
++                : View.GONE);
 +    }
 +
      /**
@@ -994,7 +1034,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/Sug
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesCoordinator.java b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesCoordinator.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesCoordinator.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesCoordinator.java
-@@ -72,15 +72,11 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
+@@ -72,7 +72,7 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
          mMvTilesContainerLayout = mvTilesContainerLayout;
          mIsLff = DeviceFormFactor.isNonMultiDisplayContextOnTablet(mActivity);
  
@@ -1003,15 +1043,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/til
                  mvTilesContainerLayout.findViewById(R.id.mv_tiles_layout);
  
          mUiConfig = new UiConfig(tilesLayout);
-         PropertyModel propertyModel = new PropertyModel(MostVisitedTilesProperties.ALL_KEYS);
--        PropertyModelChangeProcessor.create(
--                propertyModel,
--                new MostVisitedTilesViewBinder.ViewHolder(mvTilesContainerLayout, tilesLayout),
--                MostVisitedTilesViewBinder::bind);
-         mRenderer =
-                 new TileRenderer(
-                         mActivity,
-@@ -92,7 +88,7 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
+@@ -92,7 +92,7 @@ public class MostVisitedTilesCoordinator implements ConfigurationChangedObserver
                  new MostVisitedTilesMediator(
                          activity,
                          mUiConfig,
@@ -1374,6 +1406,32 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/til
 -        mMvTilesLayout.triggerCustomizationIph(mUserEducationHelper);
      }
  }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesViewBinder.java b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesViewBinder.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesViewBinder.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/MostVisitedTilesViewBinder.java
+@@ -20,9 +20,9 @@ final class MostVisitedTilesViewBinder {
+     /** The view holder holds the most visited container layout and most visited tiles layout. */
+     public static class ViewHolder {
+         public final View mvContainerLayout;
+-        public final MostVisitedTilesLayout mvTilesLayout;
++        public final MostVisitedTilesGridLayout mvTilesLayout;
+ 
+-        ViewHolder(View mvContainerLayout, MostVisitedTilesLayout mvTilesLayout) {
++        ViewHolder(View mvContainerLayout, MostVisitedTilesGridLayout mvTilesLayout) {
+             this.mvContainerLayout = mvContainerLayout;
+             this.mvTilesLayout = mvTilesLayout;
+         }
+@@ -32,10 +32,6 @@ final class MostVisitedTilesViewBinder {
+         if (IS_VISIBLE == propertyKey) {
+             viewHolder.mvContainerLayout.setVisibility(
+                     model.get(IS_VISIBLE) ? View.VISIBLE : View.GONE);
+-        } else if (HORIZONTAL_INTERVAL_PADDINGS == propertyKey) {
+-            viewHolder.mvTilesLayout.setIntervalMargins(model.get(HORIZONTAL_INTERVAL_PADDINGS));
+-        } else if (HORIZONTAL_EDGE_PADDINGS == propertyKey) {
+-            viewHolder.mvTilesLayout.setEdgeMargins(model.get(HORIZONTAL_EDGE_PADDINGS));
+         }
+     }
+ }
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/TileDragDelegateImpl.java b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/TileDragDelegateImpl.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/TileDragDelegateImpl.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/suggestions/tile/TileDragDelegateImpl.java
@@ -1661,13 +1719,10 @@ diff --git a/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/R
 new file mode 100644
 --- /dev/null
 +++ b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_cc/Restore-Simplified-NTP-launch.inc
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,3 @@
 +CROMITE_FEATURE(kSimplifiedNTP,
 +                "SimplifiedNTP",
 +                base::FEATURE_ENABLED_BY_DEFAULT);
-+
-+SET_CROMITE_FEATURE_DISABLED(kNewTabPageCustomizationV2);
-+SET_CROMITE_FEATURE_DISABLED(kNewTabPageCustomizationForMvt);
 diff --git a/cromite_flags/chrome/browser/flags/android/chrome_feature_list_h/Restore-Simplified-NTP-launch.inc b/cromite_flags/chrome/browser/flags/android/chrome_feature_list_h/Restore-Simplified-NTP-launch.inc
 new file mode 100644
 --- /dev/null
