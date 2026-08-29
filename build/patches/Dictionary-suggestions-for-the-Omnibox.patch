@@ -10,10 +10,10 @@ Original License: BSD-3-Clause - https://spdx.org/licenses/BSD-3-Clause.html
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  chrome/android/java/res/layout/url_bar.xml    |  1 +
- .../browser/omnibox/LocationBarMediator.java  | 21 ++++++++++++---
- .../chrome/browser/omnibox/UrlBar.java        | 26 +++++++++++++++++++
+ .../browser/omnibox/LocationBarMediator.java  | 26 +++++++++++++-----
+ .../chrome/browser/omnibox/UrlBar.java        | 27 +++++++++++++++++++
  .../browser/omnibox/UrlBarViewBinder.java     |  1 +
- 4 files changed, 45 insertions(+), 4 deletions(-)
+ 4 files changed, 49 insertions(+), 6 deletions(-)
 
 diff --git a/chrome/android/java/res/layout/url_bar.xml b/chrome/android/java/res/layout/url_bar.xml
 --- a/chrome/android/java/res/layout/url_bar.xml
@@ -29,7 +29,7 @@ diff --git a/chrome/android/java/res/layout/url_bar.xml b/chrome/android/java/re
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/LocationBarMediator.java
-@@ -1007,7 +1007,7 @@ class LocationBarMediator
+@@ -1137,7 +1137,7 @@ class LocationBarMediator
                  // Existing text (e.g. if the user pasted via the fakebox) from the fake box
                  // should be restored after toggling the focus.
                  if (mCurrentInput != null && !mCurrentInput.getUserText().isEmpty()) {
@@ -38,7 +38,7 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
                  }
              }
  
-@@ -1052,7 +1052,7 @@ class LocationBarMediator
+@@ -1182,7 +1182,7 @@ class LocationBarMediator
       */
      @EnsuresNonNullIf("mCurrentInput")
      @VisibleForTesting
@@ -47,36 +47,46 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
          // Do not instantiate a new ephemeral session unless we're activating it as well.
          var session = FuseboxSessionState.from(mLocationBarDataProvider);
  
-@@ -1087,6 +1087,19 @@ class LocationBarMediator
-         mStatusCoordinator.setSiteSearchDataSupplier(mCurrentInput.getSiteSearchDataSupplier());
+@@ -1247,6 +1247,20 @@ class LocationBarMediator
+                 .addSyncObserverAndCallIfNonNull(mAutocompleteRequestTypeObserver);
  
-         UrlBarData data = UrlBarData.forNonUrlText(mCurrentInput.getUserText());
+         UrlBarData data = getUrlBarDataForCurrentInput(mCurrentInput);
 +        if (wasFocus) {
 +            data = mLocationBarDataProvider.getUrlBarData();
 +            GURL url = mLocationBarDataProvider.getUrlBarData().url;
 +            if (url != null && mTemplateUrlServiceSupplier.get() != null) {
 +                String searchParams =
-+                    mTemplateUrlServiceSupplier.get().getSearchQueryForUrl(url);
++                        mTemplateUrlServiceSupplier.get().getSearchQueryForUrl(url);
 +                if (searchParams != null && !searchParams.isEmpty()) {
 +                    mCurrentInput.setUserText(searchParams);
 +                    data = UrlBarData.forUrlAndText(data.url, data.displayText, searchParams);
 +                }
++
 +            }
-+            mCurrentInput.setSelection(0, Integer.MAX_VALUE);
++            mCurrentInput.setSelection(new TextSelection(0, Integer.MAX_VALUE));
 +        }
          mUrlCoordinator.setUrlBarData(
                  data, UrlBar.ScrollType.NO_SCROLL, mCurrentInput.getSelection());
- 
-@@ -1162,7 +1175,7 @@ class LocationBarMediator
-         // This call is permitted to happen before anyone else is activated, and
-         // must be called before everyone else cleans up.
+         updateButtonVisibility();
+@@ -1474,7 +1488,7 @@ class LocationBarMediator
          if (hasFocus) {
--            beginOrResumeInput(/* activateNewSession= */ true);
-+            beginOrResumeInput(/* activateNewSession= */ true, /* wasFocus */ true);
+             // Session may be pre-focused from the NTP.
+             if (mCurrentInput == null) {
+-                beginOrResumeInput(/* activateNewSession= */ true);
++                beginOrResumeInput(/* activateNewSession= */ true, /* wasFocus */ true);
+             }
          } else {
-             endInputInternal();
-         }
-@@ -2065,7 +2078,7 @@ class LocationBarMediator
+             endInput();
+@@ -1973,7 +1987,7 @@ class LocationBarMediator
+         if (actionTaken) {
+             currentInput.setAutocompleteState(AutocompleteState.ENABLED);
+             currentInput.setFocusReason(OmniboxFocusReason.FAKE_BOX_TAP);
+-            beginOrResumeInput(/* activateNewSession= */ false);
++            beginOrResumeInput(/* activateNewSession= */ false, /* wasFocus */ false);
+             requestUrlFocus();
+         } else {
+             // When no action is taken, just end the input session since the omnibox won't be
+@@ -2499,7 +2513,7 @@ class LocationBarMediator
          }
  
          // Wait for the Url focus change before refreshing autocomplete.
@@ -84,7 +94,16 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 +        beginOrResumeInput(/* activateNewSession= */ true, /* wasFocus */ false);
      }
  
-     /**
+     @Override
+@@ -2701,7 +2715,7 @@ class LocationBarMediator
+         mCurrentInput
+                 .setFocusReason(OmniboxFocusReason.TAP_AFTER_FOCUS_FROM_KEYBOARD)
+                 .setAutocompleteState(AutocompleteState.ENABLED);
+-        beginOrResumeInput(/* activateNewSession= */ false);
++        beginOrResumeInput(/* activateNewSession= */ false, /* wasFocus */ false);
+     }
+ 
+     // BackPressHandler implementation.
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBar.java
@@ -96,39 +115,45 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
  import android.os.SystemClock;
  import android.text.Editable;
  import android.text.InputType;
-@@ -57,6 +58,7 @@ import org.chromium.components.browser_ui.util.FirstDrawDetector;
- import org.chromium.components.omnibox.OmniboxFeatures;
+@@ -64,6 +65,7 @@ import org.chromium.components.omnibox.OmniboxFeatures;
+ import org.chromium.components.omnibox.TextSelection;
  import org.chromium.ui.KeyboardVisibilityDelegate;
- import org.chromium.ui.base.KeyNavigationUtil;
+ import org.chromium.ui.base.Clipboard;
 +import org.chromium.ui.base.DeviceFormFactor;
+ import org.chromium.ui.base.KeyNavigationUtil;
  import org.chromium.ui.display.DisplayAndroid;
  import org.chromium.ui.display.DisplayUtil;
- 
-@@ -112,6 +114,7 @@ public class UrlBar extends AutocompleteEditText {
+@@ -124,6 +126,7 @@ public class UrlBar extends AutocompleteEditText {
      private boolean mFocusEventEmitted;
      private boolean mAllowFocus = true;
      private boolean mAllowMultilineInput;
 +    private boolean mPendingSelectAll;
      private boolean mCurrentInputCanBeWrapped;
  
-     private boolean mPendingScroll;
-@@ -335,6 +338,29 @@ public class UrlBar extends AutocompleteEditText {
-             mPendingScroll = false;
+     /** Tracks whether a long-press was performed during the current touch gesture. */
+@@ -431,6 +434,18 @@ public class UrlBar extends AutocompleteEditText {
          }
          fixupTextDirection();
-+
+ 
 +        if (mPendingSelectAll) {
 +            UrlBar sender = this;
-+            new Handler().post(new Runnable() {
-+                @Override
-+                public void run() {
-+                    sender.selectAll();
-+                    mPendingSelectAll = false;
-+                }
-+            });
++            new Handler().post(
++                    new Runnable() {
++                        @Override
++                        public void run() {
++                            sender.selectAll();
++                            mPendingSelectAll = false;
++                        }
++                    });
 +        }
-+    }
 +
+         if (shouldApplyBoundsEllipsis()) {
+             // While focused for editing, clear all ellipsis overrides so the raw URL stream remains
+             // fully legible. When unfocused, append trailing ellipsis mapping against viewport
+@@ -1419,6 +1434,18 @@ public class UrlBar extends AutocompleteEditText {
+         }
+     }
+ 
 +    @Override
 +    public void selectAll() {
 +        if (!DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext()))
@@ -139,16 +164,18 @@ diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/brow
 +    @Override
 +    public int getAutofillType() {
 +        return AUTOFILL_TYPE_NONE;
-     }
- 
-     @Override
++    }
++
+     private void limitDisplayableLength() {
+         // To limit displayable length we replace the middle portion of the string with an ellipsis
+         // (or the end of the string when the toolbar variation is enabled). That affects only
 diff --git a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarViewBinder.java b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarViewBinder.java
 --- a/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarViewBinder.java
 +++ b/chrome/browser/ui/android/omnibox/java/src/org/chromium/chrome/browser/omnibox/UrlBarViewBinder.java
-@@ -100,6 +100,7 @@ class UrlBarViewBinder {
-                     selectionRange = Range.create(textLength, textLength);
-                 }
-                 view.setSelection(selectionRange.getLower(), selectionRange.getUpper());
+@@ -83,6 +83,7 @@ class UrlBarViewBinder {
+                 int textLength = view.getText().length();
+                 TextSelection selection = state.selection.trimTo(textLength);
+                 view.setSelection(selection.from, selection.to);
 +                view.selectAll();
                  view.requestAccessibilityFocus();
              }

@@ -12,12 +12,12 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../renderer/modules/webaudio/audio_buffer.cc      | 14 ++++++++++++++
  .../blink/renderer/modules/webaudio/audio_buffer.h |  2 ++
  .../renderer/modules/webaudio/audio_context.cc     |  5 ++++-
- .../modules/webaudio/base_audio_context.cc         | 12 ++++++++++++
+ .../modules/webaudio/base_audio_context.cc         | 13 +++++++++++++
  .../renderer/modules/webaudio/base_audio_context.h |  2 ++
  .../modules/webaudio/offline_audio_context.cc      |  1 +
  .../renderer/modules/webaudio/realtime_analyser.cc | 13 ++++++++++---
  .../platform/runtime_enabled_features.json5        |  5 ++---
- 11 files changed, 59 insertions(+), 7 deletions(-)
+ 11 files changed, 60 insertions(+), 7 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/AudioBuffer-AnalyserNode-fp-mitigations.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/AudioBuffer-AnalyserNode-fp-mitigations.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_h/AudioBuffer-AnalyserNode-fp-mitigations.inc
@@ -52,7 +52,7 @@ new file mode 100644
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
 --- a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.cc
-@@ -197,6 +197,20 @@ AudioBuffer::AudioBuffer(AudioBus* bus)
+@@ -201,6 +201,20 @@ AudioBuffer::AudioBuffer(AudioBus* bus)
    }
  }
  
@@ -76,15 +76,15 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.cc b/third
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.h b/third_party/blink/renderer/modules/webaudio/audio_buffer.h
 --- a/third_party/blink/renderer/modules/webaudio/audio_buffer.h
 +++ b/third_party/blink/renderer/modules/webaudio/audio_buffer.h
-@@ -115,6 +115,8 @@ class MODULES_EXPORT AudioBuffer final : public ScriptWrappable {
+@@ -116,6 +116,8 @@ class MODULES_EXPORT AudioBuffer final : public ScriptWrappable {
  
    std::unique_ptr<SharedAudioBuffer> CreateSharedAudioBuffer();
  
 +  void ShuffleAudioData();
 +
   private:
-   static DOMFloat32Array* CreateFloat32ArrayOrNull(
-       uint32_t length,
+   bool CreatedSuccessfully(unsigned desired_number_of_channels) const;
+ 
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
 --- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
@@ -96,7 +96,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/thir
  #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
  #include "third_party/blink/public/platform/web_audio_latency_hint.h"
  #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-@@ -1138,7 +1139,9 @@ double AudioContext::baseLatency() const {
+@@ -1189,7 +1190,9 @@ double AudioContext::baseLatency() const {
    DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_sequence_checker_);
    DCHECK(destination());
  
@@ -110,15 +110,18 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/thir
 diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b/third_party/blink/renderer/modules/webaudio/base_audio_context.cc
 --- a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/base_audio_context.cc
-@@ -28,6 +28,7 @@
+@@ -26,8 +26,10 @@
+ #include "third_party/blink/renderer/modules/webaudio/base_audio_context.h"
+ 
  #include "base/metrics/histogram_functions.h"
++#include "base/rand_util.h"
  #include "build/build_config.h"
  #include "media/base/audio_bus.h"
 +#include "third_party/blink/public/common/features.h"
  #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
  #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
  #include "third_party/blink/public/platform/platform.h"
-@@ -775,6 +776,17 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
+@@ -772,6 +774,17 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
    return To<LocalDOMWindow>(GetExecutionContext());
  }
  
@@ -127,7 +130,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b
 +  if (base::FeatureList::IsEnabled(features::kAudioContextShuffleEnabled)) {
 +    float rnd = 1.0f +
 +                (base::RandDouble() / 10000.0) *
-+                  (base::RandInt(0,10) > 5 ? 1.f : -1.f);
++                  (base::RandIntInclusive(0,10) > 5 ? 1.f : -1.f);
 +    return data * rnd;
 +  }
 +  return data;
@@ -135,11 +138,11 @@ diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b
 +
  void BaseAudioContext::NotifySourceNodeStartedProcessing(AudioNode* node) {
    DCHECK(IsMainThread());
-   DeferredTaskHandler::GraphAutoLocker locker(this);
+   DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
 diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.h b/third_party/blink/renderer/modules/webaudio/base_audio_context.h
 --- a/third_party/blink/renderer/modules/webaudio/base_audio_context.h
 +++ b/third_party/blink/renderer/modules/webaudio/base_audio_context.h
-@@ -331,6 +331,8 @@ class MODULES_EXPORT BaseAudioContext
+@@ -321,6 +321,8 @@ class MODULES_EXPORT BaseAudioContext
    // if the execution context does not exist.
    bool CheckExecutionContextAndThrowIfNecessary(ExceptionState&);
  
@@ -151,7 +154,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.h b/
 diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 --- a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
-@@ -418,6 +418,7 @@ void OfflineAudioContext::FireCompletionEvent() {
+@@ -431,6 +431,7 @@ void OfflineAudioContext::FireCompletionEvent() {
      if (!rendered_buffer) {
        return;
      }
@@ -218,7 +221,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc b/
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -719,9 +719,8 @@
+@@ -742,9 +742,8 @@
      {
        // AudioContext.playoutStats interface.
        // https://chromestatus.com/feature/5172818344148992

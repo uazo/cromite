@@ -7,7 +7,9 @@ Remove translate offer
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  chrome/browser/BUILD.gn                       |   2 +-
- .../live_translate_controller_factory.cc      |   4 -
+ chrome/browser/accessibility/BUILD.gn         |   4 +
+ .../accessibility/live_caption/BUILD.gn       |   8 +
+ .../live_translate_controller_factory.cc      |   8 +-
  chrome/browser/global_features.h              |   2 +
  .../xml/languages_detailed_preferences.xml    |  41 -----
  .../java/res/xml/languages_preferences.xml    |   4 -
@@ -15,24 +17,25 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  chrome/browser/on_device_translation/BUILD.gn |   2 +-
  .../on_device_speech_recognition_impl.cc      |   2 +
  .../on_device_speech_recognition_impl.h       |   2 +
- chrome/browser/ui/BUILD.gn                    |   2 +-
  .../strings/android_chrome_strings.grd        |   3 -
+ .../on_device_translation_internals/BUILD.gn  |   3 +
  ...translation_internals_page_handler_impl.cc |   8 +
+ chrome/test/BUILD.gn                          |  10 +-
  components/live_caption/BUILD.gn              |   3 +
  components/live_caption/features.cc           |   1 +
  .../buildflags/features.gni                   |   2 +-
  .../public/mojom/BUILD.gn                     |   2 +-
  .../core/browser/translate_manager.cc         |   5 +-
  .../core/browser/translate_script.cc          |  17 +-
- ...n_device_speech_recognition_engine_impl.cc |   3 +-
+ ...n_device_speech_recognition_engine_impl.cc |   2 +
  ...on_device_speech_recognition_engine_impl.h |   2 +
  media/base/media_switches.cc                  |   1 +
- 21 files changed, 36 insertions(+), 225 deletions(-)
+ 24 files changed, 57 insertions(+), 230 deletions(-)
 
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -6537,7 +6537,7 @@ static_library("browser") {
+@@ -4220,7 +4220,7 @@ source_set("browser") {
        "//chrome/browser/updates:update_metrics",
        "//chrome/services/system_signals/public/cpp/browser",
        "//chrome/updater:browser_sources",
@@ -41,38 +44,81 @@ diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
        "//components/supervised_user/core/common:features",
        "//components/themes:policy",
      ]
-diff --git a/chrome/browser/accessibility/live_translate_controller_factory.cc b/chrome/browser/accessibility/live_translate_controller_factory.cc
---- a/chrome/browser/accessibility/live_translate_controller_factory.cc
-+++ b/chrome/browser/accessibility/live_translate_controller_factory.cc
-@@ -63,10 +63,6 @@ LiveTranslateControllerFactory::BuildServiceInstanceForBrowserContext(
+diff --git a/chrome/browser/accessibility/BUILD.gn b/chrome/browser/accessibility/BUILD.gn
+--- a/chrome/browser/accessibility/BUILD.gn
++++ b/chrome/browser/accessibility/BUILD.gn
+@@ -104,6 +104,10 @@ source_set("impl") {
+       "//components/live_caption:live_translate",
+       "//components/on_device_translation",
+     ]
++    deps -= [
++      "//chrome/browser/on_device_translation",
++      "//components/on_device_translation",
++    ]
+   }
+ 
+   if (!is_android && !is_chromeos) {
+diff --git a/chrome/browser/accessibility/live_caption/BUILD.gn b/chrome/browser/accessibility/live_caption/BUILD.gn
+--- a/chrome/browser/accessibility/live_caption/BUILD.gn
++++ b/chrome/browser/accessibility/live_caption/BUILD.gn
+@@ -57,6 +57,11 @@ source_set("impl") {
+     "//ui/accessibility",
+   ]
+ 
++  deps -= [
++    "//chrome/browser/on_device_translation",
++    "//components/on_device_translation",
++  ]
++
+   if (is_chromeos) {
+     deps += [ "//chrome/browser/ash/accessibility" ]
+   }
+@@ -119,6 +124,9 @@ source_set("browser_tests") {
+     "//content/test:test_support",
+     "//testing/gtest",
+   ]
++  deps -= [
++    "//components/on_device_translation",
++  ]
+ }
+ 
+ source_set("test_support") {
+diff --git a/chrome/browser/accessibility/live_caption/live_translate_controller_factory.cc b/chrome/browser/accessibility/live_caption/live_translate_controller_factory.cc
+--- a/chrome/browser/accessibility/live_caption/live_translate_controller_factory.cc
++++ b/chrome/browser/accessibility/live_caption/live_translate_controller_factory.cc
+@@ -65,13 +65,7 @@ LiveTranslateControllerFactory::BuildServiceInstanceForBrowserContext(
    // Only set on_device_dispatcher if feature flag is set.
    if (base::FeatureList::IsEnabled(
            live_caption::kLiveCaptionOnDeviceTranslation)) {
 -    on_device_dispatcher = std::make_unique<TranslationDispatcherOnDevice>(
 -        std::make_unique<
 -            on_device_translation::OnDeviceTranslationServiceController>(
--            profile->GetPrefs(), ""));
+-            on_device_translation::CreateOnDeviceTranslationServiceLauncher(),
+-            /*service_display_name_suffix=*/"",
+-            on_device_translation::OnDeviceTranslationInstaller::
+-                GetInstance()));
++
    }
    google_api_dispatcher = std::make_unique<GoogleApiTranslationDispatcher>(
        google_apis::GetAPIKey(), context);
 diff --git a/chrome/browser/global_features.h b/chrome/browser/global_features.h
 --- a/chrome/browser/global_features.h
 +++ b/chrome/browser/global_features.h
-@@ -261,8 +261,10 @@ class GlobalFeatures {
+@@ -285,8 +285,10 @@ class GlobalFeatures {
  #endif  // BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
  
  #if !BUILDFLAG(IS_ANDROID)
-+#if false // BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
++#if false  // BUILDFLAG(ENABLE_ON_DEVICE_TRANSLATION)
    std::unique_ptr<on_device_translation::OnDeviceTranslationInstaller>
        on_device_translation_installer_;
 +#endif
  
    std::unique_ptr<ProfileLaunchObserver> profile_launch_observer_;
- #endif  // !BUILDFLAG(IS_ANDROID)
+ 
 diff --git a/chrome/browser/language/android/java/res/xml/languages_detailed_preferences.xml b/chrome/browser/language/android/java/res/xml/languages_detailed_preferences.xml
 --- a/chrome/browser/language/android/java/res/xml/languages_detailed_preferences.xml
 +++ b/chrome/browser/language/android/java/res/xml/languages_detailed_preferences.xml
-@@ -39,45 +39,4 @@ found in the LICENSE file.
+@@ -40,45 +40,4 @@ found in the LICENSE file.
  
      </PreferenceCategory>
  
@@ -121,8 +167,8 @@ diff --git a/chrome/browser/language/android/java/res/xml/languages_detailed_pre
 diff --git a/chrome/browser/language/android/java/res/xml/languages_preferences.xml b/chrome/browser/language/android/java/res/xml/languages_preferences.xml
 --- a/chrome/browser/language/android/java/res/xml/languages_preferences.xml
 +++ b/chrome/browser/language/android/java/res/xml/languages_preferences.xml
-@@ -18,8 +18,4 @@ found in the LICENSE file.
-         android:layout="@layout/languages_preference"
+@@ -19,8 +19,4 @@ found in the LICENSE file.
+         android:selectable="false"
          android:widgetLayout="@layout/accept_languages_list" />
  
 -    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
@@ -352,7 +398,7 @@ diff --git a/chrome/browser/on_device_translation/BUILD.gn b/chrome/browser/on_d
 diff --git a/chrome/browser/speech/on_device_speech_recognition_impl.cc b/chrome/browser/speech/on_device_speech_recognition_impl.cc
 --- a/chrome/browser/speech/on_device_speech_recognition_impl.cc
 +++ b/chrome/browser/speech/on_device_speech_recognition_impl.cc
-@@ -175,6 +175,7 @@ void OnDeviceSpeechRecognitionImpl::Install(
+@@ -254,6 +254,7 @@ void OnDeviceSpeechRecognitionImpl::Install(
      language_installation_callbacks_[language_names_key].push_back(
          std::move(callback));
  
@@ -360,18 +406,18 @@ diff --git a/chrome/browser/speech/on_device_speech_recognition_impl.cc b/chrome
      model_broker_client_ =
          optimization_guide_keyed_service->CreateModelBrokerClient();
  
-@@ -189,6 +190,7 @@ void OnDeviceSpeechRecognitionImpl::Install(
-         .WaitForClient(base::BindOnce(
-             &OnDeviceSpeechRecognitionImpl::OnModelClientAvailable,
-             weak_ptr_factory_.GetWeakPtr()));
+@@ -271,6 +272,7 @@ void OnDeviceSpeechRecognitionImpl::Install(
+     model_broker_client_->GetSubscriber(feature).WaitForClient(
+         base::BindOnce(&OnDeviceSpeechRecognitionImpl::OnModelClientAvailable,
+                        weak_ptr_factory_.GetWeakPtr()));
 +#endif
    } else {
-     language_installation_callbacks_[language_names_key].push_back(
-         std::move(callback));
+     std::set<std::string> pending_languages;
+ 
 diff --git a/chrome/browser/speech/on_device_speech_recognition_impl.h b/chrome/browser/speech/on_device_speech_recognition_impl.h
 --- a/chrome/browser/speech/on_device_speech_recognition_impl.h
 +++ b/chrome/browser/speech/on_device_speech_recognition_impl.h
-@@ -102,7 +102,9 @@ class OnDeviceSpeechRecognitionImpl
+@@ -108,7 +108,9 @@ class OnDeviceSpeechRecognitionImpl
    base::flat_map<std::set<std::string>, std::list<InstallCallback>>
        language_installation_callbacks_;
  
@@ -381,18 +427,6 @@ diff --git a/chrome/browser/speech/on_device_speech_recognition_impl.h b/chrome/
  #endif  // !BUILDFLAG(IS_ANDROID)
  
    mojo::Receiver<media::mojom::OnDeviceSpeechRecognition> receiver_{this};
-diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
---- a/chrome/browser/ui/BUILD.gn
-+++ b/chrome/browser/ui/BUILD.gn
-@@ -3148,7 +3148,7 @@ static_library("ui") {
-       "//chrome/updater:browser_sources",
-       "//components/capture_mode",
-       "//components/country_codes",
--      "//components/on_device_translation",
-+      # "//components/on_device_translation",
-       "//components/services/unzip/public/cpp",
-       "//services/audio/public/mojom",
-       "//services/video_capture/public/mojom",
 diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chrome/browser/ui/android/strings/android_chrome_strings.grd
 --- a/chrome/browser/ui/android/strings/android_chrome_strings.grd
 +++ b/chrome/browser/ui/android/strings/android_chrome_strings.grd
@@ -406,6 +440,18 @@ diff --git a/chrome/browser/ui/android/strings/android_chrome_strings.grd b/chro
        <message name="IDS_LANGUAGES_SEND_TRANSLATE_SWITCH" desc="Appears next to the switch controlling whether or not Chrome will offer to translate pages in other languages.  When enabled the Google Translate UI will be displayed on web pages that are not in the user's preferred language(s).">
          Offer to send pages in other languages to Google Translate
        </message>
+diff --git a/chrome/browser/ui/webui/on_device_translation_internals/BUILD.gn b/chrome/browser/ui/webui/on_device_translation_internals/BUILD.gn
+--- a/chrome/browser/ui/webui/on_device_translation_internals/BUILD.gn
++++ b/chrome/browser/ui/webui/on_device_translation_internals/BUILD.gn
+@@ -33,5 +33,8 @@ if (is_win || is_mac || is_linux) {
+       "//mojo/public/cpp/bindings",
+       "//ui/webui",
+     ]
++    deps -= [
++      "//components/on_device_translation",
++    ]
+   }
+ }
 diff --git a/chrome/browser/ui/webui/on_device_translation_internals/on_device_translation_internals_page_handler_impl.cc b/chrome/browser/ui/webui/on_device_translation_internals/on_device_translation_internals_page_handler_impl.cc
 --- a/chrome/browser/ui/webui/on_device_translation_internals/on_device_translation_internals_page_handler_impl.cc
 +++ b/chrome/browser/ui/webui/on_device_translation_internals/on_device_translation_internals_page_handler_impl.cc
@@ -460,10 +506,30 @@ diff --git a/chrome/browser/ui/webui/on_device_translation_internals/on_device_t
    page_->OnLanguagePackStatus(std::move(info_list));
  }
  
+diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
+--- a/chrome/test/BUILD.gn
++++ b/chrome/test/BUILD.gn
+@@ -10633,10 +10633,12 @@ if (!is_android && !is_chromeos_device) {
+ 
+     sources += [ "../browser/media/router/discovery/access_code/access_code_cast_sink_service_browsertest.cc" ]
+ 
+-    deps += [
+-      "//components/on_device_translation:public",
+-      "//components/soda",
+-    ]
++    if (enable_on_device_translation) {
++      deps += [
++        "//components/on_device_translation:public",
++        "//components/soda",
++      ]
++    }
+ 
+     if (safe_browsing_mode == 1) {
+       sources += [ "../browser/safe_browsing/safe_browsing_navigation_observer_interactive_test.cc" ]
 diff --git a/components/live_caption/BUILD.gn b/components/live_caption/BUILD.gn
 --- a/components/live_caption/BUILD.gn
 +++ b/components/live_caption/BUILD.gn
-@@ -109,6 +109,9 @@ if (!is_android && !is_ios) {
+@@ -114,6 +114,9 @@ if (!is_android && !is_ios) {
        "//ui/native_theme",
      ]
  
@@ -476,13 +542,14 @@ diff --git a/components/live_caption/BUILD.gn b/components/live_caption/BUILD.gn
 diff --git a/components/live_caption/features.cc b/components/live_caption/features.cc
 --- a/components/live_caption/features.cc
 +++ b/components/live_caption/features.cc
-@@ -10,5 +10,6 @@ namespace live_caption {
+@@ -10,6 +10,7 @@ namespace live_caption {
  // on-device model is ready to be rolled out.
  BASE_FEATURE(kLiveCaptionOnDeviceTranslation,
               base::FEATURE_DISABLED_BY_DEFAULT);
 +SET_CROMITE_FEATURE_DISABLED(kLiveCaptionOnDeviceTranslation);
  
- }  // namespace live_caption
+ // By default, do not restrict on-device translation to English-only.
+ BASE_FEATURE(kLiveCaptionOnDeviceTranslationEnglishOnly,
 diff --git a/components/on_device_translation/buildflags/features.gni b/components/on_device_translation/buildflags/features.gni
 --- a/components/on_device_translation/buildflags/features.gni
 +++ b/components/on_device_translation/buildflags/features.gni
@@ -508,7 +575,7 @@ diff --git a/components/on_device_translation/public/mojom/BUILD.gn b/components
 diff --git a/components/translate/core/browser/translate_manager.cc b/components/translate/core/browser/translate_manager.cc
 --- a/components/translate/core/browser/translate_manager.cc
 +++ b/components/translate/core/browser/translate_manager.cc
-@@ -859,8 +859,9 @@ void TranslateManager::FilterIsTranslatePossible(
+@@ -865,8 +865,9 @@ void TranslateManager::FilterIsTranslatePossible(
          TriggerDecision::kDisabledOffline);
    }
  
@@ -523,7 +590,7 @@ diff --git a/components/translate/core/browser/translate_manager.cc b/components
 diff --git a/components/translate/core/browser/translate_script.cc b/components/translate/core/browser/translate_script.cc
 --- a/components/translate/core/browser/translate_script.cc
 +++ b/components/translate/core/browser/translate_script.cc
-@@ -137,20 +137,13 @@ void TranslateScript::OnScriptFetchComplete(bool success,
+@@ -204,20 +204,13 @@ void TranslateScript::OnScriptFetchComplete(bool success,
      data_ = base::StringPrintf("var translateApiKey = '%s';\n",
                                 google_apis::GetAPIKey().c_str());
  
@@ -552,40 +619,39 @@ diff --git a/components/translate/core/browser/translate_script.cc b/components/
 diff --git a/content/browser/speech/on_device_speech_recognition_engine_impl.cc b/content/browser/speech/on_device_speech_recognition_engine_impl.cc
 --- a/content/browser/speech/on_device_speech_recognition_engine_impl.cc
 +++ b/content/browser/speech/on_device_speech_recognition_engine_impl.cc
-@@ -136,7 +136,7 @@ void OnDeviceSpeechRecognitionEngine::CreateModelClientOnUI(
-   if (!rfh) {
+@@ -144,6 +144,7 @@ void OnDeviceSpeechRecognitionEngine::Core::CreateModelClient(
      return;
    }
--
+ 
 +#if false
-   core_->model_broker_client =
-       GetContentClient()->browser()->CreateModelBrokerClient(
-           rfh->GetBrowserContext());
-@@ -151,6 +151,7 @@ void OnDeviceSpeechRecognitionEngine::CreateModelClientOnUI(
-             &OnDeviceSpeechRecognitionEngine::OnModelClientAvailable,
-             weak_factory_.GetWeakPtr()));
+   model_broker_client_ = GetContentClient()->browser()->CreateModelBrokerClient(
+       rfh->GetBrowserContext());
+ 
+@@ -159,6 +160,7 @@ void OnDeviceSpeechRecognitionEngine::Core::CreateModelClient(
+     model_broker_client_->GetSubscriber(feature).WaitForClient(base::BindOnce(
+         &Core::OnModelClientAvailable, weak_factory_.GetWeakPtr()));
    }
 +#endif
  }
  
- void OnDeviceSpeechRecognitionEngine::OnModelClientAvailable(
+ void OnDeviceSpeechRecognitionEngine::Core::OnModelClientAvailable(
 diff --git a/content/browser/speech/on_device_speech_recognition_engine_impl.h b/content/browser/speech/on_device_speech_recognition_engine_impl.h
 --- a/content/browser/speech/on_device_speech_recognition_engine_impl.h
 +++ b/content/browser/speech/on_device_speech_recognition_engine_impl.h
-@@ -67,7 +67,9 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
+@@ -85,7 +85,9 @@ class CONTENT_EXPORT OnDeviceSpeechRecognitionEngine
  
-     mojo::Remote<on_device_model::mojom::Session> session;
-     base::WeakPtr<optimization_guide::ModelClient> model_client;
+     mojo::Remote<on_device_model::mojom::Session> session_;
+     base::WeakPtr<optimization_guide::ModelClient> model_client_;
 +#if false
-     std::unique_ptr<optimization_guide::ModelBrokerClient> model_broker_client;
+     std::unique_ptr<optimization_guide::ModelBrokerClient> model_broker_client_;
 +#endif
-   };
  
-  private:
+     std::optional<int> sample_rate_hz_;
+     bool session_created_ = false;
 diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
 --- a/media/base/media_switches.cc
 +++ b/media/base/media_switches.cc
-@@ -1823,6 +1823,7 @@ bool IsHardwareSecureDecryptionEnabled() {
+@@ -1926,6 +1926,7 @@ bool IsHardwareSecureDecryptionEnabled() {
  }
  
  bool IsLiveTranslateEnabled() {

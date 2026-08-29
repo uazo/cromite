@@ -24,14 +24,14 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../extensions/api/proxy/proxy_api_helpers.cc |   2 +-
  chrome/browser/net/proxy_service_factory.cc   |  24 +-
  chrome/browser/net/proxy_service_factory.h    |   3 +
- chrome/browser/prefs/browser_prefs.cc         |   4 +
+ chrome/browser/prefs/browser_prefs.cc         |   2 +
  .../prefs/chrome_command_line_pref_store.cc   |   2 +-
  chrome/browser/resources/proxy_config.css     |  61 +++
  chrome/browser/resources/proxy_config.html    |  77 ++++
  chrome/browser/resources/proxy_config.js      | 278 +++++++++++++
- chrome/browser/ui/BUILD.gn                    |   2 +
- .../browser/ui/webui/chrome_web_ui_configs.cc |   5 +-
- chrome/browser/ui/webui/proxy_config_ui.cc    | 389 ++++++++++++++++++
+ chrome/browser/ui/webui/BUILD.gn              |   2 +
+ .../browser/ui/webui/chrome_web_ui_configs.cc |   3 +
+ chrome/browser/ui/webui/proxy_config_ui.cc    | 390 ++++++++++++++++++
  chrome/browser/ui/webui/proxy_config_ui.h     |  41 ++
  chrome/common/webui_url_constants.cc          |   1 +
  chrome/common/webui_url_constants.h           |   2 +
@@ -43,7 +43,7 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  net/proxy_resolution/pac_file_fetcher_impl.cc |   8 -
  net/proxy_resolution/proxy_config.cc          |  53 ++-
  net/proxy_resolution/proxy_config.h           |   3 +
- 27 files changed, 986 insertions(+), 27 deletions(-)
+ 27 files changed, 984 insertions(+), 26 deletions(-)
  create mode 100644 chrome/browser/resources/proxy_config.css
  create mode 100644 chrome/browser/resources/proxy_config.html
  create mode 100644 chrome/browser/resources/proxy_config.js
@@ -80,7 +80,7 @@ diff --git a/chrome/android/java/res/xml/privacy_preferences.xml b/chrome/androi
 diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 --- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
-@@ -110,6 +110,7 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+@@ -108,6 +108,7 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
      private static final String PREF_PASSWORD_LEAK_DETECTION = "password_leak_detection";
      private static final String PREF_SYNC_AND_SERVICES_LINK = "sync_and_services_link";
      private static final String PREF_PRIVACY_SANDBOX = "privacy_sandbox";
@@ -91,7 +91,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/setting
 diff --git a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc b/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 --- a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
 +++ b/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc
-@@ -420,6 +420,7 @@ ChromeAutocompleteProviderClient::GetBuiltinsToProvideAsUserTypes() {
+@@ -438,6 +438,7 @@ ChromeAutocompleteProviderClient::GetBuiltinsToProvideAsUserTypes() {
    builtins_to_provide.push_back(chrome::kChromeUISettingsURL16);
  #endif
    builtins_to_provide.push_back(chrome::kChromeUIVersionURL16);
@@ -102,7 +102,7 @@ diff --git a/chrome/browser/autocomplete/chrome_autocomplete_provider_client.cc 
 diff --git a/chrome/browser/browser_resources.grd b/chrome/browser/browser_resources.grd
 --- a/chrome/browser/browser_resources.grd
 +++ b/chrome/browser/browser_resources.grd
-@@ -236,6 +236,9 @@
+@@ -192,6 +192,9 @@
        <if expr="_google_chrome">
          <include name="IDR_PREF_HASH_SEED_BIN" file="resources\settings\internal\pref_hash_seed.bin" type="BINDATA" />
        </if>
@@ -199,24 +199,22 @@ diff --git a/chrome/browser/net/proxy_service_factory.h b/chrome/browser/net/pro
 diff --git a/chrome/browser/prefs/browser_prefs.cc b/chrome/browser/prefs/browser_prefs.cc
 --- a/chrome/browser/prefs/browser_prefs.cc
 +++ b/chrome/browser/prefs/browser_prefs.cc
-@@ -212,6 +212,8 @@
- #include "printing/buildflags/buildflags.h"
- #include "rlz/buildflags/buildflags.h"
- 
+@@ -51,6 +51,7 @@
+ #include "chrome/browser/metrics/tab_stats/tab_stats_tracker.h"
+ #include "chrome/browser/net/net_error_tab_helper.h"
+ #include "chrome/browser/net/profile_network_context_service.h"
 +#include "chrome/browser/net/proxy_service_factory.h"
-+
- #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
- #include "chrome/browser/background/extensions/background_mode_manager.h"
- #endif
-@@ -1374,6 +1376,8 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
-   component_updater::RegisterPrefs(registry);
-   domain_reliability::RegisterPrefs(registry);
-   embedder_support::OriginTrialPrefs::RegisterPrefs(registry);
+ #include "chrome/browser/net/system_network_context_manager.h"
+ #include "chrome/browser/new_tab_page/ntp_pref_names.h"
+ #include "chrome/browser/notifications/notification_display_service_impl.h"
+@@ -1436,6 +1437,7 @@ void RegisterLocalState(PrefRegistrySimple* registry) {
+   ProfileAttributesEntry::RegisterLocalStatePrefs(registry);
+   ProfileAttributesStorage::RegisterPrefs(registry);
+   ProfileNetworkContextService::RegisterLocalStatePrefs(registry);
 +  ProxyServiceFactory::RegisterPrefs(registry);
-+
-   enterprise_reporting::RegisterLocalStatePrefs(registry);
-   ExternalProtocolHandler::RegisterPrefs(registry);
-   flags_ui::PrefServiceFlagsStorage::RegisterPrefs(registry);
+   profiles::RegisterPrefs(registry);
+   feature_engagement::RegisterLocalStatePrefs(registry);
+ #if BUILDFLAG(IS_ANDROID)
 diff --git a/chrome/browser/prefs/chrome_command_line_pref_store.cc b/chrome/browser/prefs/chrome_command_line_pref_store.cc
 --- a/chrome/browser/prefs/chrome_command_line_pref_store.cc
 +++ b/chrome/browser/prefs/chrome_command_line_pref_store.cc
@@ -660,37 +658,35 @@ new file mode 100644
 +
 +  return ProxyConfigView;
 +})();
-diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
---- a/chrome/browser/ui/BUILD.gn
-+++ b/chrome/browser/ui/BUILD.gn
-@@ -156,6 +156,8 @@ static_library("ui") {
-     "webui/metrics_internals/metrics_internals_ui.h",
-     "webui/net_export_ui.cc",
-     "webui/net_export_ui.h",
-+    "webui/proxy_config_ui.cc",
-+    "webui/proxy_config_ui.h",
-     "webui/net_internals/net_internals_ui.cc",
-     "webui/net_internals/net_internals_ui.h",
-     "webui/ntp_tiles_internals_ui.cc",
+diff --git a/chrome/browser/ui/webui/BUILD.gn b/chrome/browser/ui/webui/BUILD.gn
+--- a/chrome/browser/ui/webui/BUILD.gn
++++ b/chrome/browser/ui/webui/BUILD.gn
+@@ -33,6 +33,8 @@ source_set("configs") {
+     "chrome_untrusted_web_ui_configs.h",
+     "chrome_web_ui_configs.cc",
+     "chrome_web_ui_configs.h",
++    "proxy_config_ui.cc",
++    "proxy_config_ui.h",
+   ]
+ 
+   configs += [ "//build/config/compiler:wexit_time_destructors" ]
 diff --git a/chrome/browser/ui/webui/chrome_web_ui_configs.cc b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 --- a/chrome/browser/ui/webui/chrome_web_ui_configs.cc
 +++ b/chrome/browser/ui/webui/chrome_web_ui_configs.cc
-@@ -64,6 +64,9 @@
- #include "extensions/buildflags/buildflags.h"
- #include "printing/buildflags/buildflags.h"
- 
+@@ -48,6 +48,7 @@
+ #include "chrome/browser/ui/webui/personal_context_internals/personal_context_internals_ui.h"
+ #include "chrome/browser/ui/webui/policy/policy_ui.h"
+ #include "chrome/browser/ui/webui/predictors/predictors_ui.h"
 +#include "chrome/browser/ui/webui/proxy_config_ui.h"
-+
-+
- #if BUILDFLAG(ENABLE_WEBUI_CERTIFICATE_VIEWER)
- #include "chrome/browser/ui/webui/certificate_viewer/certificate_viewer_ui.h"
- #endif
-@@ -453,7 +456,7 @@ void RegisterChromeWebUIConfigs() {
-   map.AddWebUIConfig(std::make_unique<SigninErrorUIConfig>());
+ #include "chrome/browser/ui/webui/regional_capabilities_internals/regional_capabilities_internals_ui.h"
+ #include "chrome/browser/ui/webui/saved_tab_groups_unsupported/saved_tab_groups_unsupported_ui.h"
+ #include "chrome/browser/ui/webui/segmentation_internals/segmentation_internals_ui.h"
+@@ -488,6 +489,8 @@ void RegisterChromeWebUIConfigs() {
    map.AddWebUIConfig(std::make_unique<SigninEmailConfirmationUIConfig>());
  #endif  //  !BUILDFLAG(IS_CHROMEOS) && !BUILDFLAG(IS_ANDROID)
--
+ 
 +  map.AddWebUIConfig(std::make_unique<ProxyConfigUIConfig>());
++
  #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
    map.AddWebUIConfig(
        std::make_unique<safe_browsing::ChromeSafeBrowsingUIConfig>());
@@ -698,7 +694,7 @@ diff --git a/chrome/browser/ui/webui/proxy_config_ui.cc b/chrome/browser/ui/webu
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/ui/webui/proxy_config_ui.cc
-@@ -0,0 +1,389 @@
+@@ -0,0 +1,390 @@
 +/*
 +    This file is part of Bromite.
 +
@@ -726,6 +722,7 @@ new file mode 100644
 +
 +#include "base/command_line.h"
 +#include "base/lazy_instance.h"
++#include "base/logging.h"
 +#include "base/memory/ref_counted.h"
 +#include "base/strings/string_util.h"
 +#include "base/strings/utf_string_conversions.h"
@@ -1137,7 +1134,7 @@ new file mode 100644
 diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_constants.cc
 --- a/chrome/common/webui_url_constants.cc
 +++ b/chrome/common/webui_url_constants.cc
-@@ -120,6 +120,7 @@ bool IsSystemWebUIHost(std::string_view host) {
+@@ -121,6 +121,7 @@ bool IsSystemWebUIHost(std::string_view host) {
  // These hosts will also be suggested by BuiltinProvider.
  base::span<const base::cstring_view> ChromeURLHosts() {
    static constexpr auto kChromeURLHosts = std::to_array<base::cstring_view>({
@@ -1148,7 +1145,7 @@ diff --git a/chrome/common/webui_url_constants.cc b/chrome/common/webui_url_cons
 diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
 --- a/chrome/common/webui_url_constants.h
 +++ b/chrome/common/webui_url_constants.h
-@@ -210,6 +210,8 @@ inline constexpr char kChromeUINetInternalsHost[] = "net-internals";
+@@ -233,6 +233,8 @@ inline constexpr char kChromeUINetInternalsHost[] = "net-internals";
  inline constexpr char kChromeUINetInternalsURL[] = "chrome://net-internals/";
  inline constexpr char kChromeUINewTabHost[] = "newtab";
  inline constexpr char kChromeUINewTabFooterHost[] = "newtab-footer";
