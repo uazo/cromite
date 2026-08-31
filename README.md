@@ -142,7 +142,7 @@ working in progress in https://github.com/uazo/cromite/issues/771
 This happens because, starting with Ubuntu 24.04, Apparmor
 restricts the use of unprivileged user namespaces. To fix this, you have several options:
 #### 1. Creating an apparmor profile for cromite
-Create `/etc/apparmor.d/chrome`, and write:
+Create `/etc/apparmor.d/cromite`, and write:
 ```
 abi <abi/4.0>,
 include <tunables/global>
