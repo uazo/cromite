@@ -169,8 +169,8 @@ MediaQueryParser::MediaQueryParser(ParserType parser_type,
       fake_context_(*MakeGarbageCollected<CSSParserContext>(
           kHTMLStandardMode,
           SecureContextMode::kInsecureContext,
-          DynamicTo<LocalDOMWindow>(execution_context)
-              ? DynamicTo<LocalDOMWindow>(execution_context)->document()
+          IsA<LocalDOMWindow>(execution_context)
+              ? To<LocalDOMWindow>(*execution_context).document()
               : nullptr)) {}
 
 namespace {
@@ -319,7 +319,7 @@ AtomicString MediaQueryParser::ConsumeAllowedName(
   }
   AtomicString name = stream.Peek().Value().ToAtomicString();
   if (!feature_set.IsCaseSensitive(name)) {
-    name = name.LowerASCII();
+    name = name.ToAsciiLower();
   }
   if (!feature_set.IsAllowed(name)) {
     return g_null_atom;
