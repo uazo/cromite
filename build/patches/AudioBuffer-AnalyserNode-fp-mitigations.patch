@@ -11,13 +11,13 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../AudioBuffer-AnalyserNode-fp-mitigations.inc    |  1 +
  .../renderer/modules/webaudio/audio_buffer.cc      | 14 ++++++++++++++
  .../blink/renderer/modules/webaudio/audio_buffer.h |  2 ++
- .../renderer/modules/webaudio/audio_context.cc     |  5 ++++-
+ .../renderer/modules/webaudio/audio_context.cc     |  4 +++-
  .../modules/webaudio/base_audio_context.cc         | 13 +++++++++++++
  .../renderer/modules/webaudio/base_audio_context.h |  2 ++
  .../modules/webaudio/offline_audio_context.cc      |  1 +
  .../renderer/modules/webaudio/realtime_analyser.cc | 13 ++++++++++---
- .../platform/runtime_enabled_features.json5        |  5 ++---
- 11 files changed, 60 insertions(+), 7 deletions(-)
+ .../platform/runtime_enabled_features.json5        |  6 ++++++
+ 11 files changed, 63 insertions(+), 4 deletions(-)
  create mode 100644 cromite_flags/chrome/browser/about_flags_cc/AudioBuffer-AnalyserNode-fp-mitigations.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_cc/AudioBuffer-AnalyserNode-fp-mitigations.inc
  create mode 100644 cromite_flags/third_party/blink/common/features_h/AudioBuffer-AnalyserNode-fp-mitigations.inc
@@ -88,22 +88,14 @@ diff --git a/third_party/blink/renderer/modules/webaudio/audio_buffer.h b/third_
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
 --- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
-@@ -22,6 +22,7 @@
- #include "third_party/blink/public/common/mediastream/media_devices.h"
- #include "third_party/blink/public/mojom/permissions/permission_status.mojom-blink.h"
- #include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
-+#include "third_party/blink/public/common/features.h"
- #include "third_party/blink/public/platform/modules/webrtc/webrtc_logging.h"
- #include "third_party/blink/public/platform/web_audio_latency_hint.h"
- #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
-@@ -1189,7 +1190,9 @@ double AudioContext::baseLatency() const {
+@@ -1242,7 +1242,9 @@ double AudioContext::baseLatency() const {
    DCHECK_CALLED_ON_VALID_SEQUENCE(main_thread_sequence_checker_);
-   DCHECK(destination());
+   DCHECK(destinationNode());
  
 -  return base_latency_;
-+  // remove precision past two decimal digits
-+  int l = base_latency_ * 100;
-+  return double(l)/100;
++  // Remove precision past two decimal digits.
++  int latency = base_latency_ * 100;
++  return static_cast<double>(latency) / 100;
  }
  
  double AudioContext::outputLatency() const {
@@ -121,7 +113,7 @@ diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b
  #include "third_party/blink/public/mojom/devtools/console_message.mojom-blink.h"
  #include "third_party/blink/public/mojom/frame/lifecycle.mojom-shared.h"
  #include "third_party/blink/public/platform/platform.h"
-@@ -772,6 +774,17 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
+@@ -773,6 +775,17 @@ LocalDOMWindow* BaseAudioContext::GetWindow() const {
    return To<LocalDOMWindow>(GetExecutionContext());
  }
  
@@ -142,19 +134,19 @@ diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.cc b
 diff --git a/third_party/blink/renderer/modules/webaudio/base_audio_context.h b/third_party/blink/renderer/modules/webaudio/base_audio_context.h
 --- a/third_party/blink/renderer/modules/webaudio/base_audio_context.h
 +++ b/third_party/blink/renderer/modules/webaudio/base_audio_context.h
-@@ -321,6 +321,8 @@ class MODULES_EXPORT BaseAudioContext
+@@ -326,6 +326,8 @@ class MODULES_EXPORT BaseAudioContext
    // if the execution context does not exist.
    bool CheckExecutionContextAndThrowIfNecessary(ExceptionState&);
  
 +  static float ShuffleAudioData(float data, unsigned index);
 +
-  protected:
-   enum class ContextType { kRealtimeContext, kOfflineContext };
- 
+   wtf_size_t PendingPromiseResolverCountForTesting() const {
+     return pending_promise_resolvers_.size();
+   }
 diff --git a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 --- a/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/offline_audio_context.cc
-@@ -431,6 +431,7 @@ void OfflineAudioContext::FireCompletionEvent() {
+@@ -436,6 +436,7 @@ void OfflineAudioContext::FireCompletionEvent() {
      if (!rendered_buffer) {
        return;
      }
@@ -221,16 +213,17 @@ diff --git a/third_party/blink/renderer/modules/webaudio/realtime_analyser.cc b/
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -742,9 +742,8 @@
-     {
-       // AudioContext.playoutStats interface.
-       // https://chromestatus.com/feature/5172818344148992
--      name: "AudioContextPlayoutStats",
--      origin_trial_feature_name: "AudioContextPlayoutStats",
--      status: "experimental",
+@@ -732,6 +732,12 @@
+       name: "AudioContextPlaybackStats",
+       status: "stable",
+     },
++    {
++      // AudioContext.playoutStats interface.
++      // https://chromestatus.com/feature/5172818344148992
 +      name: "AudioContextPlayoutStats",   // keep AudioContextPlayoutStats
 +      status: "experimental",             // experimental
-     },
++    },
      {
        name: "AudioContextSetSinkId",
+       status: "stable",
 --

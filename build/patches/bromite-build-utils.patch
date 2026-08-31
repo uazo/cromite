@@ -3,7 +3,7 @@ Date: Fri, 9 Jun 2023 15:11:46 +0000
 Subject: bromite build utils
 
 ---
- build/android/gyp/java_cpp_enum.py            |  37 +++++-
+ build/android/gyp/java_cpp_enum.py            |  34 +++++-
  build/android/gyp/util/build_utils.py         |  25 +++-
  build/bromite/bromite_utils.gni               |  79 +++++++++++++
  build/bromite/gyp/cpp_bromite_include.py      |  35 ++++++
@@ -21,143 +21,150 @@ Subject: bromite build utils
  tools/grit/grit/grd_reader.py                 |  27 ++++-
  tools/grit/grit_rule.gni                      |   2 +-
  tools/grit/preprocess_if_expr.py              |  32 +++++-
- 18 files changed, 543 insertions(+), 20 deletions(-)
+ 18 files changed, 540 insertions(+), 20 deletions(-)
  create mode 100644 build/bromite/bromite_utils.gni
  create mode 100644 build/bromite/gyp/cpp_bromite_include.py
  create mode 100644 build/bromite/gyp/cpp_bromite_include.pydeps
  create mode 100644 build/bromite/gyp/java_bromite_impl.py
  create mode 100644 build/bromite/gyp/java_bromite_impl.pydeps
- create mode 100755 chrome/browser/flags/android/cromite_native_utils.cc
- create mode 100755 chrome/browser/flags/android/cromite_native_utils.h
- create mode 100755 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java
+ create mode 100644 chrome/browser/flags/android/cromite_native_utils.cc
+ create mode 100644 chrome/browser/flags/android/cromite_native_utils.h
+ create mode 100644 chrome/browser/flags/android/java/src/org/chromium/chrome/browser/flags/CromiteNativeUtils.java
 
 diff --git a/build/android/gyp/java_cpp_enum.py b/build/android/gyp/java_cpp_enum.py
 --- a/build/android/gyp/java_cpp_enum.py
 +++ b/build/android/gyp/java_cpp_enum.py
-@@ -208,6 +208,7 @@ class DirectiveSet:
+@@ -6,6 +6,7 @@
+ 
+ import argparse
+ import collections
++import os
+ from datetime import date
+ import re
+ from string import Template
+@@ -244,6 +245,7 @@ class DirectiveSet:
  
  
  class HeaderParser:
-+  include_re = re.compile(r'#include "(.*)"')
-   single_line_comment_re = re.compile(r'\s*//\s*([^\n]*)')
-   multi_line_comment_start_re = re.compile(r'\s*/\*')
-   enum_line_re = re.compile(r'^\s*(\w+)(\s*\=\s*([^,\n]+))?,?')
-@@ -230,7 +231,7 @@ class HeaderParser:
-   enum_single_line_re = re.compile(
-       r'^\s*(?:\[cpp.*\])?\s*enum.*{(?P<enum_entries>.*)}.*$')
++    include_re = re.compile(r'#include "(.*)"')
+     single_line_comment_re = re.compile(r'\s*//\s*([^\n]*)')
+     multi_line_comment_start_re = re.compile(r'\s*/\*')
+     enum_line_re = re.compile(r'^\s*(\w+)(\s*\=\s*([^,\n]+))?,?')
+@@ -274,7 +276,7 @@ class HeaderParser:
+         r'^\s*(?:\[cpp.*\])?\s*enum.*{(?P<enum_entries>.*)}.*$'
+     )
  
--  def __init__(self, lines, path=''):
-+  def __init__(self, lines, options, path=''):
-     self._lines = java_cpp_utils.PreprocessIfBlocks(lines)
-     self._path = path
-     self._enum_definitions = []
-@@ -240,6 +241,7 @@ class HeaderParser:
-     self._generator_directives = DirectiveSet()
-     self._multi_line_generator_directive = None
-     self._current_enum_entry = ''
-+    self._options = options
+-    def __init__(self, lines, path=''):
++    def __init__(self, lines, options, path=''):
+         self._lines = java_cpp_utils.PreprocessIfBlocks(lines)
+         self._path = path
+         self._enum_definitions = []
+@@ -284,6 +286,7 @@ class HeaderParser:
+         self._generator_directives = DirectiveSet()
+         self._multi_line_generator_directive = None
+         self._current_enum_entry = ''
++        self._options = options
  
-   def _ApplyGeneratorDirectives(self):
-     self._generator_directives.UpdateDefinition(self._current_definition)
-@@ -266,6 +268,24 @@ class HeaderParser:
-       raise Exception('Multi-line comments in enums are not supported in ' +
-                       self._path)
+     def _ApplyGeneratorDirectives(self):
+         self._generator_directives.UpdateDefinition(self._current_definition)
+@@ -312,6 +315,22 @@ class HeaderParser:
+                 + self._path
+             )
  
-+    # handles the management of #include files
-+    include_line = HeaderParser.include_re.match(line)
-+    if include_line:
-+      include_file = include_line.groups()[0];
-+      if not include_file.endswith(".inc"):
-+        raise Exception('Include file \"' + include_file + '\" must ends with .inc')
++        # Handles the management of #include files.
++        include_line = HeaderParser.include_re.match(line)
++        if include_line:
++            include_file = include_line.groups()[0]
++            if not include_file.endswith('.inc'):
++                raise Exception(
++                    'Include file "' + include_file + '" must end with .inc'
++                )
 +
-+      file_to_include = os.path.join(self._options.gen_dir, include_file)
-+      if not os.path.exists(file_to_include):
-+        file_to_include = os.path.join(self._options.root_dir, include_file)
-+      lines = []
-+      with open(file_to_include) as include_file_handle:
-+        lines = include_file_handle.readlines()
-+
-+      for new_line in lines:
-+        self._ParseEnumLine(new_line)
-+      return
-+
-     enum_comment = HeaderParser.single_line_comment_re.match(line)
-     if enum_comment:
-       comment = enum_comment.groups()[0]
-@@ -367,9 +387,9 @@ class HeaderParser:
-         self._ParseSingleLineEnum(single_line_enum.group('enum_entries'))
++            file_to_include = os.path.join(self._options.gen_dir, include_file)
++            if not os.path.exists(file_to_include):
++                file_to_include = os.path.join(self._options.root_dir, include_file)
++            with open(file_to_include, encoding='utf-8') as include_file_handle:
++                for new_line in include_file_handle:
++                    self._ParseEnumLine(new_line)
++            return
+         enum_comment = HeaderParser.single_line_comment_re.match(line)
+         if enum_comment:
+             comment = enum_comment.groups()[0]
+@@ -429,9 +448,9 @@ class HeaderParser:
+                 )
  
  
 -def DoGenerate(source_paths):
 +def DoGenerate(source_paths, options):
-   for source_path in source_paths:
--    enum_definitions = DoParseHeaderFile(source_path)
-+    enum_definitions = DoParseHeaderFile(source_path, options)
-     if not enum_definitions:
-       raise Exception('No enums found in %s\n'
-                       'Did you forget prefixing enums with '
-@@ -382,9 +402,9 @@ def DoGenerate(source_paths):
-       yield output_path, output
+     for source_path in source_paths:
+-        enum_definitions = DoParseHeaderFile(source_path)
++        enum_definitions = DoParseHeaderFile(source_path, options)
+         if not enum_definitions:
+             raise Exception(
+                 'No enums found in %s\n'
+@@ -446,11 +465,11 @@ def DoGenerate(source_paths):
+             yield output_path, output
  
  
 -def DoParseHeaderFile(path):
 +def DoParseHeaderFile(path, options):
-   with open(path, encoding='utf-8') as f:
--    return HeaderParser(f.readlines(), path).ParseDefinitions()
-+    return HeaderParser(f.readlines(), options, path).ParseDefinitions()
+     with open(path, encoding='utf-8') as f:
+         lines = f.readlines()
+         preprocessed_lines = java_cpp_utils.ProcessListMacros(lines)
+-        return HeaderParser(preprocessed_lines, path).ParseDefinitions()
++        return HeaderParser(preprocessed_lines, options, path).ParseDefinitions()
  
  
  def GenerateOutput(source_path, enum_definition):
-@@ -470,11 +490,16 @@ def DoMain(argv):
-                       nargs='+',
-                       help='Path to at least one input file.')
+@@ -542,11 +561,14 @@ def DoMain(argv):
+         'input_paths', nargs='+', help='Path to at least one input file.'
+     )
  
-+  parser.add_argument('--gen_dir',
-+                      help='Indicates the path to the generated file')
-+  parser.add_argument('--root_dir',
-+                      help='Indicates the path to the build root')
++    parser.add_argument('--gen_dir', help='Indicates the path to the generated file')
++    parser.add_argument('--root_dir', help='Indicates the path to the build root')
 +
-   options = parser.parse_args(argv)
+     options = parser.parse_args(argv)
  
-   with action_helpers.atomic_output(options.srcjar) as f:
-     with zipfile.ZipFile(f, 'w', zipfile.ZIP_STORED) as srcjar:
--      for output_path, data in DoGenerate(options.input_paths):
-+      for output_path, data in DoGenerate(options.input_paths, options):
-         zip_helpers.add_to_zip_hermetic(srcjar, output_path, data=data)
+     with action_helpers.atomic_output(options.srcjar) as f:
+         with zipfile.ZipFile(f, 'w', zipfile.ZIP_STORED) as srcjar:
+-            for output_path, data in DoGenerate(options.input_paths):
++            for output_path, data in DoGenerate(options.input_paths, options):
+                 zip_helpers.add_to_zip_hermetic(srcjar, output_path, data=data)
  
  
 diff --git a/build/android/gyp/util/build_utils.py b/build/android/gyp/util/build_utils.py
 --- a/build/android/gyp/util/build_utils.py
 +++ b/build/android/gyp/util/build_utils.py
-@@ -404,4 +404,27 @@ def ReadSourcesList(sources_list_file_name):
-   Note that this function should not be used to parse response files.
-   """
-   with open(sources_list_file_name, encoding='utf-8') as f:
--    return [file_name.strip() for file_name in f]
-+    files = [file_name.strip() for file_name in f]
-+    # allows inclusion of all files in the indicated folder
-+    # in the sources of java-related gn targets.
-+    # "include_all_directory.java" is a special name and must exist in the
-+    # folder since gn checks for its existence, but it will not be
-+    # included in the list.
-+    # example:
-+    #
-+    #   sources += [
-+    #     "java/src/org/chromium/components/browser_ui/site_settings/impl/include_all_directory.java",
-+    #   ]
-+    #
-+    # will include in source all files found in
-+    #   "java/src/org/chromium/components/browser_ui/site_settings/impl"
-+    include_dirs = [f for f in files if f.endswith('include_all_directory.java')]
-+    for include_file in include_dirs:
-+      directory = os.path.dirname(include_file)
-+      for root, dirs, directory_files in os.walk(directory):
-+        for directory_file in directory_files:
-+          files.append(os.path.join(directory, directory_file))
-+      files = [f for f in files if not f.endswith('include_all_directory.java')
-+                               and not f.endswith('.java.tmpl')]
+@@ -438,4 +438,27 @@ def ReadSourcesList(sources_list_file_name):
+     Note that this function should not be used to parse response files.
+     """
+     with open(sources_list_file_name, encoding='utf-8') as f:
+-        return [file_name.strip() for file_name in f]
++        files = [file_name.strip() for file_name in f]
++        # Allows inclusion of all files in the indicated folder
++        # in the sources of java-related gn targets.
++        # "include_all_directory.java" is a special name and must exist in the
++        # folder since gn checks for its existence, but it will not be
++        # included in the list.
++        # example:
++        #
++        #   sources += [
++        #     "java/src/org/chromium/components/browser_ui/site_settings/impl/include_all_directory.java",
++        #   ]
++        #
++        # will include in source all files found in
++        #   "java/src/org/chromium/components/browser_ui/site_settings/impl"
++        include_dirs = [f for f in files if f.endswith('include_all_directory.java')]
++        for include_file in include_dirs:
++            directory = os.path.dirname(include_file)
++            for root, dirs, directory_files in os.walk(directory):
++                for directory_file in directory_files:
++                    files.append(os.path.join(directory, directory_file))
++            files = [f for f in files if not f.endswith('include_all_directory.java')
++                     and not f.endswith('.java.tmpl')]
 +
-+    return files
++        return files
+\ No newline at end of file
 diff --git a/build/bromite/bromite_utils.gni b/build/bromite/bromite_utils.gni
 new file mode 100644
 --- /dev/null
@@ -425,7 +432,7 @@ new file mode 100644
 diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
 --- a/build/config/BUILDCONFIG.gn
 +++ b/build/config/BUILDCONFIG.gn
-@@ -865,3 +865,5 @@ if (is_component_build) {
+@@ -871,3 +871,5 @@ if (is_component_build) {
  set_defaults("component") {
    configs = default_component_configs
  }
@@ -434,7 +441,7 @@ diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
 diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
 --- a/build/config/android/rules.gni
 +++ b/build/config/android/rules.gni
-@@ -229,6 +229,10 @@ if (!is_robolectric && enable_java_templates) {
+@@ -234,6 +234,10 @@ if (!is_robolectric && enable_java_templates) {
        _rebased_sources = rebase_path(invoker.sources, root_build_dir)
  
        args = [ "--srcjar=$_rebased_srcjar_path" ] + _rebased_sources
@@ -445,7 +452,7 @@ diff --git a/build/config/android/rules.gni b/build/config/android/rules.gni
        outputs = [ _srcjar_path ]
      }
    }
-@@ -283,7 +287,7 @@ if (!is_robolectric && enable_java_templates) {
+@@ -288,7 +292,7 @@ if (!is_robolectric && enable_java_templates) {
    #   my.java.package.
    template("java_cpp_strings") {
      action_with_pydeps(target_name) {
@@ -681,7 +688,7 @@ diff --git a/mojo/public/tools/mojom/mojom_parser.py b/mojo/public/tools/mojom/m
  from collections import defaultdict
  
  from mojom.generate import module
-@@ -181,14 +182,33 @@ def _CollectAllowedImportsFromBuildMetadata(build_metadata_filename):
+@@ -203,14 +204,33 @@ def _CollectAllowedImportsFromBuildMetadata(build_metadata_filename):
    return allowed_imports
  
  
@@ -717,19 +724,19 @@ diff --git a/mojo/public/tools/mojom/mojom_parser.py b/mojo/public/tools/mojom/m
      conditional_features.RemoveDisabledDefinitions(ast, enabled_features)
      return mojom_abspath, ast
  
-@@ -308,7 +328,7 @@ def _ParseMojoms(mojom_files,
-       (path, abs_path) for abs_path, path in mojom_files_to_parse.items())
+@@ -336,7 +356,7 @@ def _ParseMojoms(
  
    logging.info('Parsing %d .mojom into ASTs', len(mojom_files_to_parse))
--  map_args = ((mojom_abspath, mojom_path, enabled_features)
-+  map_args = ((mojom_abspath, mojom_path, enabled_features, input_root_paths)
-               for mojom_abspath, mojom_path in mojom_files_to_parse.items())
+   map_args = (
+-    (mojom_abspath, mojom_path, enabled_features)
++    (mojom_abspath, mojom_path, enabled_features, input_root_paths)
+     for mojom_abspath, mojom_path in mojom_files_to_parse.items()
+   )
    for mojom_abspath, ast in _Shard(_ParseAstHelper, map_args):
-     loaded_mojom_asts[mojom_abspath] = ast
 diff --git a/tools/grit/grit/grd_reader.py b/tools/grit/grit/grd_reader.py
 --- a/tools/grit/grit/grd_reader.py
 +++ b/tools/grit/grit/grd_reader.py
-@@ -96,11 +96,28 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
+@@ -106,11 +106,28 @@ class GrdContentHandler(xml.sax.handler.ContentHandler):
          raise exception.FileNotFound(partname)
        # Exceptions propagate to the handler in grd_reader.Parse().
        oldsource = self.source
@@ -786,7 +793,7 @@ diff --git a/tools/grit/preprocess_if_expr.py b/tools/grit/preprocess_if_expr.py
  
  # For Node, EvaluateExpression
  import grit.node.base
-@@ -71,6 +72,35 @@ def ExtensionForComments(input_file):
+@@ -74,6 +75,35 @@ def ExtensionForComments(input_file):
      extension = '.html'
    return extension
  
@@ -822,7 +829,7 @@ diff --git a/tools/grit/preprocess_if_expr.py b/tools/grit/preprocess_if_expr.py
  
  def main(argv):
    parser = argparse.ArgumentParser()
-@@ -95,7 +125,7 @@ def main(argv):
+@@ -98,7 +128,7 @@ def main(argv):
      in_path = os.path.join(in_folder, input_file)
      content = ""
      with open(in_path, encoding='utf-8') as f:
