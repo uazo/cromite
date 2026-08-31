@@ -35,9 +35,6 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/debug/alias.h"
-#include "base/debug/crash_logging.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
@@ -52,7 +49,6 @@
 #include "third_party/blink/public/common/fingerprinting_protection/noise_token.h"
 #include "third_party/blink/public/common/history/session_history_constants.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
-#include "third_party/blink/public/common/input/web_menu_source_type.h"
 #include "third_party/blink/public/common/page/color_provider_color_maps.h"
 #include "third_party/blink/public/common/page/page_zoom.h"
 #include "third_party/blink/public/common/renderer_preferences/renderer_preferences.h"
@@ -193,6 +189,7 @@
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/blink/renderer/platform/wtf/text/string_to_number.h"
 #include "third_party/icu/source/common/unicode/uscript.h"
+#include "ui/base/mojom/menu_source_type.mojom-blink.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/gfx/geometry/skia_conversions.h"
 
@@ -276,43 +273,43 @@ typedef void (*SetFontFamilyWrapper)(blink::WebSettings*,
 void SetStandardFontFamilyWrapper(WebSettings* settings,
                                   const std::u16string& font,
                                   UScriptCode script) {
-  settings->SetStandardFontFamily(WebString::FromUTF16(font), script);
+  settings->SetStandardFontFamily(WebString::FromUtf16(font), script);
 }
 
 void SetFixedFontFamilyWrapper(WebSettings* settings,
                                const std::u16string& font,
                                UScriptCode script) {
-  settings->SetFixedFontFamily(WebString::FromUTF16(font), script);
+  settings->SetFixedFontFamily(WebString::FromUtf16(font), script);
 }
 
 void SetSerifFontFamilyWrapper(WebSettings* settings,
                                const std::u16string& font,
                                UScriptCode script) {
-  settings->SetSerifFontFamily(WebString::FromUTF16(font), script);
+  settings->SetSerifFontFamily(WebString::FromUtf16(font), script);
 }
 
 void SetSansSerifFontFamilyWrapper(WebSettings* settings,
                                    const std::u16string& font,
                                    UScriptCode script) {
-  settings->SetSansSerifFontFamily(WebString::FromUTF16(font), script);
+  settings->SetSansSerifFontFamily(WebString::FromUtf16(font), script);
 }
 
 void SetCursiveFontFamilyWrapper(WebSettings* settings,
                                  const std::u16string& font,
                                  UScriptCode script) {
-  settings->SetCursiveFontFamily(WebString::FromUTF16(font), script);
+  settings->SetCursiveFontFamily(WebString::FromUtf16(font), script);
 }
 
 void SetFantasyFontFamilyWrapper(WebSettings* settings,
                                  const std::u16string& font,
                                  UScriptCode script) {
-  settings->SetFantasyFontFamily(WebString::FromUTF16(font), script);
+  settings->SetFantasyFontFamily(WebString::FromUtf16(font), script);
 }
 
 void SetMathFontFamilyWrapper(WebSettings* settings,
                               const std::u16string& font,
                               UScriptCode script) {
-  settings->SetMathFontFamily(WebString::FromUTF16(font), script);
+  settings->SetMathFontFamily(WebString::FromUtf16(font), script);
 }
 
 // If |scriptCode| is a member of a family of "similar" script codes, returns
@@ -547,20 +544,6 @@ void WebViewImpl::SetNoStatePrefetchClient(
 }
 
 void WebViewImpl::CloseWindow() {
-#if !(BUILDFLAG(IS_ANDROID) || \
-      (BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_ARM64)))
-  auto close_task_trace = close_task_posted_stack_trace_;
-  base::debug::Alias(&close_task_trace);
-  auto close_trace = close_called_stack_trace_;
-  base::debug::Alias(&close_trace);
-  auto prev_close_window_trace = close_window_called_stack_trace_;
-  base::debug::Alias(&prev_close_window_trace);
-  close_window_called_stack_trace_.emplace();
-  auto cur_close_window_trace = close_window_called_stack_trace_;
-  base::debug::Alias(&cur_close_window_trace);
-#endif
-  SCOPED_CRASH_KEY_BOOL("Bug1499519", "page_exists", !!page_);
-
   // Have the browser process a close request. We should have either a
   // |local_main_frame_host_remote_| or |remote_main_frame_host_remote_|.
   // This method will not execute if Close has been called as WeakPtrs
@@ -1069,7 +1052,7 @@ WebInputEventResult WebViewImpl::SendContextMenuEvent() {
             focused_local_frame->GetDocument()->FocusedElement())
       focused_element->scrollIntoViewIfNeeded();
     return focused_local_frame->GetEventHandler().ShowNonLocatedContextMenu(
-        nullptr, kMenuSourceKeyboard);
+        nullptr, ui::mojom::blink::MenuSourceType::kKeyboard);
   }
 }
 
@@ -1182,20 +1165,6 @@ Frame* WebViewImpl::FocusedCoreFrame() const {
 // WebWidget ------------------------------------------------------------------
 
 void WebViewImpl::Close() {
-#if !(BUILDFLAG(IS_ANDROID) || \
-      (BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_ARM64)))
-  auto close_task_trace = close_task_posted_stack_trace_;
-  base::debug::Alias(&close_task_trace);
-  auto prev_close_trace = close_called_stack_trace_;
-  base::debug::Alias(&prev_close_trace);
-  close_called_stack_trace_.emplace();
-  auto cur_close_trace = close_called_stack_trace_;
-  base::debug::Alias(&cur_close_trace);
-  auto close_window_trace = close_window_called_stack_trace_;
-  base::debug::Alias(&close_window_trace);
-#endif
-  SCOPED_CRASH_KEY_BOOL("Bug1499519", "page_exists", !!page_);
-
   // Closership is a single relationship, so only 1 call to Close() should
   // occur.
   CHECK(page_);
@@ -1599,7 +1568,7 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
   settings->SetMinimumFontSize(prefs.minimum_font_size);
   settings->SetMinimumLogicalFontSize(prefs.minimum_logical_font_size);
   settings->SetDefaultTextEncodingName(
-      WebString::FromASCII(prefs.default_encoding));
+      WebString::FromAscii(prefs.default_encoding));
   settings->SetJavaScriptEnabled(prefs.javascript_enabled);
   settings->SetWebSecurityEnabled(prefs.web_security_enabled);
   settings->SetLoadsImagesAutomatically(prefs.loads_images_automatically);
@@ -1608,8 +1577,8 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
   settings->SetDOMPasteAllowed(prefs.dom_paste_enabled);
   settings->SetTextAreasAreResizable(prefs.text_areas_are_resizable);
   settings->SetAllowScriptsToCloseWindows(prefs.allow_scripts_to_close_windows);
-  settings->SetAllowWindowFocusWithoutUserGesture(
-      prefs.allow_window_focus_without_user_gesture);
+  settings->SetAllowUnrestrictedWindowFocus(
+      prefs.allow_unrestricted_window_focus);
   settings->SetDownloadableBinaryFontsEnabled(prefs.remote_fonts_enabled);
   settings->SetJavaScriptCanAccessClipboard(
       prefs.javascript_can_access_clipboard);
@@ -1733,24 +1702,24 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
         WebSettings::TextTrackKindUserPreference::kDefault);
   }
   settings->SetTextTrackBackgroundColor(
-      WebString::FromASCII(prefs.text_track_background_color));
+      WebString::FromAscii(prefs.text_track_background_color));
   settings->SetTextTrackTextColor(
-      WebString::FromASCII(prefs.text_track_text_color));
+      WebString::FromAscii(prefs.text_track_text_color));
   settings->SetTextTrackTextSize(
-      WebString::FromASCII(prefs.text_track_text_size));
+      WebString::FromAscii(prefs.text_track_text_size));
   settings->SetTextTrackTextShadow(
-      WebString::FromASCII(prefs.text_track_text_shadow));
+      WebString::FromAscii(prefs.text_track_text_shadow));
   settings->SetTextTrackFontFamily(
-      WebString::FromASCII(prefs.text_track_font_family));
+      WebString::FromAscii(prefs.text_track_font_family));
   settings->SetTextTrackFontStyle(
-      WebString::FromASCII(prefs.text_track_font_style));
+      WebString::FromAscii(prefs.text_track_font_style));
   settings->SetTextTrackFontVariant(
-      WebString::FromASCII(prefs.text_track_font_variant));
+      WebString::FromAscii(prefs.text_track_font_variant));
   settings->SetTextTrackMarginPercentage(prefs.text_track_margin_percentage);
   settings->SetTextTrackWindowColor(
-      WebString::FromASCII(prefs.text_track_window_color));
+      WebString::FromAscii(prefs.text_track_window_color));
   settings->SetTextTrackWindowRadius(
-      WebString::FromASCII(prefs.text_track_window_radius));
+      WebString::FromAscii(prefs.text_track_window_radius));
 
   // Needs to happen before SetDefaultPageScaleLimits below since that'll
   // recalculate the final page scale limits and that depends on this setting.
@@ -1770,7 +1739,7 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
 
   settings->SetDontSendKeyEventsToJavascript(
       prefs.dont_send_key_events_to_javascript);
-  settings->SetWebAppScope(WebString::FromASCII(prefs.web_app_scope.spec()));
+  settings->SetWebAppScope(WebString::FromAscii(prefs.web_app_scope.spec()));
 
 #if BUILDFLAG(IS_ANDROID)
   settings->SetAllowCustomScrollbarInMainFrame(false);
@@ -1781,7 +1750,7 @@ void WebView::ApplyWebPreferences(const web_pref::WebPreferences& prefs,
   settings->SetDeviceScaleAdjustment(prefs.device_scale_adjustment);
   web_view_impl->SetIgnoreViewportTagScaleLimits(prefs.force_enable_zoom);
   settings->SetDefaultVideoPosterURL(
-      WebString::FromASCII(prefs.default_video_poster_url.spec()));
+      WebString::FromAscii(prefs.default_video_poster_url.spec()));
   settings->SetSupportDeprecatedTargetDensityDPI(
       prefs.support_deprecated_target_density_dpi);
   settings->SetWideViewportQuirkEnabled(prefs.wide_viewport_quirk);
@@ -2531,8 +2500,10 @@ void WebViewImpl::SetPageLifecycleStateInternal(
       (new_state->pagehide_dispatch !=
        mojom::blink::PagehideDispatch::kNotDispatched) &&
       !GetPage()->DispatchedPagehideAndStillHidden();
-  bool dispatching_pageshow =
+  last_page_lifecycle_state_update_restored_from_bfcache_ =
       IsRestoredFromBackForwardCache(old_state, new_state);
+  bool dispatching_pageshow =
+      last_page_lifecycle_state_update_restored_from_bfcache_;
   bool eviction_changed =
       new_state->eviction_enabled != old_state->eviction_enabled;
 
@@ -2818,11 +2789,9 @@ void ValidatePausedStateConsistency() {
       if (!window) {
         continue;
       }
-      const bool microtasks_are_paused = window->GetAgent()
-                                             ->event_loop()
-                                             ->microtask_queue()
-                                             ->GetMicrotasksScopeDepth();
-      CHECK(!microtasks_are_paused, base::NotFatalUntil::M148);
+      const bool microtasks_are_paused =
+          window->GetAgent()->event_loop()->AreMicrotasksPaused();
+      CHECK(!microtasks_are_paused, base::NotFatalUntil::M150);
     }
   }
 }
@@ -3159,6 +3128,20 @@ void WebViewImpl::DidAccessInitialMainDocument() {
   local_main_frame_host_remote_->DidAccessInitialMainDocument();
 }
 
+void WebViewImpl::DidChangeThemeColor(std::optional<SkColor> theme_color) {
+  // This is only called for main frames, so the remote must be bound.
+  CHECK(local_main_frame_host_remote_);
+  local_main_frame_host_remote_->DidChangeThemeColor(theme_color);
+}
+
+void WebViewImpl::DidChangeBackgroundColor(SkColor4f background_color,
+                                           bool color_adjust) {
+  // This is only called for main frames, so the remote must be bound.
+  CHECK(local_main_frame_host_remote_);
+  local_main_frame_host_remote_->DidChangeBackgroundColor(background_color,
+                                                          color_adjust);
+}
+
 #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 // TODO(https://crbug.com/40946306): Add timeouts to the callbacks and consider
 // queuing requests instead of rejecting them.
@@ -3404,6 +3387,10 @@ void WebViewImpl::ResetScaleStateImmediately() {
 }
 
 void WebViewImpl::ResetScrollAndScaleState() {
+  // Skip scroll restoration when restoring from back-forward cache.
+  if (last_page_lifecycle_state_update_restored_from_bfcache_) {
+    return;
+  }
   GetPage()->GetVisualViewport().Reset();
 
   auto* main_local_frame = DynamicTo<LocalFrame>(GetPage()->MainFrame());
@@ -3603,14 +3590,14 @@ void WebViewImpl::UpdateFontRenderingFromRendererPrefs() {
 #if BUILDFLAG(IS_WIN)
   // Cache the system font metrics in blink.
   WebFontRendering::SetMenuFontMetrics(
-      WebString::FromUTF16(renderer_preferences_.menu_font_family_name),
+      WebString::FromUtf16(renderer_preferences_.menu_font_family_name),
       renderer_preferences_.menu_font_height);
   WebFontRendering::SetSmallCaptionFontMetrics(
-      WebString::FromUTF16(
+      WebString::FromUtf16(
           renderer_preferences_.small_caption_font_family_name),
       renderer_preferences_.small_caption_font_height);
   WebFontRendering::SetStatusFontMetrics(
-      WebString::FromUTF16(renderer_preferences_.status_font_family_name),
+      WebString::FromUtf16(renderer_preferences_.status_font_family_name),
       renderer_preferences_.status_font_height);
   WebFontRendering::SetAntialiasedTextEnabled(
       renderer_preferences_.should_antialias_text);
@@ -3757,10 +3744,10 @@ void WebViewImpl::UpdateRendererPreferences(
 
   if (old_accept_languages != renderer_preferences_.accept_languages) {
     FontCache::AcceptLanguagesChanged(
-        String::FromUTF8(renderer_preferences_.accept_languages));
+        String::FromUtf8(renderer_preferences_.accept_languages));
     if (GetPage()) {
       GetPage()->GetSettings().SetAcceptLanguages(
-          String::FromUTF8(renderer_preferences_.accept_languages));
+          String::FromUtf8(renderer_preferences_.accept_languages));
     }
   }
 
@@ -3915,6 +3902,7 @@ void WebViewImpl::DidCommitLoad(bool is_new_navigation,
       GetPageScaleConstraintsSet().SetNeedsReset(true);
   }
 
+  last_page_lifecycle_state_update_restored_from_bfcache_ = false;
   // Give the visual viewport's scroll layer its initial size.
   GetPage()->GetVisualViewport().MainFrameDidChangeSize();
 }
@@ -4313,18 +4301,6 @@ void WebViewImpl::DraggableRegionsChanged() {
 }
 
 void WebViewImpl::MojoDisconnected() {
-#if !(BUILDFLAG(IS_ANDROID) || \
-      (BUILDFLAG(IS_CHROMEOS) && defined(ARCH_CPU_ARM64)))
-  auto prev_close_task_trace = close_task_posted_stack_trace_;
-  base::debug::Alias(&prev_close_task_trace);
-  close_task_posted_stack_trace_.emplace();
-  auto cur_close_task_trace = close_task_posted_stack_trace_;
-  base::debug::Alias(&cur_close_task_trace);
-  auto close_trace = close_called_stack_trace_;
-  base::debug::Alias(&close_trace);
-  auto close_window_trace = close_window_called_stack_trace_;
-  base::debug::Alias(&close_window_trace);
-#endif
   // This IPC can be called from re-entrant contexts. We can't destroy a
   // RenderViewImpl while references still exist on the stack, so we dispatch a
   // non-nestable task. This method is called exactly once by the browser

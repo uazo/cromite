@@ -42,6 +42,7 @@ import android.app.PendingIntent.CanceledException;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.net.Network;
 import android.net.Uri;
@@ -50,6 +51,7 @@ import android.text.TextUtils;
 import android.util.Pair;
 import android.widget.RemoteViews;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
@@ -76,6 +78,7 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.LocaleUtils;
 import org.chromium.base.Log;
+import org.chromium.base.MathUtils;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
@@ -95,11 +98,13 @@ import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.share.ShareUtils;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams;
 import org.chromium.chrome.browser.ui.web_app_header.WebAppHeaderUtils;
 import org.chromium.chrome.browser.util.WindowFeatures;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.TintedDrawable;
 import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -114,6 +119,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * A model class that parses the incoming intent for Custom Tabs specific customization data.
@@ -207,6 +213,9 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
     static final String EXTRA_CUSTOM_CONTENT_ACTIONS =
             "androidx.browser.customtabs.extra.CUSTOM_CONTENT_ACTIONS";
+
+    private static final String EXTRA_TRANSLUCENT_BACKGROUND =
+            "androidx.browser.customtabs.extra.TRANSLUCENT_BACKGROUND";
 
     @IntDef({
         CustomTabsButtonState.BUTTON_STATE_OFF,
@@ -432,13 +441,15 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         int initialActivityWidth =
                 getInitialActivityWidth(
                         isTrustedCustomTab, getInitialActivityWidthFromIntent(intent), packageName);
-        if (initialActivityHeight <= 0 && initialActivityWidth <= 0) {
-            // fallback to normal Custom Tab.
-            return;
+
+        // When scrolling up the web content, we don't want to hide the URL bar in pCCT.
+        boolean isPcct = initialActivityHeight > 0 || initialActivityWidth > 0;
+        if (isPcct) {
+            intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
         }
-        intent.setClassName(context, TranslucentCustomTabActivity.class.getName());
-        // When scrolling up the web content, we don't want to hide the URL bar.
-        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
+        if (isPcct || hasTranslucentBackgroundColor(intent)) {
+            intent.setClassName(context, TranslucentCustomTabActivity.class.getName());
+        }
     }
 
     private static @Px int getInitialActivityHeight(
@@ -496,6 +507,26 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                         || roundedCornersPosition > ACTIVITY_SIDE_SHEET_ROUNDED_CORNERS_POSITION_TOP
                 ? ACTIVITY_SIDE_SHEET_ROUNDED_CORNERS_POSITION_NONE
                 : roundedCornersPosition;
+    }
+
+    private static boolean hasTranslucentBackgroundColor(Intent intent) {
+        try {
+            return intent.hasExtra(EXTRA_TRANSLUCENT_BACKGROUND);
+        } catch (Throwable t) {
+            // Catches un-parceling exceptions.
+            return false;
+        }
+    }
+
+    @Override
+    public @ColorInt int getTranslucentBackgroundColor(Context context) {
+        int defValue = SemanticColorUtils.getDefaultBgColor(context);
+        int bg = IntentUtils.safeGetIntExtra(mIntent, EXTRA_TRANSLUCENT_BACKGROUND, defValue);
+        if (bg == defValue) return defValue;
+
+        // We limit the transparency to 30%-50% == 50%-70% (128-180) alpha
+        int alpha = MathUtils.clamp(Color.alpha(bg), 128, 180);
+        return Color.argb(alpha, Color.red(bg), Color.green(bg), Color.blue(bg));
     }
 
     private static boolean getIsCloseButtonEnabled(Intent intent, int uiType) {
@@ -1955,5 +1986,13 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return new WindowFeatures();
         }
         return new WindowFeatures(bundle);
+    }
+
+    @Override
+    public void maybeAddAdditionalContentExtrasToOutboundIntent(
+            Supplier<@Nullable Tab> tabProvider, Intent outboundIntent, int viewId) {
+        CustomTabsConnection.getInstance()
+                .maybeAddAdditionalContentExtrasToOutboundIntent(
+                        tabProvider, this, outboundIntent, viewId);
     }
 }
