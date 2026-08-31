@@ -11,6 +11,7 @@
 #include "chrome/browser/actor/actor_navigation_throttle.h"
 #include "chrome/browser/autocomplete/aim_eligibility_refresh_navigation_throttle.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/contextual_tasks/contextual_tasks_navigation_throttle.h"
 #include "chrome/browser/custom_handlers/chrome_protocol_handler_navigation_throttle.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/data_sharing/data_sharing_navigation_throttle.h"
@@ -20,10 +21,12 @@
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/interstitials/enterprise_util.h"
 #include "chrome/browser/lookalikes/lookalike_url_navigation_throttle.h"
+#include "chrome/browser/omnibox/geolocation_navigation_throttle.h"
 #include "chrome/browser/plugins/pdf_iframe_navigation_throttle.h"
 #include "chrome/browser/policy/chrome_policy_blocklist_service_factory.h"
 #include "chrome/browser/policy/policy_util.h"
 #include "chrome/browser/preloading/prefetch/no_state_prefetch/chrome_no_state_prefetch_contents_delegate.h"
+#include "chrome/browser/preloading/prerender/dse_prewarm_navigation_throttle.h"
 #include "chrome/browser/privacy_sandbox/privacy_sandbox_settings_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ssl/chrome_security_blocking_page_factory.h"
@@ -90,10 +93,7 @@
 #else  // BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/apps/link_capturing/link_capturing_navigation_throttle.h"
 #include "chrome/browser/apps/link_capturing/web_app_link_capturing_delegate.h"
-#include "chrome/browser/contextual_tasks/contextual_tasks_navigation_throttle.h"
-#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/page_info/web_view_side_panel_throttle.h"
-#include "chrome/browser/preloading/preview/preview_navigation_throttle.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/lens/lens_overlay_side_panel_navigation_throttle.h"
 #include "chrome/browser/ui/read_anything/read_anything_side_panel_navigation_throttle.h"
@@ -121,14 +121,20 @@
 #include "chrome/browser/apps/platform_apps/platform_app_navigation_redirector.h"
 #endif  // BUILDFLAG(ENABLE_PLATFORM_APPS)
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/web_applications/app_browser_controller.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+#endif  // !BUILDFLAG(IS_ANDROID)
 
-#if BUILDFLAG(ENABLE_GUEST_VIEW) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
+#include "chrome/browser/devtools/devtools_window.h"
+#endif  // BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
+
+#if BUILDFLAG(ENABLE_GUEST_VIEW)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
-#endif  // BUILDFLAG(ENABLE_GUEST_VIEW) && BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#endif  // BUILDFLAG(ENABLE_GUEST_VIEW)
 
 #if BUILDFLAG(ENABLE_PDF)
 #include "chrome/browser/pdf/chrome_pdf_stream_delegate.h"
@@ -165,7 +171,7 @@
 #include "chrome/browser/offline_pages/offline_page_navigation_throttle.h"
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
 #include "chrome/browser/enterprise/platform_auth/platform_auth_navigation_throttle.h"
 #endif
 
@@ -187,7 +193,7 @@ namespace {
 // parameters.
 void HandleSSLErrorWrapper(
     content::WebContents* web_contents,
-    int cert_error,
+    net::Error cert_error,
     const net::SSLInfo& ssl_info,
     const GURL& request_url,
     SSLErrorHandler::BlockingPageReadyCallback blocking_page_ready_callback) {
@@ -217,9 +223,10 @@ void HandleSSLErrorWrapper(
       is_ssl_error_override_allowed_for_origin);
 }
 
-// Returns whether `web_contents` is within a hosted app.
-bool IsInHostedApp(content::WebContents* web_contents) {
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+// Returns whether `web_contents` is within a web app.
+// TODO(crbug.com/505461569): Support Android.
+bool IsInWebApp(content::WebContents* web_contents) {
+#if !BUILDFLAG(IS_ANDROID)
   tabs::TabInterface* tab =
       tabs::TabInterface::MaybeGetFromContents(web_contents);
   return tab && web_app::AppBrowserController::IsWebApp(
@@ -285,7 +292,15 @@ void CreateAndAddChromeThrottlesForNavigation(
     // should be cared by adding an attribute flag to
     // NavigationThrottleRegistry::AddThrottle().
     page_load_metrics::MetricsNavigationThrottle::CreateAndAdd(registry);
+
+    // Appends the X-Geo header to the navigation request if needed.
+    if (auto throttle =
+            GeolocationNavigationThrottle::MaybeCreateThrottleFor(registry)) {
+      registry.AddThrottle(std::move(throttle));
+    }
   }
+
+  DSEPrewarmNavigationThrottle::MaybeCreateAndAdd(registry);
 
 #if BUILDFLAG(IS_ANDROID)
   // TODO(davidben): This is insufficient to integrate with prerender properly.
@@ -320,7 +335,7 @@ void CreateAndAddChromeThrottlesForNavigation(
     // we are attempting to load a google property.
     if (ash::merge_session_throttling_utils::ShouldAttachNavigationThrottle() &&
         !ash::merge_session_throttling_utils::AreAllSessionMergedAlready() &&
-        registry.IsHTTPOrHTTPS()) {
+        registry.GetNavigationHandle().GetURL().SchemeIsHTTPOrHTTPS()) {
       ash::MergeSessionNavigationThrottle::CreateAndAdd(registry);
     }
   }
@@ -424,7 +439,7 @@ void CreateAndAddChromeThrottlesForNavigation(
       base::BindRepeating(&MaybeTriggerSecurityInterstitialShownEvent));
   registry.AddThrottle(std::make_unique<SSLErrorNavigationThrottle>(
       registry, base::BindOnce(&HandleSSLErrorWrapper),
-      base::BindOnce(&IsInHostedApp),
+      base::BindOnce(&IsInWebApp),
       base::BindOnce(
           &ShouldIgnoreSslInterstitialBecauseNavigationDefaultedToHttps)));
 
@@ -463,7 +478,6 @@ void CreateAndAddChromeThrottlesForNavigation(
   // before ContextualTasksNavigationThrottle intercepts them.
   AimEligibilityRefreshNavigationThrottle::MaybeCreateAndAdd(registry);
 
-#if !BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(contextual_tasks::kContextualTasks) ||
       base::FeatureList::IsEnabled(
           contextual_tasks::kContextualTasksUrlRedirectToAimUrl)) {
@@ -471,8 +485,11 @@ void CreateAndAddChromeThrottlesForNavigation(
         registry);
   }
 
+#if BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
   DevToolsWindow::MaybeCreateAndAddNavigationThrottle(registry);
+#endif  // BUILDFLAG(ENABLE_DEVTOOLS_FRONTEND)
 
+#if !BUILDFLAG(IS_ANDROID)
   if (base::FeatureList::IsEnabled(features::kInstantUsesSpareRenderer)) {
     ChromeSearchNavigationThrottle::MaybeCreateAndAdd(registry);
   }
@@ -571,13 +588,13 @@ void CreateAndAddChromeThrottlesForNavigation(
         registry);
   }
 
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
   // Don't perform platform authentication in incognito and guest profiles.
   if (profile && !profile->IsOffTheRecord()) {
     enterprise_auth::PlatformAuthNavigationThrottle::MaybeCreateAndAdd(
         registry);
   }
-#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+#endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(IS_CHROMEOS)
   // TODO(b:296844164) Handle captive portal signin properly.
@@ -597,9 +614,6 @@ void CreateAndAddChromeThrottlesForNavigation(
   }
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
 
-#if !BUILDFLAG(IS_ANDROID)
-  PreviewNavigationThrottle::MaybeCreateAndAdd(registry);
-#endif  // !BUILDFLAG(IS_ANDROID)
 
   MaybeCreateAndAddVisitedLinkNavigationThrottle(registry);
 

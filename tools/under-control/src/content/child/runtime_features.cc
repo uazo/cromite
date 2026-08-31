@@ -10,6 +10,7 @@
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/feature_list.h"
+#include "base/logging.h"
 #include "base/memory/raw_ref.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/field_trial_params.h"
@@ -194,8 +195,12 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(features::kFedCmIdPRegistration), kDefault},
           {wf::EnableFedCmLightweightMode,
            raw_ref(features::kFedCmLightweightMode), kDefault},
+          // We want to enable interception when either of these two flags is
+          // enabled because interception can happen with either flag.
           {wf::EnableFedCmNavigationInterception,
            raw_ref(features::kFedCmNavigationInterception), kDefault},
+          {wf::EnableFedCmNavigationInterception,
+           raw_ref(features::kFedCmEmbedderInitiatedLogin), kDefault},
           {wf::EnableFedCmErrorAttribute,
            raw_ref(features::kFedCmErrorAttribute), kDefault},
           {wf::EnableFedCmNonStringToken,
@@ -254,7 +259,7 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {wf::EnableWebAuthenticationAmbient,
            raw_ref(device::kWebAuthnAmbientSignin)},
           {wf::EnableWebAuthenticationImmediateGet,
-           raw_ref(device::kWebAuthnImmediateGet), kSetOnlyIfOverridden},
+           raw_ref(device::kWebAuthnImmediateGet), kDefault},
           {wf::EnableWebBluetooth, raw_ref(features::kWebBluetooth),
            kSetOnlyIfOverridden},
           {wf::EnableWebBluetoothGetDevices,
@@ -292,8 +297,6 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            raw_ref(device::features::kWebXRIncubations)},
 #endif
           {wf::EnableXSLT, raw_ref(blink::features::kXSLT)},
-          {wf::EnablePermissions, raw_ref(features::kWebPermissionsApi),
-           kSetOnlyIfOverridden},
       };
   for (const auto& mapping : blinkFeatureToBaseFeatureMapping) {
     SetRuntimeFeatureFromChromiumFeature(
@@ -350,7 +353,10 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
            kSetOnlyIfOverridden},
           {"FledgeBiddingAndAuctionServerAPI",
            raw_ref(blink::features::kFledgeBiddingAndAuctionServer), kDefault},
-          {"FontSrcLocalMatching", raw_ref(features::kFontSrcLocalMatching)},
+#if BUILDFLAG(IS_WIN)
+          {"FontDataService",
+           raw_ref(features::kFontDataServiceAllWebContents)},
+#endif
           {"HstsTopLevelNavigationsOnly",
            raw_ref(net::features::kHstsTopLevelNavigationsOnly)},
           {"MachineLearningNeuralNetwork",
@@ -362,6 +368,7 @@ void SetRuntimeFeaturesFromChromiumFeatures() {
           {"RelatedWebsitePartitionAPI",
            raw_ref(net::features::kRelatedWebsitePartitionAPI)},
           {"SerialPortConnected", raw_ref(features::kSerialPortConnected)},
+          {"SplitViewLinkOpen", raw_ref(features::kSplitViewLinkOpen)},
 #if BUILDFLAG(IS_MAC)
           {"SystemDefaultAccentColors",
            raw_ref(features::kUseSystemDefaultAccentColors)},
@@ -619,6 +626,28 @@ void ResolveInvalidConfigurations() {
         << switches::kEnableFeatures << "="
         << blink::features::kUserMediaElement.name << " instead.";
     WebRuntimeFeatures::EnableUserMediaElement(false);
+  }
+
+  // InstallElement cannot be enabled without the support of the browser
+  // process.
+  if (!base::FeatureList::IsEnabled(blink::features::kInstallElement)) {
+    LOG_IF(WARNING, WebRuntimeFeatures::IsInstallElementEnabledByRuntimeFlag())
+        << "InstallElement cannot be enabled in this configuration. Use --"
+        << switches::kEnableFeatures << "="
+        << blink::features::kInstallElement.name << " instead.";
+    WebRuntimeFeatures::EnableInstallElement(false);
+  }
+
+  // WebAppInstallation cannot be enabled without the support of the browser
+  // process.
+  if (!base::FeatureList::IsEnabled(blink::features::kWebAppInstallation)) {
+    LOG_IF(WARNING,
+           WebRuntimeFeatures::IsWebAppInstallationEnabledByRuntimeFlag())
+        << "WebAppInstallation cannot be enabled in this configuration. Use "
+           "--"
+        << switches::kEnableFeatures << "="
+        << blink::features::kWebAppInstallation.name << " instead.";
+    WebRuntimeFeatures::EnableWebAppInstallation(false);
   }
 
   // CSP Hashes in V1 cannot be enabled without the support of the network
