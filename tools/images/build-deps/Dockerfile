@@ -17,7 +17,7 @@ RUN touch /etc/apt/apt.conf.d/proxy.conf && \
 RUN dpkg --add-architecture i386
 
 RUN apt-get update && \
-    apt-get -f -y install sudo lsb-release cl-base64 bash wget apt-utils python sed tzdata build-essential lib32gcc-9-dev g++-multilib dos2unix wiggle file
+    apt-get -f -y install sudo lsb-release cl-base64 bash wget apt-utils python3 sed tzdata build-essential lib32gcc-9-dev g++-multilib dos2unix wiggle file
 
 ENV user=lg
 
