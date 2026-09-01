@@ -25,7 +25,6 @@ import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_CLOSE_BUTTON_EN
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_CLOSE_BUTTON_POSITION;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_HEIGHT_PX;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_WIDTH_PX;
-import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_NETWORK;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_TOOLBAR_CORNER_RADIUS_DP;
 import static androidx.browser.trusted.LaunchHandlerClientMode.FOCUS_EXISTING;
@@ -33,7 +32,9 @@ import static androidx.browser.trusted.LaunchHandlerClientMode.NAVIGATE_EXISTING
 import static androidx.browser.trusted.LaunchHandlerClientMode.NAVIGATE_NEW;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreator.EXTRA_REQUESTED_WINDOW_FEATURES;
+import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl.EXTRA_REQUESTED_WINDOW_FEATURES;
+import static org.chromium.chrome.browser.flags.ChromeFeatureList.sCctTabSwitcherEnabledForChromeExperiment;
+import static org.chromium.chrome.browser.flags.ChromeFeatureList.sCctTabSwitcherEnabledForEmbedderExperiment;
 
 import android.app.Activity;
 import android.app.ActivityOptions;
@@ -42,6 +43,7 @@ import android.app.PendingIntent.CanceledException;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.net.Network;
 import android.net.Uri;
@@ -50,6 +52,7 @@ import android.text.TextUtils;
 import android.util.Pair;
 import android.widget.RemoteViews;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
@@ -61,7 +64,6 @@ import androidx.browser.customtabs.CustomTabsIntent.ActivitySideSheetRoundedCorn
 import androidx.browser.customtabs.CustomTabsIntent.CloseButtonPosition;
 import androidx.browser.customtabs.CustomTabsIntent.OpenInBrowserState;
 import androidx.browser.customtabs.CustomTabsSessionToken;
-import androidx.browser.customtabs.ExperimentalCustomContentAction;
 import androidx.browser.customtabs.TrustedWebUtils;
 import androidx.browser.trusted.FileHandlingData;
 import androidx.browser.trusted.LaunchHandlerClientMode;
@@ -76,6 +78,7 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.LocaleUtils;
 import org.chromium.base.Log;
+import org.chromium.base.MathUtils;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
@@ -95,11 +98,13 @@ import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.share.ShareUtils;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams;
 import org.chromium.chrome.browser.ui.web_app_header.WebAppHeaderUtils;
 import org.chromium.chrome.browser.util.WindowFeatures;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.TintedDrawable;
 import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -114,6 +119,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * A model class that parses the incoming intent for Custom Tabs specific customization data.
@@ -170,6 +176,11 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     public static final String EXTRA_UI_TYPE =
             "org.chromium.chrome.browser.customtabs.EXTRA_UI_TYPE";
 
+    public static final String EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT =
+            "org.chromium.chrome.browser.customtabs.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT";
+    public static final String EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT =
+            "org.chromium.chrome.browser.customtabs.EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT";
+
     /** Extra that defines the initial background color (RGB color stored as an integer). */
     public static final String EXTRA_INITIAL_BACKGROUND_COLOR =
             "org.chromium.chrome.browser.customtabs.EXTRA_INITIAL_BACKGROUND_COLOR";
@@ -207,6 +218,9 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
     static final String EXTRA_CUSTOM_CONTENT_ACTIONS =
             "androidx.browser.customtabs.extra.CUSTOM_CONTENT_ACTIONS";
+
+    static final String EXTRA_TRANSLUCENT_BACKGROUND =
+            "androidx.browser.customtabs.extra.TRANSLUCENT_BACKGROUND";
 
     @IntDef({
         CustomTabsButtonState.BUTTON_STATE_OFF,
@@ -246,6 +260,14 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             "org.chromium.chrome.browser.customtabs.EXPERIMENTS_ENABLE";
     public static final String EXPERIMENTS_DISABLE =
             "org.chromium.chrome.browser.customtabs.EXPERIMENTS_DISABLE";
+
+    /** Extra that contains the verified FileHandlingData bundle. */
+    public static final String EXTRA_VERIFIED_FILE_HANDLING_DATA =
+            "org.chromium.chrome.browser.customtabs.EXTRA_VERIFIED_FILE_HANDLING_DATA";
+
+    /** Extra that contains the boolean array indicating write permissions for verified files. */
+    public static final String EXTRA_VERIFIED_FILE_CAN_WRITE =
+            "org.chromium.chrome.browser.customtabs.EXTRA_VERIFIED_FILE_CAN_WRITE";
 
     /**
      * Extra that, if set, makes the Custom Tab Activity's height to be x pixels, the Custom Tab
@@ -378,17 +400,13 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
     private final boolean mIsPartialCustomTabFixedHeight;
     private final boolean mContentScrollMayResizeTab;
+    private final boolean mCctTabSwitcherEnabledForChromeExperiment;
+    private final boolean mCctTabSwitcherEnabledForEmbedderExperiment;
 
     /**
      * {@link Network} to be bound when launching a custom tab or tabs that have been pre-created.
      */
     private final @Nullable Network mNetwork;
-
-    /** Add extras to customize menu items for opening Reader Mode UI custom tab from Chrome. */
-    public static void addReaderModeUiExtras(Intent intent) {
-        intent.putExtra(EXTRA_UI_TYPE, CustomTabsUiType.READER_MODE);
-        IntentUtils.addTrustedIntentExtras(intent);
-    }
 
     /**
      * Evaluates whether the passed Intent and/or CustomTabsSessionToken are from a trusted source.
@@ -432,13 +450,15 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         int initialActivityWidth =
                 getInitialActivityWidth(
                         isTrustedCustomTab, getInitialActivityWidthFromIntent(intent), packageName);
-        if (initialActivityHeight <= 0 && initialActivityWidth <= 0) {
-            // fallback to normal Custom Tab.
-            return;
+
+        // When scrolling up the web content, we don't want to hide the URL bar in pCCT.
+        boolean isPcct = initialActivityHeight > 0 || initialActivityWidth > 0;
+        if (isPcct) {
+            intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
         }
-        intent.setClassName(context, TranslucentCustomTabActivity.class.getName());
-        // When scrolling up the web content, we don't want to hide the URL bar.
-        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
+        if (isPcct || hasTranslucentBackgroundColor(intent)) {
+            intent.setClassName(context, TranslucentCustomTabActivity.class.getName());
+        }
     }
 
     private static @Px int getInitialActivityHeight(
@@ -498,6 +518,26 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                 : roundedCornersPosition;
     }
 
+    static boolean hasTranslucentBackgroundColor(Intent intent) {
+        try {
+            return intent.hasExtra(EXTRA_TRANSLUCENT_BACKGROUND);
+        } catch (Throwable t) {
+            // Catches un-parceling exceptions.
+            return false;
+        }
+    }
+
+    @Override
+    public @ColorInt int getTranslucentBackgroundColor(Context context) {
+        int defValue = SemanticColorUtils.getDefaultBgColor(context);
+        int bg = IntentUtils.safeGetIntExtra(mIntent, EXTRA_TRANSLUCENT_BACKGROUND, defValue);
+        if (bg == defValue) return defValue;
+
+        // We limit the transparency to 30%-50% == 50%-70% (128-180) alpha
+        int alpha = MathUtils.clamp(Color.alpha(bg), 128, 180);
+        return Color.argb(alpha, Color.red(bg), Color.green(bg), Color.blue(bg));
+    }
+
     private static boolean getIsCloseButtonEnabled(Intent intent, int uiType) {
         return IntentUtils.safeGetBooleanExtra(intent, EXTRA_CLOSE_BUTTON_ENABLED, true)
                 && uiType != CustomTabsUiType.POPUP;
@@ -551,7 +591,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
         mKeepAliveServiceIntent = IntentUtils.safeGetParcelableExtra(intent, EXTRA_KEEP_ALIVE);
 
-        mNetwork = IntentUtils.safeGetParcelableExtra(intent, EXTRA_NETWORK);
+        mNetwork = CustomTabsConnection.getInstance().extractTargetNetwork(intent, mSession);
 
         mIsOpenedByChrome = IntentHandler.wasIntentSenderChrome(intent);
 
@@ -694,6 +734,13 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                                 ScreenOrientation.DEFAULT));
 
         mGsaExperimentIds = IntentUtils.safeGetIntArrayExtra(intent, EXPERIMENT_IDS);
+
+        mCctTabSwitcherEnabledForChromeExperiment =
+                IntentUtils.safeGetBooleanExtra(
+                        intent, EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_CHROME_EXPERIMENT, false);
+        mCctTabSwitcherEnabledForEmbedderExperiment =
+                IntentUtils.safeGetBooleanExtra(
+                        intent, EXTRA_CCT_TAB_SWITCHER_ENABLED_FOR_EMBEDDER_EXPERIMENT, false);
 
         mBreakPointDp = getActivityBreakPointFromIntent(intent);
         mInitialActivityHeight = getInitialActivityHeightFromIntent(intent);
@@ -1066,7 +1113,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
     private static boolean isOpenInBrowserAllowedForType(int type) {
         switch (type) {
             case CustomTabsUiType.MEDIA_VIEWER:
-            case CustomTabsUiType.READER_MODE:
             case CustomTabsUiType.OFFLINE_PAGE:
             case CustomTabsUiType.AUTH_TAB:
             case CustomTabsUiType.NETWORK_BOUND_TAB:
@@ -1324,10 +1370,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         if (IntentUtils.safeHasExtra(
                 intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_MINUTES)) {
             featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_MINUTES);
-        }
-        if (IntentUtils.safeHasExtra(
-                intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_MINUTES_ALLOWED)) {
-            featureUsage.log(CustomTabsFeature.EXTRA_TIMEOUT_MINUTES_ALLOWED);
         }
         if (IntentUtils.safeHasExtra(
                 intent, CustomTabActivityTimeoutHandler.EXTRA_TIMEOUT_PENDING_INTENT)) {
@@ -1842,7 +1884,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         return mShareState;
     }
 
-    @ExperimentalCustomContentAction
     @Override
     public List<CustomContentAction> getCustomContentActions() {
         if (ChromeFeatureList.sCctContextualMenuItems.isEnabled()) {
@@ -1874,7 +1915,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return true;
         }
 
-        if (WebAppHeaderUtils.isWindowControlsOverlayFlagEnabled()
+        if (WebAppHeaderUtils.isWindowControlsOverlayEnabled()
                 && displayMode instanceof TrustedWebActivityDisplayMode.WindowControlsOverlayMode) {
             return isDisplayOverride;
         }
@@ -1918,7 +1959,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return DisplayMode.MINIMAL_UI;
         }
 
-        if (WebAppHeaderUtils.isWindowControlsOverlayFlagEnabled()
+        if (WebAppHeaderUtils.isWindowControlsOverlayEnabled()
                 && displayMode instanceof TrustedWebActivityDisplayMode.WindowControlsOverlayMode) {
             return DisplayMode.WINDOW_CONTROLS_OVERLAY;
         }
@@ -1955,5 +1996,26 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return new WindowFeatures();
         }
         return new WindowFeatures(bundle);
+    }
+
+    @Override
+    public void maybeAddAdditionalContentExtrasToOutboundIntent(
+            Supplier<@Nullable Tab> tabProvider, Intent outboundIntent, int viewId) {
+        CustomTabsConnection.getInstance()
+                .maybeAddAdditionalContentExtrasToOutboundIntent(
+                        tabProvider, this, outboundIntent, viewId);
+    }
+
+    @Override
+    public boolean isCctTabSwitcherEnabled() {
+        boolean isEnabledForEmbedderExperiment =
+                sCctTabSwitcherEnabledForEmbedderExperiment.isEnabled()
+                        && mCctTabSwitcherEnabledForEmbedderExperiment;
+
+        boolean isEnabledForChromeExperiment =
+                sCctTabSwitcherEnabledForChromeExperiment.isEnabled()
+                        && mCctTabSwitcherEnabledForChromeExperiment;
+
+        return isEnabledForEmbedderExperiment || isEnabledForChromeExperiment;
     }
 }
