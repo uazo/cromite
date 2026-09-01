@@ -7,10 +7,10 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  base/win/win_util.cc                          |  71 +--------
  chrome/android/java/AndroidManifest.xml       |   4 -
  .../privacy_preferences_manager_impl.cc       |   5 +
- .../metrics/chrome_feature_list_creator.cc    |  12 ++
+ .../metrics/chrome_feature_list_creator.cc    |  15 ++
  .../search_engine_preconnector.cc             |   3 +
  .../policy/chrome_browser_policy_connector.cc |   3 -
- ...nfiguration_policy_handler_list_factory.cc |   7 +-
+ ...nfiguration_policy_handler_list_factory.cc |   6 +-
  .../account_consistency_mode_manager.cc       |   7 +-
  ...ccount_consistency_mode_manager_factory.cc |   2 +-
  .../throttled_gaia_auth_fetcher.cc            |   5 +
@@ -37,7 +37,7 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  .../gaia_cookie_manager_service.cc            |   4 +
  google_apis/gaia/gaia_auth_fetcher.cc         |   1 +
  net/socket/ssl_client_socket_impl.cc          |   1 +
- 33 files changed, 316 insertions(+), 165 deletions(-)
+ 33 files changed, 319 insertions(+), 164 deletions(-)
 
 diff --git a/base/win/win_util.cc b/base/win/win_util.cc
 --- a/base/win/win_util.cc
@@ -160,7 +160,7 @@ diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/Andro
 diff --git a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
 --- a/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
 +++ b/chrome/browser/android/preferences/privacy_preferences_manager_impl.cc
-@@ -50,6 +50,11 @@ static void JNI_PrivacyPreferencesManagerImpl_SetMetricsReportingEnabled(
+@@ -49,6 +49,11 @@ static void JNI_PrivacyPreferencesManagerImpl_SetMetricsReportingEnabled(
  static bool
  JNI_PrivacyPreferencesManagerImpl_IsMetricsReportingDisabledByPolicy() {
    const PrefService* local_state = g_browser_process->local_state();
@@ -175,7 +175,7 @@ diff --git a/chrome/browser/android/preferences/privacy_preferences_manager_impl
 diff --git a/chrome/browser/metrics/chrome_feature_list_creator.cc b/chrome/browser/metrics/chrome_feature_list_creator.cc
 --- a/chrome/browser/metrics/chrome_feature_list_creator.cc
 +++ b/chrome/browser/metrics/chrome_feature_list_creator.cc
-@@ -41,6 +41,8 @@
+@@ -40,6 +40,8 @@
  #include "services/network/public/cpp/network_switches.h"
  #include "services/network/public/cpp/shared_url_loader_factory.h"
  #include "ui/base/resource/resource_bundle.h"
@@ -184,19 +184,22 @@ diff --git a/chrome/browser/metrics/chrome_feature_list_creator.cc b/chrome/brow
  
  #if BUILDFLAG(IS_WIN)
  #include "chrome/installer/util/google_update_settings.h"
-@@ -182,6 +184,16 @@ void ChromeFeatureListCreator::CreatePrefService() {
-   // ManagementService's cache.
-   if (local_state_pref_store->ReadPrefs() ==
-       JsonPrefStore::PREF_READ_ERROR_NONE) {
+@@ -146,6 +148,19 @@ void ChromeFeatureListCreator::CreatePrefService() {
+       read_error != JsonPrefStore::PREF_READ_ERROR_NO_FILE);
+ 
+   if (read_error == JsonPrefStore::PREF_READ_ERROR_NONE) {
 +    // add list of user disabled policies to command line
 +    base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
 +    const base::Value* stored_value = nullptr;
-+    if (local_state_pref_store->GetValue(policy::policy_prefs::kDisabledDefaultPoliciesList, &stored_value) &&
-+          stored_value->is_string()) {
-+        std::string disabled_policies = stored_value->GetString();
-+        if (!disabled_policies.empty()) {
-+          command_line->AppendSwitchASCII(policy::switches::kForceDisabledPolicies, disabled_policies);
-+        }
++    if (local_state_pref_store->GetValue(
++            policy::policy_prefs::kDisabledDefaultPoliciesList,
++            &stored_value) &&
++        stored_value->is_string()) {
++      std::string disabled_policies = stored_value->GetString();
++      if (!disabled_policies.empty()) {
++        command_line->AppendSwitchASCII(policy::switches::kForceDisabledPolicies,
++                                        disabled_policies);
++      }
 +    }
      auto* platform_management_service =
          policy::ManagementServiceFactory::GetForPlatform();
@@ -204,7 +207,7 @@ diff --git a/chrome/browser/metrics/chrome_feature_list_creator.cc b/chrome/brow
 diff --git a/chrome/browser/navigation_predictor/search_engine_preconnector.cc b/chrome/browser/navigation_predictor/search_engine_preconnector.cc
 --- a/chrome/browser/navigation_predictor/search_engine_preconnector.cc
 +++ b/chrome/browser/navigation_predictor/search_engine_preconnector.cc
-@@ -80,6 +80,9 @@ namespace features {
+@@ -86,6 +86,9 @@ namespace features {
  BASE_FEATURE(kPreconnectFromKeyedService, base::FEATURE_ENABLED_BY_DEFAULT);
  BASE_FEATURE(kPreconnectToSearch, base::FEATURE_ENABLED_BY_DEFAULT);
  
@@ -230,7 +233,7 @@ diff --git a/chrome/browser/policy/chrome_browser_policy_connector.cc b/chrome/b
 diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
 --- a/chrome/browser/policy/configuration_policy_handler_list_factory.cc
 +++ b/chrome/browser/policy/configuration_policy_handler_list_factory.cc
-@@ -2606,9 +2606,9 @@ bool AreFuturePoliciesEnabledByDefault() {
+@@ -2613,9 +2613,9 @@ bool AreFuturePoliciesEnabledByDefault() {
    if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kTestType)) {
      return true;
    }
@@ -243,14 +246,6 @@ diff --git a/chrome/browser/policy/configuration_policy_handler_list_factory.cc 
  }
  
  }  // namespace
-@@ -3497,7 +3497,6 @@ std::unique_ptr<ConfigurationPolicyHandlerList> BuildHandlerList(
-       key::kExtensionInstallCloudPolicyChecksEnabled,
-       extensions::pref_names::kExtensionInstallCloudPolicyChecksEnabled,
-       base::Value::Type::BOOLEAN));
--
- #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
- 
- #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
 diff --git a/chrome/browser/signin/account_consistency_mode_manager.cc b/chrome/browser/signin/account_consistency_mode_manager.cc
 --- a/chrome/browser/signin/account_consistency_mode_manager.cc
 +++ b/chrome/browser/signin/account_consistency_mode_manager.cc
@@ -336,7 +331,7 @@ diff --git a/chrome/browser/signin/bound_session_credentials/throttled_gaia_auth
 diff --git a/chrome/browser/signin/chrome_signin_client.cc b/chrome/browser/signin/chrome_signin_client.cc
 --- a/chrome/browser/signin/chrome_signin_client.cc
 +++ b/chrome/browser/signin/chrome_signin_client.cc
-@@ -284,7 +284,9 @@ void ChromeSigninClient::DoFinalInit() {
+@@ -312,7 +312,9 @@ void ChromeSigninClient::DoFinalInit() {
  bool ChromeSigninClient::ProfileAllowsSigninCookies(Profile* profile) {
    scoped_refptr<content_settings::CookieSettings> cookie_settings =
        CookieSettingsFactory::GetForProfile(profile);
@@ -347,7 +342,7 @@ diff --git a/chrome/browser/signin/chrome_signin_client.cc b/chrome/browser/sign
  }
  
  PrefService* ChromeSigninClient::GetPrefs() {
-@@ -402,6 +404,9 @@ bool ChromeSigninClient::AreNetworkCallsDelayed() {
+@@ -430,6 +432,9 @@ bool ChromeSigninClient::AreNetworkCallsDelayed() {
  }
  
  void ChromeSigninClient::DelayNetworkCall(base::OnceClosure callback) {
@@ -360,7 +355,7 @@ diff --git a/chrome/browser/signin/chrome_signin_client.cc b/chrome/browser/sign
 diff --git a/chrome/browser/signin/dice_response_handler.cc b/chrome/browser/signin/dice_response_handler.cc
 --- a/chrome/browser/signin/dice_response_handler.cc
 +++ b/chrome/browser/signin/dice_response_handler.cc
-@@ -54,7 +54,7 @@ namespace {
+@@ -55,7 +55,7 @@ namespace {
  // The UMA histograms that logs events related to Dice responses.
  const char kDiceResponseHeaderHistogram[] = "Signin.DiceResponseHeader";
  const char kDiceTokenFetchResultHistogram[] = "Signin.DiceTokenFetchResult";
@@ -634,16 +629,16 @@ diff --git a/components/commerce/core/commerce_feature_list.cc b/components/comm
 diff --git a/components/policy/core/browser/browser_policy_connector.cc b/components/policy/core/browser/browser_policy_connector.cc
 --- a/components/policy/core/browser/browser_policy_connector.cc
 +++ b/components/policy/core/browser/browser_policy_connector.cc
-@@ -156,6 +156,9 @@ void BrowserPolicyConnector::RegisterPrefs(PrefRegistrySimple* registry) {
+@@ -155,6 +155,9 @@ void BrowserPolicyConnector::RegisterPrefs(PrefRegistrySimple* registry) {
        CloudPolicyRefreshScheduler::kDefaultRefreshDelayMs);
    registry->RegisterBooleanPref(
        policy_prefs::kCloudManagementEnrollmentMandatory, false);
 +  // register the pref for user disabled policies
 +  registry->RegisterStringPref(
 +      policy_prefs::kDisabledDefaultPoliciesList, std::string());
-   EnterpriseManagementMetricsService::RegisterLocalStatePrefs(registry);
  }
  
+ }  // namespace policy
 diff --git a/components/policy/core/common/command_line_policy_provider.cc b/components/policy/core/common/command_line_policy_provider.cc
 --- a/components/policy/core/common/command_line_policy_provider.cc
 +++ b/components/policy/core/common/command_line_policy_provider.cc
@@ -818,7 +813,7 @@ diff --git a/components/policy/core/common/policy_loader_command_line.cc b/compo
 diff --git a/components/policy/core/common/policy_pref_names.h b/components/policy/core/common/policy_pref_names.h
 --- a/components/policy/core/common/policy_pref_names.h
 +++ b/components/policy/core/common/policy_pref_names.h
-@@ -119,6 +119,9 @@ inline constexpr char kNativeWindowOcclusionEnabled[] =
+@@ -125,6 +125,9 @@ inline constexpr char kNativeWindowOcclusionEnabled[] =
  inline constexpr char kIntensiveWakeUpThrottlingEnabled[] =
      "policy.intensive_wake_up_throttling_enabled";
  
@@ -908,7 +903,7 @@ diff --git a/components/policy/resources/webui/policy_row.html.ts b/components/p
 +      <input type="checkbox" class="enabled_box"
 +          .checked="${!this.policy?.disabled}"
 +          @change="${this.onEnabledChange}">
-       <img src="chrome://resources/images/open_in_new.svg" alt="">
+       <img src="${this.getOpenInNewIconSrc()}" alt="">
      </a>
    </div>
 diff --git a/components/policy/resources/webui/policy_row.ts b/components/policy/resources/webui/policy_row.ts
@@ -953,7 +948,7 @@ diff --git a/components/policy_strings.grdp b/components/policy_strings.grdp
 diff --git a/components/search/ntp_features.cc b/components/search/ntp_features.cc
 --- a/components/search/ntp_features.cc
 +++ b/components/search/ntp_features.cc
-@@ -78,6 +78,7 @@ BASE_FEATURE(kNtpChromeCartModule,
+@@ -97,6 +97,7 @@ BASE_FEATURE(kNtpChromeCartModule,
  #else
               base::FEATURE_ENABLED_BY_DEFAULT);
  #endif
@@ -1008,7 +1003,7 @@ diff --git a/google_apis/gaia/gaia_auth_fetcher.cc b/google_apis/gaia/gaia_auth_
 diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
 --- a/net/socket/ssl_client_socket_impl.cc
 +++ b/net/socket/ssl_client_socket_impl.cc
-@@ -817,6 +817,7 @@ int SSLClientSocketImpl::Init() {
+@@ -828,6 +828,7 @@ int SSLClientSocketImpl::Init() {
      return ERR_UNEXPECTED;
    }
  

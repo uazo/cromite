@@ -1,4 +1,4 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 ARG VERSION
 
 ARG HTTP_PROXY
@@ -17,9 +17,9 @@ RUN touch /etc/apt/apt.conf.d/proxy.conf && \
 RUN dpkg --add-architecture i386
 
 RUN apt-get update && \
-    apt-get -f -y install sudo lsb-release cl-base64 bash wget apt-utils python sed tzdata build-essential lib32gcc-9-dev g++-multilib dos2unix wiggle
+    apt-get -f -y install sudo lsb-release cl-base64 bash wget apt-utils python3 sed tzdata build-essential lib32gcc-9-dev g++-multilib dos2unix wiggle file
 
-ENV user lg
+ENV user=lg
 
 RUN useradd -m -d /home/${user} ${user} && \
     chown -R ${user} /home/${user} && \
@@ -27,9 +27,6 @@ RUN useradd -m -d /home/${user} ${user} && \
     chmod 4755 /usr/bin/sudo && \
     echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 USER ${user}
-
-#RUN mkdir -p /home/${user} && \
-#    echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
 
 WORKDIR /home/${user}
 

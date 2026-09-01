@@ -29,6 +29,10 @@ CHR_SOURCE=https://chromium.googlesource.com/chromium/src.git
 git init
 git remote add origin $CHR_SOURCE
 
+git config --unset-all remote.origin.fetch || true
+git config --add remote.origin.fetch \
+    "+refs/tags/${VERSION}:refs/tags/${VERSION}"
+
 git fetch --depth 2 $CHR_SOURCE +refs/tags/$VERSION:chromium_$VERSION
 git checkout $VERSION
 VERSION_SHA=$( git show-ref -s $VERSION | head -n1 )
@@ -80,17 +84,12 @@ echo -e ${RED} -------- .gclient dump ${NC}
 cat ../.gclient
 
 git submodule foreach git config -f ./.git/config submodule.$name.ignore all
-git config --add remote.origin.fetch '+refs/tags/*:refs/tags/*'
-#git config diff.ignoreSubmodules all
 
 echo -e ${RED} -------- sync third_party repos ${NC}
 gclient sync -D --no-history --nohooks
 
 git config user.email "you@example.com"
 git config user.name "Your Name"
-
-# remove origin for chromium
-# git remote remove origin
 
 echo -e ${RED} -------- running hooks ${NC}
 gclient runhooks

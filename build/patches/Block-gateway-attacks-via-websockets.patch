@@ -8,22 +8,22 @@ This approach is not comprehensive, see also:
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
  .../execution_context/execution_context.h     |  1 +
- .../renderer/core/loader/base_fetch_context.h |  1 +
+ .../renderer/core/loader/base_fetch_context.h |  2 ++
  .../core/loader/frame_fetch_context.cc        | 20 ++++++++++++
- .../core/loader/frame_fetch_context.h         |  1 +
+ .../core/loader/frame_fetch_context.h         |  3 ++
  .../core/loader/worker_fetch_context.cc       | 21 +++++++++++++
- .../core/loader/worker_fetch_context.h        |  1 +
+ .../core/loader/worker_fetch_context.h        |  3 ++
  .../core/workers/installed_scripts_manager.cc |  2 +-
  .../background_fetch_manager.cc               | 31 +++++++++++++++++++
- .../websockets/websocket_channel_impl.cc      |  5 +++
+ .../websockets/websocket_channel_impl.cc      |  6 ++++
  .../modules/websockets/websocket_common.cc    | 30 ++++++++++++++++++
  .../modules/websockets/websocket_common.h     |  4 +++
- 11 files changed, 116 insertions(+), 1 deletion(-)
+ 11 files changed, 122 insertions(+), 1 deletion(-)
 
 diff --git a/third_party/blink/renderer/core/execution_context/execution_context.h b/third_party/blink/renderer/core/execution_context/execution_context.h
 --- a/third_party/blink/renderer/core/execution_context/execution_context.h
 +++ b/third_party/blink/renderer/core/execution_context/execution_context.h
-@@ -390,6 +390,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
+@@ -402,6 +402,7 @@ class CORE_EXPORT ExecutionContext : public Supplementable<ExecutionContext>,
    void SetAddressSpace(network::mojom::blink::IPAddressSpace ip_address_space);
  
    HeapObserverList<ContextLifecycleObserver>& ContextLifecycleObserverSet();
@@ -34,18 +34,19 @@ diff --git a/third_party/blink/renderer/core/execution_context/execution_context
 diff --git a/third_party/blink/renderer/core/loader/base_fetch_context.h b/third_party/blink/renderer/core/loader/base_fetch_context.h
 --- a/third_party/blink/renderer/core/loader/base_fetch_context.h
 +++ b/third_party/blink/renderer/core/loader/base_fetch_context.h
-@@ -86,6 +86,7 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
- 
-   virtual SubresourceFilter* GetSubresourceFilter() const = 0;
-   virtual bool ShouldBlockWebSocketByMixedContentCheck(const KURL&) const = 0;
-+  virtual bool ShouldBlockGateWayAttacks(network::mojom::IPAddressSpace requestor_space, const KURL&) const = 0;
+@@ -88,6 +88,8 @@ class CORE_EXPORT BaseFetchContext : public FetchContext {
+   virtual bool ShouldBlockWebSocketByMixedContentCheck(
+       const KURL&,
+       network::mojom::blink::IPAddressSpace target_address_space) const = 0;
++  virtual bool ShouldBlockGateWayAttacks(
++      network::mojom::IPAddressSpace requestor_space, const KURL&) const = 0;
    virtual std::unique_ptr<WebSocketHandshakeThrottle>
    CreateWebSocketHandshakeThrottle() = 0;
  
 diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
 --- a/third_party/blink/renderer/core/loader/frame_fetch_context.cc
 +++ b/third_party/blink/renderer/core/loader/frame_fetch_context.cc
-@@ -1154,6 +1154,26 @@ bool FrameFetchContext::ShouldBlockRequestByInspector(const KURL& url) const {
+@@ -1140,6 +1140,26 @@ bool FrameFetchContext::ShouldBlockRequestByInspector(const KURL& url) const {
    return should_block_request;
  }
  
@@ -75,11 +76,13 @@ diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.cc b/thi
 diff --git a/third_party/blink/renderer/core/loader/frame_fetch_context.h b/third_party/blink/renderer/core/loader/frame_fetch_context.h
 --- a/third_party/blink/renderer/core/loader/frame_fetch_context.h
 +++ b/third_party/blink/renderer/core/loader/frame_fetch_context.h
-@@ -197,6 +197,7 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
-   bool ShouldBlockWebSocketByMixedContentCheck(const KURL&) const override;
+@@ -199,6 +199,9 @@ class CORE_EXPORT FrameFetchContext final : public BaseFetchContext,
+       network::mojom::blink::IPAddressSpace) const override;
    std::unique_ptr<WebSocketHandshakeThrottle> CreateWebSocketHandshakeThrottle()
        override;
-+  bool ShouldBlockGateWayAttacks(network::mojom::IPAddressSpace requestor_space, const KURL&) const override;
++  bool ShouldBlockGateWayAttacks(
++      network::mojom::IPAddressSpace requestor_space,
++      const KURL&) const override;
    bool ShouldBlockFetchByMixedContentCheck(
        mojom::blink::RequestContextType request_context,
        network::mojom::blink::IPAddressSpace target_address_space,
@@ -94,7 +97,7 @@ diff --git a/third_party/blink/renderer/core/loader/worker_fetch_context.cc b/th
  #include "third_party/blink/renderer/platform/runtime_enabled_features.h"
  #include "third_party/blink/renderer/platform/scheduler/public/virtual_time_controller.h"
  #include "third_party/blink/renderer/platform/supplementable.h"
-@@ -91,6 +92,26 @@ bool WorkerFetchContext::ShouldBlockRequestByInspector(const KURL& url) const {
+@@ -92,6 +93,26 @@ bool WorkerFetchContext::ShouldBlockRequestByInspector(const KURL& url) const {
    return should_block_request;
  }
  
@@ -124,11 +127,13 @@ diff --git a/third_party/blink/renderer/core/loader/worker_fetch_context.cc b/th
 diff --git a/third_party/blink/renderer/core/loader/worker_fetch_context.h b/third_party/blink/renderer/core/loader/worker_fetch_context.h
 --- a/third_party/blink/renderer/core/loader/worker_fetch_context.h
 +++ b/third_party/blink/renderer/core/loader/worker_fetch_context.h
-@@ -62,6 +62,7 @@ class WorkerFetchContext final : public BaseFetchContext {
-   bool ShouldBlockWebSocketByMixedContentCheck(const KURL&) const override;
+@@ -66,6 +66,9 @@ class CORE_EXPORT WorkerFetchContext final : public BaseFetchContext {
+       network::mojom::blink::IPAddressSpace) const override;
    std::unique_ptr<WebSocketHandshakeThrottle> CreateWebSocketHandshakeThrottle()
        override;
-+  bool ShouldBlockGateWayAttacks(network::mojom::IPAddressSpace requestor_space, const KURL&) const override;
++  bool ShouldBlockGateWayAttacks(
++      network::mojom::IPAddressSpace requestor_space,
++      const KURL&) const override;
    bool ShouldBlockFetchByMixedContentCheck(
        mojom::blink::RequestContextType request_context,
        network::mojom::blink::IPAddressSpace target_address_space,
@@ -195,22 +200,23 @@ diff --git a/third_party/blink/renderer/modules/background_fetch/background_fetc
 diff --git a/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc b/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc
 --- a/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc
 +++ b/third_party/blink/renderer/modules/websockets/websocket_channel_impl.cc
-@@ -289,6 +289,11 @@ bool WebSocketChannelImpl::Connect(const KURL& url, const String& protocol) {
+@@ -296,6 +296,12 @@ bool WebSocketChannelImpl::Connect(
      return false;
    }
  
-+  if (GetBaseFetchContext()->ShouldBlockGateWayAttacks(execution_context_->AddressSpace(), url)) {
++  if (GetBaseFetchContext()->ShouldBlockGateWayAttacks(
++          execution_context_->AddressSpace(), url)) {
 +    has_initiated_opening_handshake_ = false;
 +    return false;
 +  }
 +
    if (auto* scheduler = execution_context_->GetScheduler()) {
-     if (!RuntimeEnabledFeatures::DisconnectWebSocketOnBFCacheEnabled()) {
-       // Two features are registered here:
+     if (!RuntimeEnabledFeatures::DisconnectWebSocketOnBFCacheEnabled() ||
+         base::CommandLine::ForCurrentProcess()->HasSwitch(
 diff --git a/third_party/blink/renderer/modules/websockets/websocket_common.cc b/third_party/blink/renderer/modules/websockets/websocket_common.cc
 --- a/third_party/blink/renderer/modules/websockets/websocket_common.cc
 +++ b/third_party/blink/renderer/modules/websockets/websocket_common.cc
-@@ -139,9 +139,39 @@ WebSocketCommon::ConnectResult WebSocketCommon::Connect(
+@@ -142,9 +142,39 @@ WebSocketCommon::ConnectResult WebSocketCommon::Connect(
      return ConnectResult::kException;
    }
  
@@ -253,16 +259,17 @@ diff --git a/third_party/blink/renderer/modules/websockets/websocket_common.cc b
 diff --git a/third_party/blink/renderer/modules/websockets/websocket_common.h b/third_party/blink/renderer/modules/websockets/websocket_common.h
 --- a/third_party/blink/renderer/modules/websockets/websocket_common.h
 +++ b/third_party/blink/renderer/modules/websockets/websocket_common.h
-@@ -11,6 +11,8 @@
+@@ -11,7 +11,9 @@
  
  #include <optional>
  
 +#include "services/network/public/mojom/ip_address_space.mojom.h"
+ #include "services/network/public/mojom/ip_address_space.mojom-blink.h"
 +#include "third_party/blink/renderer/platform/network/network_utils.h"
  #include "third_party/blink/renderer/modules/modules_export.h"
  #include "third_party/blink/renderer/platform/weborigin/kurl.h"
  #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
-@@ -58,6 +60,8 @@ class MODULES_EXPORT WebSocketCommon {
+@@ -62,6 +64,8 @@ class MODULES_EXPORT WebSocketCommon {
    void SetState(State state) { state_ = state; }
    const KURL& Url() const { return url_; }
  

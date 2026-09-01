@@ -7,16 +7,16 @@ Always enforce DoH even with inconsistent system DNS configuration
 
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- chrome/browser/net/secure_dns_config.cc               |  2 +-
- chrome/browser/net/secure_dns_util.cc                 |  2 +-
- chrome/browser/net/stub_resolver_config_reader.cc     |  3 +++
- chrome/browser/privacy/secure_dns_bridge.cc           |  2 +-
- .../ui/webui/settings/settings_secure_dns_handler.cc  |  2 +-
- net/dns/dns_client.cc                                 | 11 ++++++++---
- net/dns/host_resolver_manager.cc                      |  1 +
- net/dns/public/doh_provider_entry.cc                  |  9 +++------
- net/dns/public/doh_provider_entry.h                   |  4 ++--
- 9 files changed, 21 insertions(+), 15 deletions(-)
+ chrome/browser/net/secure_dns_config.cc                  | 2 +-
+ chrome/browser/net/secure_dns_util.cc                    | 2 +-
+ chrome/browser/net/stub_resolver_config_reader.cc        | 3 +++
+ chrome/browser/privacy/secure_dns_bridge.cc              | 2 +-
+ .../ui/webui/settings/settings_secure_dns_handler.cc     | 2 +-
+ net/dns/dns_client.cc                                    | 8 +++++++-
+ net/dns/host_resolver_manager.cc                         | 1 +
+ net/dns/public/doh_provider_entry.cc                     | 9 +++------
+ net/dns/public/doh_provider_entry.h                      | 4 ++--
+ 9 files changed, 20 insertions(+), 13 deletions(-)
 
 diff --git a/chrome/browser/net/secure_dns_config.cc b/chrome/browser/net/secure_dns_config.cc
 --- a/chrome/browser/net/secure_dns_config.cc
@@ -53,7 +53,7 @@ diff --git a/chrome/browser/net/stub_resolver_config_reader.cc b/chrome/browser/
    return GetWinParentalControls().web_filter;
  }
  
-@@ -238,6 +239,7 @@ void StubResolverConfigReader::UpdateNetworkService(bool record_metrics) {
+@@ -243,6 +244,7 @@ void StubResolverConfigReader::UpdateNetworkService(bool record_metrics) {
  }
  
  bool StubResolverConfigReader::ShouldDisableDohForManaged() {
@@ -61,7 +61,7 @@ diff --git a/chrome/browser/net/stub_resolver_config_reader.cc b/chrome/browser/
  // This function ignores cloud policies which are loaded on a per-profile basis.
  #if BUILDFLAG(IS_ANDROID)
    // Check for MDM/management/owner apps. android_has_owner_ is true if either a
-@@ -266,6 +268,7 @@ bool StubResolverConfigReader::ShouldDisableDohForManaged() {
+@@ -271,6 +273,7 @@ bool StubResolverConfigReader::ShouldDisableDohForManaged() {
  }
  
  bool StubResolverConfigReader::ShouldDisableDohForParentalControls() {
@@ -96,39 +96,32 @@ diff --git a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc b/c
 diff --git a/net/dns/dns_client.cc b/net/dns/dns_client.cc
 --- a/net/dns/dns_client.cc
 +++ b/net/dns/dns_client.cc
-@@ -332,11 +332,14 @@ class DnsClientImpl : public DnsClient {
+@@ -329,7 +329,9 @@ class DnsClientImpl : public DnsClient {
   private:
-   std::optional<DnsConfig> BuildEffectiveConfig() const {
+   DnsConfig BuildEffectiveConfig() const {
      DnsConfig config;
 -    if (config_overrides_.OverridesEverything()) {
 +    // in Bromite it is sufficient to have secure DoH enabled to give the overrides priority
-+    if (config_overrides_.dns_over_https_config && config_overrides_.secure_dns_mode) {
++    if (config_overrides_.dns_over_https_config &&
++        config_overrides_.secure_dns_mode) {
        config = config_overrides_.ApplyOverrides(DnsConfig());
      } else {
--      if (!system_config_)
-+      if (!system_config_) {
-+        LOG(WARNING) << "BuildEffectiveConfig(): no system configuration";
-         return std::nullopt;
-+      }
- 
-       config = config_overrides_.ApplyOverrides(system_config_.value());
-     }
-@@ -352,8 +355,10 @@ class DnsClientImpl : public DnsClient {
+       config = config_overrides_.ApplyOverrides(
+@@ -347,6 +349,10 @@ class DnsClientImpl : public DnsClient {
        config.nameservers.clear();
      }
  
--    if (!config.IsValid())
 +    if (!config.IsValid()) {
-+        LOG(WARNING) << "BuildEffectiveConfig(): invalid configuration";
-       return std::nullopt;
++      LOG(WARNING) << "BuildEffectiveConfig(): invalid configuration";
 +    }
- 
++
      return config;
    }
+ 
 diff --git a/net/dns/host_resolver_manager.cc b/net/dns/host_resolver_manager.cc
 --- a/net/dns/host_resolver_manager.cc
 +++ b/net/dns/host_resolver_manager.cc
-@@ -702,6 +702,7 @@ void HostResolverManager::SetDnsConfigOverrides(DnsConfigOverrides overrides) {
+@@ -689,6 +689,7 @@ void HostResolverManager::SetDnsConfigOverrides(DnsConfigOverrides overrides) {
    bool changed = dns_client_->SetConfigOverrides(std::move(overrides));
  
    if (changed) {
