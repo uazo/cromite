@@ -29,8 +29,6 @@ sudo cp $WORKSPACE/goma_auth.py $WORKSPACE/goma/
 
 echo -e ${RED} -------- prepare vpython virtual environment ${NC}
 rm -rf /tmp/vpython*
-cd $WORKSPACE/depot_tools/
-vpython3 -vpython-spec vpython.toml -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
 cd $WORKSPACE/chromium/src
 vpython3 -vpython-spec .vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
 vpython3 -vpython-spec ../../depot_tools/.vpython3 -vpython-root $VPYTHON_VIRTUALENV_ROOT -vpython-log-level debug -vpython-tool install
