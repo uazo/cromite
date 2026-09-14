@@ -23,22 +23,23 @@ License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
  chrome/browser/ui/prefs/pref_watcher.cc       |   2 +
  .../settings_localized_strings_provider.cc    |   3 +
  chrome/common/pref_names.h                    |   2 +
+ .../browser_initiated_resource_request.cc     |   2 +-
+ content/renderer/render_frame_impl.cc         |   2 +-
+ .../global_privacy_control_util.cc            |   4 +-
  .../renderer_preferences_mojom_traits.cc      |   1 +
  .../renderer_preferences.h                    |   1 +
  .../renderer_preferences_mojom_traits.h       |   5 +
  .../public/mojom/renderer_preferences.mojom   |   2 +
  .../renderer/core/exported/web_view_impl.cc   |   3 +
- .../global_privacy_control.cc                 |  12 ++
- .../global_privacy_control.h                  |  15 +++
+ .../web_service_worker_fetch_context_impl.cc  |   2 +-
+ ...shared_worker_global_scope_context_impl.cc |   2 +-
  .../platform/runtime_enabled_features.json5   |  13 +-
- 27 files changed, 321 insertions(+), 8 deletions(-)
+ 30 files changed, 301 insertions(+), 13 deletions(-)
  create mode 100644 chrome/android/java/res/xml/gpc_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/GpcSettings.java
  create mode 100644 chrome/browser/resources/settings/privacy_page/gpc_toggle.html
  create mode 100644 chrome/browser/resources/settings/privacy_page/gpc_toggle.ts
  create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/Enable-Global-Privacy-Control.grdp
- create mode 100644 third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.cc
- create mode 100644 third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.h
 
 diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
 --- a/chrome/android/chrome_java_resources.gni
@@ -489,6 +490,51 @@ diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
  // Whether to allow the use of Encrypted Media Extensions (EME), except for the
  // use of Clear Key key sytems, which is always allowed as required by the spec.
  // TODO(crbug.com/40549758): This pref was used as a WebPreference which is why
+diff --git a/content/browser/loader/browser_initiated_resource_request.cc b/content/browser/loader/browser_initiated_resource_request.cc
+--- a/content/browser/loader/browser_initiated_resource_request.cc
++++ b/content/browser/loader/browser_initiated_resource_request.cc
+@@ -37,7 +37,7 @@ void UpdateAdditionalHeadersForBrowserInitiatedRequest(
+ 
+   // Set the GlobalPrivacyControl header if appropriate.
+   // https://w3c.github.io/gpc/#expression-format
+-  if (blink::IsGlobalPrivacyControlEnabled()) {
++  if (renderer_preferences.enable_gpc || blink::IsGlobalPrivacyControlEnabled()) {
+     if (should_update_existing_headers) {
+       headers->RemoveHeader(blink::kGlobalPrivacyControlHeader);
+     }
+diff --git a/content/renderer/render_frame_impl.cc b/content/renderer/render_frame_impl.cc
+--- a/content/renderer/render_frame_impl.cc
++++ b/content/renderer/render_frame_impl.cc
+@@ -4678,7 +4678,7 @@ void RenderFrameImpl::FinalizeRequestInternal(
+     request.SetHttpHeaderField(
+         blink::WebString::FromUtf8(blink::kDoNotTrackHeader), "1");
+   }
+-  if (blink::IsGlobalPrivacyControlEnabled()) {
++  if (GetWebView()->GetRendererPreferences().enable_gpc || blink::IsGlobalPrivacyControlEnabled()) {
+     request.SetHttpHeaderField(
+         blink::WebString::FromUtf8(blink::kGlobalPrivacyControlHeader), "1");
+     blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+diff --git a/third_party/blink/common/global_privacy_control/global_privacy_control_util.cc b/third_party/blink/common/global_privacy_control/global_privacy_control_util.cc
+--- a/third_party/blink/common/global_privacy_control/global_privacy_control_util.cc
++++ b/third_party/blink/common/global_privacy_control/global_privacy_control_util.cc
+@@ -8,6 +8,7 @@
+ #include "base/metrics/histogram_macros.h"
+ #include "base/rand_util.h"
+ #include "third_party/blink/public/common/features.h"
++#include "third_party/blink/public/platform/web_runtime_features.h"
+ 
+ namespace blink {
+ namespace {
+@@ -27,7 +28,8 @@ bool IsGlobalPrivacyControlEnabled() {
+   }
+   // TODO(crbug.com/40745270): Also use pref to inform whether to enable.
+   return base::FeatureList::IsEnabled(
+-      blink::features::kGlobalPrivacyControlTest);
++      blink::features::kGlobalPrivacyControlTest)
++      || blink::WebRuntimeFeatures::IsGlobalPrivacyControlEnabled();
+ }
+ 
+ void MaybeRecordGlobalPrivacyControlSourceMetric(
 diff --git a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 --- a/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
 +++ b/third_party/blink/common/renderer_preferences/renderer_preferences_mojom_traits.cc
@@ -551,47 +597,34 @@ diff --git a/third_party/blink/renderer/core/exported/web_view_impl.cc b/third_p
  #if BUILDFLAG(IS_OZONE)
    GetSettings()->SetSelectionClipboardBufferAvailable(
        renderer_preferences_.selection_clipboard_buffer_available);
-diff --git a/third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.cc b/third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.cc
-new file mode 100644
---- /dev/null
-+++ b/third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.cc
-@@ -0,0 +1,12 @@
-+#include "third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.h"
-+
-+#include "base/feature_list.h"
-+#include "third_party/blink/public/common/features.h"
-+
-+namespace blink {
-+
-+bool GlobalPrivacyControl::globalPrivacyControl(NavigatorBase& navigator) {
-+  return true;
-+}
-+
-+}  // namespace blink
-diff --git a/third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.h b/third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.h
-new file mode 100644
---- /dev/null
-+++ b/third_party/blink/renderer/modules/global_privacy_control/global_privacy_control.h
-@@ -0,0 +1,15 @@
-+#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_GLOBAL_PRIVACY_CONTROL_GLOBAL_PRIVACY_CONTROL_H_
-+#define THIRD_PARTY_BLINK_RENDERER_MODULES_GLOBAL_PRIVACY_CONTROL_GLOBAL_PRIVACY_CONTROL_H_
-+
-+#include "third_party/blink/renderer/core/execution_context/navigator_base.h"
-+
-+namespace blink {
-+
-+class GlobalPrivacyControl final {
-+ public:
-+  static bool globalPrivacyControl(NavigatorBase&);
-+};
-+
-+}  // namespace blink
-+
-+#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_GLOBAL_PRIVACY_CONTROL_GLOBAL_PRIVACY_CONTROL_H_
+diff --git a/third_party/blink/renderer/modules/service_worker/web_service_worker_fetch_context_impl.cc b/third_party/blink/renderer/modules/service_worker/web_service_worker_fetch_context_impl.cc
+--- a/third_party/blink/renderer/modules/service_worker/web_service_worker_fetch_context_impl.cc
++++ b/third_party/blink/renderer/modules/service_worker/web_service_worker_fetch_context_impl.cc
+@@ -151,7 +151,7 @@ void WebServiceWorkerFetchContextImpl::FinalizeRequest(WebURLRequest& request) {
+   if (renderer_preferences_.enable_do_not_track) {
+     request.SetHttpHeaderField(WebString::FromUtf8(kDoNotTrackHeader), "1");
+   }
+-  if (IsGlobalPrivacyControlEnabled()) {
++  if (renderer_preferences_.enable_gpc || IsGlobalPrivacyControlEnabled()) {
+     request.SetHttpHeaderField(WebString::FromUtf8(kGlobalPrivacyControlHeader),
+                                "1");
+     blink::MaybeRecordGlobalPrivacyControlSourceMetric(
+diff --git a/third_party/blink/renderer/platform/loader/fetch/url_loader/dedicated_or_shared_worker_global_scope_context_impl.cc b/third_party/blink/renderer/platform/loader/fetch/url_loader/dedicated_or_shared_worker_global_scope_context_impl.cc
+--- a/third_party/blink/renderer/platform/loader/fetch/url_loader/dedicated_or_shared_worker_global_scope_context_impl.cc
++++ b/third_party/blink/renderer/platform/loader/fetch/url_loader/dedicated_or_shared_worker_global_scope_context_impl.cc
+@@ -378,7 +378,7 @@ void DedicatedOrSharedWorkerGlobalScopeContextImpl::FinalizeRequest(
+   if (renderer_preferences_.enable_do_not_track) {
+     request.SetHttpHeaderField(WebString::FromUtf8(kDoNotTrackHeader), "1");
+   }
+-  if (IsGlobalPrivacyControlEnabled()) {
++  if (renderer_preferences_.enable_gpc || IsGlobalPrivacyControlEnabled()) {
+     request.SetHttpHeaderField(WebString::FromUtf8(kGlobalPrivacyControlHeader),
+                                "1");
+     blink::MaybeRecordGlobalPrivacyControlSourceMetric(
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -3403,14 +3403,6 @@
+@@ -3408,14 +3408,6 @@
        name: "GetUserMediaEchoCancellationModes",
        status: "stable",
      },
@@ -606,7 +639,7 @@ diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 
      {
        name: "GlobalPrivacyControlForce",
      },
-@@ -4106,6 +4098,11 @@
+@@ -4111,6 +4103,11 @@
        status: "stable",
        base_feature: "none",
      },
