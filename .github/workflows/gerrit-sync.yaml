@@ -1,0 +1,72 @@
+name: Gerrit daily sync
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gerrit-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+        working-directory: tools/gerrit
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Sync Gerrit
+        env:
+          SQLSERVER_HOST: ${{ secrets.SQLSERVER_HOST }}
+          SQLSERVER_DATABASE: ${{ secrets.SQLSERVER_DATABASE }}
+          SQLSERVER_USER: ${{ secrets.SQLSERVER_USER }}
+          SQLSERVER_PASSWORD: ${{ secrets.SQLSERVER_PASSWORD }}
+          SQLSERVER_PORT: ${{ vars.SQLSERVER_PORT || '1433' }}
+          SQLSERVER_ENCRYPT: ${{ vars.SQLSERVER_ENCRYPT || 'true' }}
+          SQLSERVER_TRUST_SERVER_CERTIFICATE: ${{ vars.SQLSERVER_TRUST_SERVER_CERTIFICATE || 'true' }}
+          SQLSERVER_POOL_MAX: ${{ vars.SQLSERVER_POOL_MAX || '10' }}
+          GERRIT_BASE_URL: ${{ vars.GERRIT_BASE_URL || 'https://chromium-review.googlesource.com' }}
+          GERRIT_PAGE_SIZE: ${{ vars.GERRIT_PAGE_SIZE || '100' }}
+          GERRIT_MAX_PAGES: '0'
+          GERRIT_OPTIONS: ${{ vars.GERRIT_OPTIONS || '81' }}
+          GERRIT_INITIAL_MERGE_AFTER: ${{ vars.GERRIT_INITIAL_MERGE_AFTER }}
+          GERRIT_FETCH_RETRY_COUNT: ${{ vars.GERRIT_FETCH_RETRY_COUNT || '15' }}
+          GERRIT_FETCH_RETRY_DELAY_MS: ${{ vars.GERRIT_FETCH_RETRY_DELAY_MS || '1500' }}
+          GERRIT_PATCH_UPLOAD_URL: ${{ vars.GERRIT_PATCH_UPLOAD_URL || 'https://www.cromite.org/api/gerrit-patches.php' }}
+          GERRIT_PATCH_UPLOAD_SECRET: ${{ secrets.GERRIT_PATCH_UPLOAD_SECRET }}
+          GERRIT_PATCH_UPLOAD_CONCURRENCY: ${{ vars.GERRIT_PATCH_UPLOAD_CONCURRENCY || '4' }}
+          GERRIT_PATCH_UPLOAD_TIMEOUT_MS: ${{ vars.GERRIT_PATCH_UPLOAD_TIMEOUT_MS || '60000' }}
+          GERRIT_PATCH_UPLOAD_RETRY_COUNT: ${{ vars.GERRIT_PATCH_UPLOAD_RETRY_COUNT || '3' }}
+        run: |
+          for name in SQLSERVER_HOST SQLSERVER_DATABASE SQLSERVER_USER SQLSERVER_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required secret: $name"
+              exit 1
+            fi
+          done
+          # The npm script requires this file; configuration comes from env.
+          touch .env
+          npm run gerrit:sync
