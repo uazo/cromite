@@ -42,7 +42,8 @@
 #include "chrome/browser/crash_upload_list/crash_upload_list.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
 #include "chrome/browser/domain_reliability/service_factory.h"
-#include "chrome/browser/downgrade/user_data_downgrade.h"
+#include "chrome/browser/downgrade/snapshot_file_collector.h"
+#include "chrome/browser/downgrade/user_data_downgrade.h"  // nogncheck
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/file_system_access/chrome_file_system_access_permission_context.h"
@@ -57,8 +58,8 @@
 #include "chrome/browser/media/webrtc/webrtc_event_log_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/password_manager/account_password_store_factory.h"
-#include "chrome/browser/password_manager/profile_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/account_password_store_factory.h"
+#include "chrome/browser/password_manager/factories/profile_password_store_factory.h"
 #include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service.h"
 #include "chrome/browser/payments/browser_binding/browser_bound_key_deleter_service_factory.h"
 #include "chrome/browser/permissions/permission_actions_history_factory.h"
@@ -81,7 +82,6 @@
 #include "chrome/browser/spellchecker/spellcheck_service.h"
 #include "chrome/browser/strike_database/strike_database_factory.h"
 #include "chrome/browser/sync/sync_service_factory.h"
-#include "chrome/browser/tpcd/metadata/manager_factory.h"
 #include "chrome/browser/translate/chrome_translate_client.h"
 #include "chrome/browser/ui/find_bar/find_bar_state.h"
 #include "chrome/browser/ui/find_bar/find_bar_state_factory.h"
@@ -143,7 +143,6 @@
 #include "components/strike_database/strike_database.h"
 #include "components/sync/service/sync_service.h"
 #include "components/sync/service/sync_user_settings.h"
-#include "components/tpcd/metadata/browser/manager.h"
 #include "components/web_cache/browser/web_cache_manager.h"
 #include "components/webrtc_logging/browser/log_cleanup.h"
 #include "components/webrtc_logging/browser/text_log_list.h"
@@ -200,13 +199,10 @@
 #endif  // !BUILDFLAG(IS_ANDROID)
 
 #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+#include "chrome/browser/extensions/activity_log/activity_log.h"
 #include "extensions/browser/extension_prefs.h"
 #include "extensions/common/constants.h"
 #endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE)
-
-#if BUILDFLAG(ENABLE_EXTENSIONS)
-#include "chrome/browser/extensions/activity_log/activity_log.h"
-#endif  // BUILDFLAG(ENABLE_EXTENSIONS)
 
 #if BUILDFLAG(IS_CHROMEOS)
 #include "chrome/browser/ash/net/system_proxy_manager.h"
@@ -433,7 +429,7 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
       language_histogram->ClearHistory(delete_begin_, delete_end_);
     }
 
-#if BUILDFLAG(ENABLE_EXTENSIONS)
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
     // The extension activity log contains details of which websites extensions
     // were active on. It therefore indirectly stores details of websites a
     // user has visited so best clean from here as well.
@@ -649,11 +645,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
           PrivacySandboxSettingsFactory::GetForProfile(profile_);
       if (privacy_sandbox_settings) {
         privacy_sandbox_settings->OnCookiesCleared();
-      }
-
-      if (tpcd::metadata::Manager* manager =
-              tpcd::metadata::ManagerFactory::GetForProfile(profile_)) {
-        manager->ResetCohorts();
       }
 
 #if BUILDFLAG(IS_ANDROID)
@@ -1367,10 +1358,25 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
   //////////////////////////////////////////////////////////////////////////////
   // Remove data for this profile contained in any snapshots.
   if (remove_mask && filter_builder->MatchesMostOriginsAndDomains()) {
+    bool delete_all =
+        (((remove_mask & chrome_browsing_data_remover::WIPE_PROFILE) ==
+          chrome_browsing_data_remover::WIPE_PROFILE) ||
+         ((remove_mask & chrome_browsing_data_remover::ALL_DATA_TYPES) ==
+          chrome_browsing_data_remover::ALL_DATA_TYPES)) &&
+        delete_begin_.is_null();
+    std::optional<std::vector<base::FilePath>> files_to_delete;
+    if (!delete_all) {
+      files_to_delete.emplace();
+      for (const auto& item : downgrade::CollectProfileItems()) {
+        if (item.data_types & remove_mask) {
+          files_to_delete->push_back(item.path);
+        }
+      }
+    }
     base::ThreadPool::PostTaskAndReply(
         FROM_HERE, {base::TaskPriority::USER_VISIBLE, base::MayBlock()},
         base::BindOnce(&downgrade::RemoveDataForProfile, delete_begin_,
-                       profile_->GetPath(), remove_mask),
+                       profile_->GetPath(), std::move(files_to_delete)),
         CreateTaskCompletionClosure(TracingDataType::kUserDataSnapshot));
   }
 #endif  // BUILDFLAG(ENABLE_DOWNGRADE_PROCESSING)
