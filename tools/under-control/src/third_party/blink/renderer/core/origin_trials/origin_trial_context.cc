@@ -87,7 +87,7 @@ String ExtractTokenOrQuotedString(const String& header_value, unsigned& pos) {
     while (pos < len && !IsWhitespace(header_value[pos]) &&
            header_value[pos] != ',')
       pos++;
-    result = header_value.Substring(start_pos, pos - start_pos);
+    result = header_value.substr(start_pos, pos - start_pos);
   }
   SkipWhiteSpace(header_value, pos);
   return result;
@@ -444,27 +444,11 @@ bool OriginTrialContext::InstallFeatures(
       }
     }
 
-    if (InstallSettingFeature(document, enabled_feature))
-      continue;
-
     InstallPropertiesPerFeature(script_state, enabled_feature);
     added_binding_features = true;
   }
 
   return added_binding_features;
-}
-
-bool OriginTrialContext::InstallSettingFeature(
-    Document& document,
-    mojom::blink::OriginTrialFeature enabled_feature) {
-  switch (enabled_feature) {
-    case mojom::blink::OriginTrialFeature::kAutoDarkMode:
-      if (document.GetSettings())
-        document.GetSettings()->SetForceDarkModeEnabled(true);
-      return true;
-    default:
-      return false;
-  }
 }
 
 void OriginTrialContext::AddFeature(mojom::blink::OriginTrialFeature feature) {
@@ -533,10 +517,6 @@ bool OriginTrialContext::CanEnableTrialFromName(const StringView& trial_name) {
         features::kBackForwardCacheSendNotRestoredReasons);
   }
 
-  if (trial_name == "SoftNavigationHeuristics") {
-    return base::FeatureList::IsEnabled(features::kSoftNavigationDetection);
-  }
-
   if (trial_name == "UserMediaElement") {
     return base::FeatureList::IsEnabled(blink::features::kUserMediaElement);
   }
@@ -558,12 +538,15 @@ bool OriginTrialContext::CanEnableTrialFromName(const StringView& trial_name) {
   }
 
   if (trial_name == "WebAppInstallation") {
-#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
-    BUILDFLAG(IS_CHROMEOS)
     return base::FeatureList::IsEnabled(blink::features::kWebAppInstallation);
-#else
-    return false;
-#endif
+  }
+
+  if (trial_name == "InstallElement") {
+    return base::FeatureList::IsEnabled(blink::features::kInstallElement);
+  }
+
+  if (trial_name == "WebMCP") {
+    return base::FeatureList::IsEnabled(blink::features::kWebMCP);
   }
   return true;
 }
@@ -647,7 +630,7 @@ bool OriginTrialContext::EnableTrialFromToken(
 
   if (token_result.Status() == OriginTrialTokenStatus::kSuccess) {
     String trial_name =
-        String::FromUTF8(token_result.ParsedToken()->feature_name());
+        String::FromUtf8(token_result.ParsedToken()->feature_name());
     OriginTrialFeaturesEnabled result = EnableTrialFromName(
         trial_name, token_result.ParsedToken()->expiry_time());
     trial_status = result.status;
@@ -683,7 +666,7 @@ void OriginTrialContext::CacheToken(const String& raw_token,
   String trial_name =
       token_result.ParsedToken() &&
               token_result.Status() != OriginTrialTokenStatus::kUnknownTrial
-          ? String::FromUTF8(token_result.ParsedToken()->feature_name())
+          ? String::FromUtf8(token_result.ParsedToken()->feature_name())
           : kDefaultTrialName;
 
   // Does nothing if key already exists.
