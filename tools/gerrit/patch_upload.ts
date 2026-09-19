@@ -99,6 +99,31 @@ function putOnce(config: UploadConfig, item: PatchUploadItem): Promise<void> {
   });
 }
 
+export function formatUploadError(error: unknown, secret: string): string {
+  const describe = (value: unknown, depth: number): string => {
+    if (depth > 3) return "[nested error]";
+    if (!(value instanceof Error)) return typeof value === "string" ? value : "Unknown upload error";
+    const details = value as Error & {
+      code?: string; syscall?: string; address?: string; port?: number;
+      cause?: unknown; errors?: unknown[];
+    };
+    const parts = [value.name || "Error", value.message];
+    for (const key of ["code", "syscall", "address", "port"] as const) {
+      if (typeof details[key] === "string" || typeof details[key] === "number") {
+        parts.push(`${key}=${details[key]}`);
+      }
+    }
+    if (details.cause) parts.push(`cause=[${describe(details.cause, depth + 1)}]`);
+    if (Array.isArray(details.errors)) {
+      parts.push(...details.errors.slice(0, 8).map((item) => `[${describe(item, depth + 1)}]`));
+    }
+    return parts.filter(Boolean).join(" ");
+  };
+  const message = describe(error, 0);
+  return (secret ? message.split(secret).join("[REDACTED]") : message)
+    .replace(/[\r\n]+/g, " ").slice(0, 2000);
+}
+
 export async function uploadPatch(
   config: UploadConfig,
   item: PatchUploadItem,
@@ -116,8 +141,8 @@ export async function uploadPatch(
       log?.(`change=${item.gerritChangeId} revision=${item.revisionNumber} upload attempt=${attempt}/${config.retryCount} succeeded.`);
       return { GerritChangeID: item.gerritChangeId, RevisionNumber: item.revisionNumber, ObjectKey: getPatchObjectKey(item.gerritChangeId, item.revisionNumber), Uploaded: true, Error: null };
     } catch (error) {
-      lastError = error;
-      log?.(`change=${item.gerritChangeId} revision=${item.revisionNumber} upload attempt=${attempt}/${config.retryCount} failed: ${error instanceof Error ? error.message : String(error)}`);
+      lastError = formatUploadError(error, config.secret);
+      log?.(`change=${item.gerritChangeId} revision=${item.revisionNumber} upload attempt=${attempt}/${config.retryCount} failed: ${lastError}`);
       if (attempt < config.retryCount) await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
     }
   }
