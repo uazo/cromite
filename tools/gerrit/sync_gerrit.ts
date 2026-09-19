@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import sql from "mssql";
 import {
   diffCacheExists,
   extractDiffFilePaths,
   getPatchCacheRelativePath,
+  getPatchCacheAbsolutePath,
   isPatchCacheRelativePath,
   parseDiff,
   readDiffCache,
@@ -102,6 +105,9 @@ type PendingPatch = {
 
 type PendingFileNamePatch = {
   GerritPatchID: number;
+  GerritChangeID: number;
+  RevisionNumber: number;
+  PatchSha256: string;
   ChangeID: string;
   PatchCachePath: string;
 };
@@ -534,9 +540,9 @@ async function fetchChanges(
   return JSON.parse(stripXssiPrefix(body)) as GerritChange[];
 }
 
-async function fetchPatchBase64(options: SyncOptions, changeNumber: number): Promise<string> {
+async function fetchPatchBase64(options: SyncOptions, changeNumber: number, revision: number | "current" = "current"): Promise<string> {
   const url = new URL(
-    `/changes/${encodeURIComponent(String(changeNumber))}/revisions/current/patch`,
+    `/changes/${encodeURIComponent(String(changeNumber))}/revisions/${revision}/patch`,
     options.baseUrl,
   );
   return (await fetchText(options, url.toString(), `patch change=${changeNumber}`)).replace(
@@ -902,7 +908,8 @@ async function listPendingFileNamePatches(
     .request()
     .input("GerritChangeID", sql.BigInt, gerritChangeId)
     .query<PendingFileNamePatch>(`
-    SELECT p.[GerritPatchID], c.[ChangeID], p.[PatchCachePath]
+    SELECT p.[GerritPatchID], p.[GerritChangeID], p.[RevisionNumber],
+           p.[PatchSha256], c.[ChangeID], p.[PatchCachePath]
     FROM [dbo].[GerritPatch] p
     INNER JOIN [dbo].[GerritChange] c
       ON c.[GerritChangeID] = p.[GerritChangeID]
@@ -911,7 +918,7 @@ async function listPendingFileNamePatches(
       AND REPLACE(p.[PatchCachePath], CHAR(92), '/') LIKE 'tools/gerrit/cache/patches/%.patch.diff'
       AND ${statusFilter}
       AND (@GerritChangeID IS NULL OR p.[GerritChangeID] = @GerritChangeID)
-    ORDER BY p.[GerritPatchID] ASC
+    ORDER BY p.[GerritPatchID] DESC
   `);
   return result.recordset;
 }
@@ -1560,10 +1567,43 @@ async function processPendingPatchesForSyncTarget(
   };
 }
 
+async function preparePendingFileNameCache(
+  pool: sql.ConnectionPool,
+  options: SyncOptions,
+  syncName: string,
+  gerritChangeId: number | null = null,
+): Promise<Set<number>> {
+  const skippedPatchIds = new Set<number>();
+  const queue = await listPendingFileNamePatches(pool, syncName, gerritChangeId);
+  logInfo(`[${syncName}] Preparing file-name cache: ${queue.length} pending patches.`);
+  for (const patch of queue) {
+    const absolutePath = getPatchCacheAbsolutePath(patch.PatchCachePath);
+    if (await diffCacheExists(patch.PatchCachePath)) continue;
+    const prefix = `[${syncName}][cache-recovery][change=${patch.GerritChangeID} revision=${patch.RevisionNumber}]`;
+    if (!Number.isInteger(patch.RevisionNumber) || patch.RevisionNumber <= 0) {
+      throw new Error(`${prefix} Invalid recorded revision.`);
+    }
+    logInfo(`${prefix} Downloading missing diff for file-name indexing.`);
+    const diffText = decodePatch(await fetchPatchBase64(options, patch.GerritChangeID, patch.RevisionNumber));
+    const actualHash = crypto.createHash("sha256").update(diffText).digest("hex");
+    if (actualHash !== patch.PatchSha256) {
+      logInfo(`${prefix} Skipping patch=${patch.GerritPatchID}: SHA-256 mismatch: expected ${patch.PatchSha256}, got ${actualHash}. File-name indexing remains pending.`);
+      skippedPatchIds.add(patch.GerritPatchID);
+      continue;
+    }
+    // Resolve the recorded path without changing its historical representation in SQL.
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, diffText, "utf8");
+    logInfo(`${prefix} Restored verified diff to ${patch.PatchCachePath}.`);
+  }
+  return skippedPatchIds;
+}
+
 async function processPendingFileNamesForSyncTarget(
   pool: sql.ConnectionPool,
   syncName: string,
   gerritChangeId: number | null = null,
+  skippedPatchIds: ReadonlySet<number> = new Set(),
 ): Promise<{ indexedPatches: number; indexedFileNames: number }> {
   let indexedPatches = 0;
   let indexedFileNames = 0;
@@ -1571,6 +1611,7 @@ async function processPendingFileNamesForSyncTarget(
   logInfo(`[${syncName}] Pending file-name queue: ${queue.length} patches.`);
 
   for (const [patchIndex, patch] of queue.entries()) {
+    if (skippedPatchIds.has(patch.GerritPatchID)) continue;
     const prefix = `[file-names][${patch.ChangeID}][${patchIndex + 1}/${queue.length}]`;
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
@@ -1635,14 +1676,12 @@ async function processTargetedChange(
     throw new Error(`Targeted import for ${requestedId} did not complete exactly one change.`);
   }
 
+  const skippedPatchIds = await preparePendingFileNameCache(pool, options, syncState.SyncName, selected._number);
   const fileNames = await processPendingFileNamesForSyncTarget(
-    pool, syncState.SyncName, selected._number,
-  );
-  const parsed = await processPendingPatchesForSyncTarget(
-    pool, syncState.SyncName, selected._number,
+    pool, syncState.SyncName, selected._number, skippedPatchIds,
   );
   logInfo(
-    `[targeted_change] Done. GerritChangeID=${selected._number} ChangeID=${selected.change_id} fetched_patches=${result.fetchedPatches} pending_patches=${result.pendingPatches} file_name_indexed_patches=${fileNames.indexedPatches} indexed_file_names=${fileNames.indexedFileNames} parsed_patches=${parsed.parsedPatches} files=${parsed.parsedFiles} added_lines=${parsed.parsedAddedLines}. GerritSyncState was not modified.`,
+    `[targeted_change] Done. GerritChangeID=${selected._number} ChangeID=${selected.change_id} fetched_patches=${result.fetchedPatches} pending_patches=${result.pendingPatches} file_name_indexed_patches=${fileNames.indexedPatches} indexed_file_names=${fileNames.indexedFileNames}. GerritSyncState was not modified.`,
   );
 }
 
@@ -1676,9 +1715,6 @@ async function main(): Promise<void> {
   let totalChanges = 0;
   let fetchedPatches = 0;
   let pendingPatches = 0;
-  let parsedPatches = 0;
-  let parsedFiles = 0;
-  let parsedAddedLines = 0;
   let fileNameIndexedPatches = 0;
   let indexedFileNames = 0;
 
@@ -1751,24 +1787,20 @@ async function main(): Promise<void> {
         throw error;
       }
 
+      const skippedPatchIds = await preparePendingFileNameCache(pool, options, syncState.SyncName);
       const fileNameResult = await processPendingFileNamesForSyncTarget(
         pool,
         syncState.SyncName,
+        null,
+        skippedPatchIds,
       );
       fileNameIndexedPatches += fileNameResult.indexedPatches;
       indexedFileNames += fileNameResult.indexedFileNames;
 
-      const pendingResult = await processPendingPatchesForSyncTarget(
-        pool,
-        syncState.SyncName,
-      );
-      parsedPatches += pendingResult.parsedPatches;
-      parsedFiles += pendingResult.parsedFiles;
-      parsedAddedLines += pendingResult.parsedAddedLines;
     }
 
     logInfo(
-      `Done in ${formatDuration(startedAt)}. targets=${totalTargets} changes=${totalChanges} fetched_patches=${fetchedPatches} pending_patches=${pendingPatches} file_name_indexed_patches=${fileNameIndexedPatches} indexed_file_names=${indexedFileNames} parsed_patches=${parsedPatches} files=${parsedFiles} added_lines=${parsedAddedLines}`,
+      `Done in ${formatDuration(startedAt)}. targets=${totalTargets} changes=${totalChanges} fetched_patches=${fetchedPatches} pending_patches=${pendingPatches} file_name_indexed_patches=${fileNameIndexedPatches} indexed_file_names=${indexedFileNames}`,
     );
   } catch (error) {
     throw error;
