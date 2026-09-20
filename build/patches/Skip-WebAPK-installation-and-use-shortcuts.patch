@@ -1,0 +1,42 @@
+From: krr
+Date: Sun, 5 Jul 2026
+Subject: Skip WebAPK installation, use shortcuts
+
+Cromite does not support WebAPKs (requires Google Play Services).
+When user clicks "Install" on a PWA, skip WebAPK and create a
+standard home screen shortcut to avoid dangling ptr crash.
+
+Bug: #2932
+License: GPL-3.0-only
+---
+ chrome/browser/android/webapk/webapk_install_service.cc | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/android/webapk/webapk_install_service.cc b/chrome/browser/android/webapk/webapk_install_service.cc
+--- a/chrome/browser/android/webapk/webapk_install_service.cc
++++ b/chrome/browser/android/webapk/webapk_install_service.cc
+@@ -47,8 +47,15 @@ void WebApkInstallService::InstallAsync(
+   ShowInstallInProgressNotification(
+       shortcut_info.manifest_id, shortcut_info.short_name, shortcut_info.url,
+       primary_icon, shortcut_info.is_primary_icon_maskable);
+-  WebApkInstaller::InstallAsync(
+-      browser_context_, web_contents, shortcut_info, primary_icon,
+-      install_source,
+-      base::BindOnce(&WebApkInstallService::OnFinishedInstall,
+-                     weak_ptr_factory_.GetWeakPtr(),
+-                     web_contents->GetWeakPtr(), shortcut_info, primary_icon));
++
++  // WebAPK is not supported in Cromite. Create shortcut directly
++  // to avoid dangling-ptr crash (issue #2932).
++  install_ids_.insert(shortcut_info.manifest_id);
++  ShortcutHelper::AddToLauncherWithSkBitmap(
++      web_contents, shortcut_info, primary_icon,
++      webapps::InstallableStatusCode::NO_ERROR_DETECTED);
++  install_ids_.erase(shortcut_info.manifest_id);
++  JNIEnv* env = base::android::AttachCurrentThread();
++  Java_WebApkInstallService_cancelNotification(
++      env, shortcut_info.manifest_id.spec());
+ }
+ 
+ void WebApkInstallService::InstallRestoreAsync(
+--
