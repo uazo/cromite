@@ -18,12 +18,12 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../core/inspector/inspector_network_agent.cc |  2 +-
  .../core/inspector/inspector_page_agent.cc    |  2 +-
  .../renderer/core/loader/image_loader.cc      |  3 +-
- .../platform/loader/fetch/memory_cache.cc     |  8 +--
- .../platform/loader/fetch/memory_cache.h      |  5 +-
+ .../platform/loader/fetch/memory_cache.cc     |  7 +-
+ .../platform/loader/fetch/memory_cache.h      |  8 +--
  .../platform/loader/fetch/resource_fetcher.cc | 71 +++++++++++++++----
  .../platform/loader/fetch/resource_fetcher.h  | 10 ++-
  .../platform/runtime_enabled_features.json5   |  4 ++
- 9 files changed, 79 insertions(+), 29 deletions(-)
+ 9 files changed, 79 insertions(+), 31 deletions(-)
 
 diff --git a/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc b/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc
 --- a/third_party/blink/renderer/core/html/parser/html_srcset_parser.cc
@@ -53,7 +53,7 @@ diff --git a/third_party/blink/renderer/core/inspector/inspector_network_agent.c
 diff --git a/third_party/blink/renderer/core/inspector/inspector_page_agent.cc b/third_party/blink/renderer/core/inspector/inspector_page_agent.cc
 --- a/third_party/blink/renderer/core/inspector/inspector_page_agent.cc
 +++ b/third_party/blink/renderer/core/inspector/inspector_page_agent.cc
-@@ -182,7 +182,7 @@ Resource* CachedResource(LocalFrame* frame,
+@@ -183,7 +183,7 @@ Resource* CachedResource(LocalFrame* frame,
    if (!cached_resource) {
      cached_resource = MemoryCache::Get()->ResourceForURL(
          url, document->Fetcher()->GetCacheIdentifier(
@@ -78,7 +78,7 @@ diff --git a/third_party/blink/renderer/core/loader/image_loader.cc b/third_part
 diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc b/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
 --- a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
 +++ b/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc
-@@ -353,7 +353,7 @@ void MemoryCache::RemoveInternal(ResourceMap* resource_map,
+@@ -328,7 +328,7 @@ void MemoryCache::RemoveInternal(ResourceMap* resource_map,
  }
  
  bool MemoryCache::Contains(const Resource* resource) const {
@@ -87,17 +87,16 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc b/
      return false;
  
    const auto resource_maps_it =
-@@ -369,13 +369,9 @@ bool MemoryCache::Contains(const Resource* resource) const {
+@@ -344,12 +344,9 @@ bool MemoryCache::Contains(const Resource* resource) const {
    return resource == resources_it->value->GetResource();
  }
  
--Resource* MemoryCache::ResourceForURLForTesting(
--    const KURL& resource_url) const {
+-Resource* MemoryCache::ResourceForURLForTesting(const KURL& resource_url) {
 -  return ResourceForURL(resource_url, DefaultCacheIdentifier());
 -}
 -
  Resource* MemoryCache::ResourceForURL(const KURL& resource_url,
-                                       const String& cache_identifier) const {
+                                       const String& cache_identifier) {
 +  if (cache_identifier.empty()) return nullptr;
    DCHECK(IsMainThread());
    if (!resource_url.IsValid() || resource_url.IsNull())
@@ -105,18 +104,21 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.cc b/
 diff --git a/third_party/blink/renderer/platform/loader/fetch/memory_cache.h b/third_party/blink/renderer/platform/loader/fetch/memory_cache.h
 --- a/third_party/blink/renderer/platform/loader/fetch/memory_cache.h
 +++ b/third_party/blink/renderer/platform/loader/fetch/memory_cache.h
-@@ -131,10 +131,7 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
-   // Do not use this method outside test purposes.
-   // A resourfe URL is not enough to do a correct MemoryCache lookup, and
-   // relying on the method would likely yield wrong results.
--  Resource* ResourceForURLForTesting(const KURL&) const;
+@@ -125,13 +125,7 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
+     TypeStatistic other;
+   };
+ 
+-  // Do not use this method outside test purposes.
+-  // A resourfe URL is not enough to do a correct MemoryCache lookup, and
+-  // relying on the method would likely yield wrong results.
+-  Resource* ResourceForURLForTesting(const KURL&);
 -
-   Resource* ResourceForURL(const KURL&, const String& cache_identifier) const;
+   Resource* ResourceForURL(const KURL&, const String& cache_identifier);
 -  HeapVector<Member<Resource>> ResourcesForURL(const KURL&) const;
  
    void Add(Resource*);
    void Remove(Resource*);
-@@ -182,6 +179,8 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
+@@ -172,6 +166,8 @@ class PLATFORM_EXPORT MemoryCache final : public GarbageCollected<MemoryCache>,
    bool HasStrongReferenceForTesting(Resource*) const;
  
   private:
@@ -138,7 +140,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
  
    // Most off-main-thread resource fetches use Resource::kRaw and don't reach
    // this point, but off-main-thread module fetches might.
-@@ -1501,7 +1502,8 @@ Resource* ResourceFetcher::RequestResource(FetchParameters& params,
+@@ -1491,7 +1492,8 @@ Resource* ResourceFetcher::RequestResource(FetchParameters& params,
      } else if (IsMainThread()) {
        const String cache_identifier = GetCacheIdentifier(
            resource_type, params.GetResourceRequest().Url(),
@@ -148,7 +150,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
  
        resource =
            MemoryCache::Get()->ResourceForURL(params.Url(), cache_identifier);
-@@ -1822,7 +1824,8 @@ Resource* ResourceFetcher::CreateResourceForLoading(
+@@ -1812,7 +1814,8 @@ Resource* ResourceFetcher::CreateResourceForLoading(
      const ResourceFactory& factory) {
    const String cache_identifier =
        GetCacheIdentifier(factory.GetType(), params.GetResourceRequest().Url(),
@@ -158,7 +160,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
    DCHECK(!IsMainThread() || params.IsStaleRevalidation() ||
           !MemoryCache::Get()->ResourceForURL(params.GetResourceRequest().Url(),
                                               cache_identifier));
-@@ -3053,11 +3056,47 @@ void ResourceFetcher::UpdateImagePrioritiesAndSpeculativeDecodes() {
+@@ -3043,11 +3046,47 @@ void ResourceFetcher::UpdateImagePrioritiesAndSpeculativeDecodes() {
  }
  
  String ResourceFetcher::GetCacheIdentifier(const KURL& url,
@@ -211,7 +213,7 @@ diff --git a/third_party/blink/renderer/platform/loader/fetch/resource_fetcher.c
    }
  
    // Requests that can be satisfied via `archive_` (i.e. MHTML) or
-@@ -3072,22 +3111,26 @@ String ResourceFetcher::GetCacheIdentifier(const KURL& url,
+@@ -3062,22 +3101,26 @@ String ResourceFetcher::GetCacheIdentifier(const KURL& url,
      return bundle->GetCacheIdentifier();
    }
  
