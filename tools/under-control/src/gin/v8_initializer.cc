@@ -29,7 +29,6 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
@@ -230,7 +229,7 @@ class V8FeatureVisitor : public base::FeatureVisitor {
  public:
   void Visit(const std::string& feature_name,
              base::FeatureList::OverrideState override_state,
-             const std::map<std::string, std::string>& params,
+             const base::FieldTrialParams& params,
              const std::string& trial_name,
              const std::string& group_name) override {
     std::string_view feature_name_view(feature_name);
@@ -385,9 +384,6 @@ void SetFeatureFlags() {
       features::kV8ExperimentalRegexpEngine,
       "--enable-experimental-regexp-engine-on-excessive-backtracks",
       "--no-enable-experimental-regexp-engine-on-excessive-backtracks");
-  SetV8FlagsIfOverridden(features::kV8ExternalMemoryAccountedInGlobalLimit,
-                         "--external-memory-accounted-in-global-limit",
-                         "--no-external-memory-accounted-in-global-limit");
   SetV8FlagsIfOverridden(features::kV8TurboFastApiCalls,
                          "--turbo-fast-api-calls", "--no-turbo-fast-api-calls");
   SetV8FlagsIfOverridden(features::kV8MegaDomIC, "--mega-dom-ic",
