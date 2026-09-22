@@ -25,7 +25,6 @@ import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_CLOSE_BUTTON_EN
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_CLOSE_BUTTON_POSITION;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_HEIGHT_PX;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_INITIAL_ACTIVITY_WIDTH_PX;
-import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_NETWORK;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_TITLE_VISIBILITY_STATE;
 import static androidx.browser.customtabs.CustomTabsIntent.EXTRA_TOOLBAR_CORNER_RADIUS_DP;
 import static androidx.browser.trusted.LaunchHandlerClientMode.FOCUS_EXISTING;
@@ -33,7 +32,7 @@ import static androidx.browser.trusted.LaunchHandlerClientMode.NAVIGATE_EXISTING
 import static androidx.browser.trusted.LaunchHandlerClientMode.NAVIGATE_NEW;
 
 import static org.chromium.build.NullUtil.assumeNonNull;
-import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreator.EXTRA_REQUESTED_WINDOW_FEATURES;
+import static org.chromium.chrome.browser.app.tab_activity_glue.PopupCreatorImpl.EXTRA_REQUESTED_WINDOW_FEATURES;
 
 import android.app.Activity;
 import android.app.ActivityOptions;
@@ -42,6 +41,7 @@ import android.app.PendingIntent.CanceledException;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.net.Network;
 import android.net.Uri;
@@ -50,6 +50,7 @@ import android.text.TextUtils;
 import android.util.Pair;
 import android.widget.RemoteViews;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.IntDef;
 import androidx.annotation.Px;
 import androidx.annotation.VisibleForTesting;
@@ -61,7 +62,6 @@ import androidx.browser.customtabs.CustomTabsIntent.ActivitySideSheetRoundedCorn
 import androidx.browser.customtabs.CustomTabsIntent.CloseButtonPosition;
 import androidx.browser.customtabs.CustomTabsIntent.OpenInBrowserState;
 import androidx.browser.customtabs.CustomTabsSessionToken;
-import androidx.browser.customtabs.ExperimentalCustomContentAction;
 import androidx.browser.customtabs.TrustedWebUtils;
 import androidx.browser.trusted.FileHandlingData;
 import androidx.browser.trusted.LaunchHandlerClientMode;
@@ -76,6 +76,7 @@ import org.chromium.base.DeviceInfo;
 import org.chromium.base.IntentUtils;
 import org.chromium.base.LocaleUtils;
 import org.chromium.base.Log;
+import org.chromium.base.MathUtils;
 import org.chromium.base.ResettersForTesting;
 import org.chromium.base.metrics.RecordHistogram;
 import org.chromium.base.metrics.RecordUserAction;
@@ -95,11 +96,13 @@ import org.chromium.chrome.browser.flags.ActivityType;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
 import org.chromium.chrome.browser.flags.CustomTabProfileType;
 import org.chromium.chrome.browser.share.ShareUtils;
+import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarButtonVariant;
 import org.chromium.chrome.browser.ui.google_bottom_bar.GoogleBottomBarCoordinator;
 import org.chromium.chrome.browser.ui.google_bottom_bar.proto.IntentParams.GoogleBottomBarIntentParams;
 import org.chromium.chrome.browser.ui.web_app_header.WebAppHeaderUtils;
 import org.chromium.chrome.browser.util.WindowFeatures;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.browser_ui.widget.TintedDrawable;
 import org.chromium.components.embedder_support.util.Origin;
 import org.chromium.components.embedder_support.util.UrlConstants;
@@ -114,6 +117,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.function.Supplier;
 
 /**
  * A model class that parses the incoming intent for Custom Tabs specific customization data.
@@ -125,6 +129,9 @@ import java.util.Set;
 @NullMarked
 public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvider {
     private static final String TAG = "CustomTabIntentData";
+    // Special menu item title used to induce a Java crash for testing purposes.
+    // TODO (crbug.com/527591870): Remove before kSessionRestoreAfterCrash launches.
+    private static final String CRASH_MENU_TITLE = "Induce CCT Crash";
 
     @IntDef({LaunchSourceType.OTHER, LaunchSourceType.MEDIA_LAUNCHER_ACTIVITY})
     @Retention(RetentionPolicy.SOURCE)
@@ -207,6 +214,9 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
     static final String EXTRA_CUSTOM_CONTENT_ACTIONS =
             "androidx.browser.customtabs.extra.CUSTOM_CONTENT_ACTIONS";
+
+    static final String EXTRA_TRANSLUCENT_BACKGROUND =
+            "androidx.browser.customtabs.extra.TRANSLUCENT_BACKGROUND";
 
     @IntDef({
         CustomTabsButtonState.BUTTON_STATE_OFF,
@@ -432,13 +442,15 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         int initialActivityWidth =
                 getInitialActivityWidth(
                         isTrustedCustomTab, getInitialActivityWidthFromIntent(intent), packageName);
-        if (initialActivityHeight <= 0 && initialActivityWidth <= 0) {
-            // fallback to normal Custom Tab.
-            return;
+
+        // When scrolling up the web content, we don't want to hide the URL bar in pCCT.
+        boolean isPcct = initialActivityHeight > 0 || initialActivityWidth > 0;
+        if (isPcct) {
+            intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
         }
-        intent.setClassName(context, TranslucentCustomTabActivity.class.getName());
-        // When scrolling up the web content, we don't want to hide the URL bar.
-        intent.putExtra(CustomTabsIntent.EXTRA_ENABLE_URLBAR_HIDING, false);
+        if (isPcct || hasTranslucentBackgroundColor(intent)) {
+            intent.setClassName(context, TranslucentCustomTabActivity.class.getName());
+        }
     }
 
     private static @Px int getInitialActivityHeight(
@@ -498,6 +510,26 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
                 : roundedCornersPosition;
     }
 
+    static boolean hasTranslucentBackgroundColor(Intent intent) {
+        try {
+            return intent.hasExtra(EXTRA_TRANSLUCENT_BACKGROUND);
+        } catch (Throwable t) {
+            // Catches un-parceling exceptions.
+            return false;
+        }
+    }
+
+    @Override
+    public @ColorInt int getTranslucentBackgroundColor(Context context) {
+        int defValue = SemanticColorUtils.getDefaultBgColor(context);
+        int bg = IntentUtils.safeGetIntExtra(mIntent, EXTRA_TRANSLUCENT_BACKGROUND, defValue);
+        if (bg == defValue) return defValue;
+
+        // We limit the transparency to 30%-50% == 50%-70% (128-180) alpha
+        int alpha = MathUtils.clamp(Color.alpha(bg), 128, 180);
+        return Color.argb(alpha, Color.red(bg), Color.green(bg), Color.blue(bg));
+    }
+
     private static boolean getIsCloseButtonEnabled(Intent intent, int uiType) {
         return IntentUtils.safeGetBooleanExtra(intent, EXTRA_CLOSE_BUTTON_ENABLED, true)
                 && uiType != CustomTabsUiType.POPUP;
@@ -551,7 +583,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
 
         mKeepAliveServiceIntent = IntentUtils.safeGetParcelableExtra(intent, EXTRA_KEEP_ALIVE);
 
-        mNetwork = IntentUtils.safeGetParcelableExtra(intent, EXTRA_NETWORK);
+        mNetwork = CustomTabsConnection.getInstance().extractTargetNetwork(intent, mSession);
 
         mIsOpenedByChrome = IntentHandler.wasIntentSenderChrome(intent);
 
@@ -775,6 +807,10 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             if (TextUtils.isEmpty(title) || pendingIntent == null) {
                 continue;
             }
+            if (CRASH_MENU_TITLE.equals(title)
+                    && !ChromeFeatureList.sSessionRestoreAfterCrash.isEnabled()) {
+                continue;
+            }
             mMenuEntries.add(new Pair<>(title, pendingIntent));
         }
     }
@@ -797,6 +833,10 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             // Media viewers pass in PendingIntents that contain CHOOSER Intents.  Setting the data
             // in these cases prevents the Intent from firing correctly.
             String menuTitle = mMenuEntries.get(menuIndex).first;
+            if (CRASH_MENU_TITLE.equals(menuTitle)
+                    && ChromeFeatureList.sSessionRestoreAfterCrash.isEnabled()) {
+                throw new RuntimeException("Intentional Java Crash via CCT Menu Option");
+            }
             PendingIntent pendingIntent = mMenuEntries.get(menuIndex).second;
             ActivityOptions options = ActivityOptions.makeBasic();
             ApiCompatibilityUtils.setActivityOptionsBackgroundActivityStartAllowAlways(options);
@@ -1842,7 +1882,6 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
         return mShareState;
     }
 
-    @ExperimentalCustomContentAction
     @Override
     public List<CustomContentAction> getCustomContentActions() {
         if (ChromeFeatureList.sCctContextualMenuItems.isEnabled()) {
@@ -1874,7 +1913,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return true;
         }
 
-        if (WebAppHeaderUtils.isWindowControlsOverlayFlagEnabled()
+        if (WebAppHeaderUtils.isWindowControlsOverlayEnabled()
                 && displayMode instanceof TrustedWebActivityDisplayMode.WindowControlsOverlayMode) {
             return isDisplayOverride;
         }
@@ -1918,7 +1957,7 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return DisplayMode.MINIMAL_UI;
         }
 
-        if (WebAppHeaderUtils.isWindowControlsOverlayFlagEnabled()
+        if (WebAppHeaderUtils.isWindowControlsOverlayEnabled()
                 && displayMode instanceof TrustedWebActivityDisplayMode.WindowControlsOverlayMode) {
             return DisplayMode.WINDOW_CONTROLS_OVERLAY;
         }
@@ -1955,5 +1994,13 @@ public class CustomTabIntentDataProvider extends BrowserServicesIntentDataProvid
             return new WindowFeatures();
         }
         return new WindowFeatures(bundle);
+    }
+
+    @Override
+    public void maybeAddAdditionalContentExtrasToOutboundIntent(
+            Supplier<@Nullable Tab> tabProvider, Intent outboundIntent, int viewId) {
+        CustomTabsConnection.getInstance()
+                .maybeAddAdditionalContentExtrasToOutboundIntent(
+                        tabProvider, this, outboundIntent, viewId);
     }
 }

@@ -20,17 +20,20 @@
 #include "android_webview/browser/aw_contents.h"
 #include "android_webview/browser/aw_contents_client_bridge.h"
 #include "android_webview/browser/aw_contents_io_thread_client.h"
-#include "android_webview/browser/aw_contents_statics.h"
 #include "android_webview/browser/aw_cookie_access_policy.h"
 #include "android_webview/browser/aw_devtools_manager_delegate.h"
 #include "android_webview/browser/aw_feature_list_creator.h"
 #include "android_webview/browser/aw_http_auth_handler.h"
+#include "android_webview/browser/aw_http_cache_manager.h"
 #include "android_webview/browser/aw_origin_matched_header.h"
 #include "android_webview/browser/aw_policy_blocklist_service_factory.h"
 #include "android_webview/browser/aw_settings.h"
 #include "android_webview/browser/aw_speech_recognition_manager_delegate.h"
 #include "android_webview/browser/aw_web_contents_delegate.h"
 #include "android_webview/browser/aw_web_contents_view_delegate.h"
+#include "android_webview/browser/content_restriction/aw_content_restriction_manager_client.h"
+#include "android_webview/browser/content_restriction/aw_content_restriction_navigation_throttle.h"
+#include "android_webview/browser/content_restriction/aw_content_restriction_url_loader_throttle.h"
 #include "android_webview/browser/cookie_manager.h"
 #include "android_webview/browser/network_service/aw_browser_context_io_thread_handle.h"
 #include "android_webview/browser/network_service/aw_proxy_config_monitor.h"
@@ -63,7 +66,6 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
@@ -77,6 +79,7 @@
 #include "components/embedder_support/origin_trials/origin_trials_settings_storage.h"
 #include "components/embedder_support/switches.h"
 #include "components/embedder_support/user_agent_utils.h"
+#include "components/heap_profiling/in_process/heap_profiler_controller.h"
 #include "components/navigation_interception/intercept_navigation_delegate.h"
 #include "components/page_load_metrics/browser/metrics_navigation_throttle.h"
 #include "components/page_load_metrics/browser/metrics_web_contents_observer.h"
@@ -89,6 +92,7 @@
 #include "components/safe_browsing/content/browser/mojo_safe_browsing_impl.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
+#include "components/sampling_profiler/process_type.h"
 #include "components/url_matcher/url_matcher.h"
 #include "components/url_matcher/url_util.h"
 #include "components/user_prefs/user_prefs.h"
@@ -120,6 +124,7 @@
 #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "net/android/network_library.h"
+#include "net/base/features.h"
 #include "net/cookies/cookie_setting_override.h"
 #include "net/cookies/site_for_cookies.h"
 #include "net/http/http_util.h"
@@ -287,6 +292,23 @@ void AwContentBrowserClient::OnNetworkServiceCreated(
   network_service->SetUpHttpAuth(network::mojom::HttpAuthStaticParams::New());
   network_service->ConfigureHttpAuthPrefs(
       AwBrowserProcess::GetInstance()->CreateHttpAuthDynamicParams());
+
+  if (net::features::IsDnsPlatformSupported() &&
+      base::FeatureList::IsEnabled(features::kWebViewEnableDnsPlatform)) {
+    // Using the platform DNS APIs requires:
+    // 1. Enabling the built-in DNS client (insecure_dns_client_enabled = true)
+    // 2. Disabling DoH queries, these do not yet use the platform DNS APIs
+    //    (net::SecureDnsMode::kOff)
+    // 3. Make HostResolverManager use the platform DNS APIs
+    //    (insecure_dns_via_platform_apis_enabled = true)
+    network_service->ConfigureStubHostResolver(
+        /*insecure_dns_client_enabled=*/true,
+        /*happy_eyeballs_v3_enabled=*/false, net::SecureDnsMode::kOff,
+        net::DnsOverHttpsConfig(),
+        /*additional_dns_types_enabled=*/true,
+        /*fallback_doh_nameservers=*/std::vector<net::IPEndPoint>(),
+        /*insecure_dns_via_platform_apis_enabled=*/true);
+  }
 }
 
 void AwContentBrowserClient::ConfigureNetworkContextParams(
@@ -343,13 +365,13 @@ AwContentBrowserClient::CreateBrowserMainParts(bool /* is_integration_test */) {
   return std::make_unique<AwBrowserMainParts>(this);
 }
 
-bool AwContentBrowserClient::IsAnyStartupTaskExperimentEnabled() {
-  return AwBrowserMainParts::isWebViewStartupTasksExperimentEnabled() ||
-         AwBrowserMainParts::isWebViewStartupTasksExperimentEnabledP2() ||
-         AwBrowserMainParts::isStartupTaskYieldToNativeExperimentEnabled() ||
-         startup_tasks_logic_enabled_for_testing_ ||
-         startup_tasks_logic_p2_enabled_for_testing_ ||
-         startup_tasks_yield_to_native_experiment_enabled_for_testing_;
+bool AwContentBrowserClient::ShouldRunStartupTasksAsync() {
+  if (!should_run_startup_tasks_async_.has_value()) {
+    should_run_startup_tasks_async_ =
+        AwBrowserMainParts::runStartupTasksAsync();
+  }
+  return *should_run_startup_tasks_async_ ||
+         run_startup_tasks_async_for_testing_;
 }
 
 void AwContentBrowserClient::PostAfterStartupTask(
@@ -357,7 +379,7 @@ void AwContentBrowserClient::PostAfterStartupTask(
     const scoped_refptr<base::SequencedTaskRunner>& task_runner,
     base::OnceClosure task) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!IsAnyStartupTaskExperimentEnabled()) {
+  if (!ShouldRunStartupTasksAsync()) {
     task_runner->PostTask(from_here, std::move(task));
     return;
   }
@@ -379,8 +401,7 @@ void AwContentBrowserClient::OnStartupComplete() {
   DCHECK(!startup_info_.startup_complete);
 
   startup_info_.startup_complete = true;
-  if (AwBrowserMainParts::isStartupTaskYieldToNativeExperimentEnabled() ||
-      startup_tasks_yield_to_native_experiment_enabled_for_testing_) {
+  if (ShouldRunStartupTasksAsync()) {
     YieldToLooperChecker::GetInstance().SetStartupRunning(false);
   }
 
@@ -399,7 +420,7 @@ void AwContentBrowserClient::OnStartupComplete() {
 
 void AwContentBrowserClient::OnUiTaskRunnerReady(
     base::OnceClosure enable_native_task_execution_callback) {
-  if (!IsAnyStartupTaskExperimentEnabled()) {
+  if (!ShouldRunStartupTasksAsync()) {
     std::move(enable_native_task_execution_callback).Run();
     return;
   }
@@ -407,8 +428,7 @@ void AwContentBrowserClient::OnUiTaskRunnerReady(
   startup_info_.enable_native_task_execution_callback =
       std::move(enable_native_task_execution_callback);
 
-  if (AwBrowserMainParts::isStartupTaskYieldToNativeExperimentEnabled() ||
-      startup_tasks_yield_to_native_experiment_enabled_for_testing_) {
+  if (ShouldRunStartupTasksAsync()) {
     YieldToLooperChecker::GetInstance().SetStartupRunning(true);
   }
 }
@@ -486,29 +506,18 @@ void AwContentBrowserClient::AppendExtraCommandLineSwitches(
 
     command_line->CopySwitchesFrom(*base::CommandLine::ForCurrentProcess(),
                                    kSwitchNames);
-  }
 
-  if (base::FeatureList::IsEnabled(
-          features::kWebViewConfigurableLibraryPrefetch)) {
-    RendererLibraryPrefetchMode mode = GetRendererLibraryPrefetchMode();
-    switch (mode) {
-      case RendererLibraryPrefetchMode::kDisabled:
-        command_line->AppendSwitchASCII(
-            switches::kWebViewRendererLibraryPrefetch,
-            switches::kWebViewRendererLibraryPrefetchDisabled);
-        break;
-      case RendererLibraryPrefetchMode::kEnabled:
-        command_line->AppendSwitchASCII(
-            switches::kWebViewRendererLibraryPrefetch,
-            switches::kWebViewRendererLibraryPrefetchEnabled);
-        break;
-      default:
-        // kDefault or unknown values are ignored. But sanitize for histograms.
-        mode = RendererLibraryPrefetchMode::kDefault;
-        break;
+    if (base::FeatureList::IsEnabled(features::kWebViewMemoryProfilingClient)) {
+      if (const auto* heap_profiler_controller =
+              heap_profiling::HeapProfilerController::GetInstance()) {
+        sampling_profiler::ProfilerProcessType profiler_process_type =
+            process_type == switches::kRendererProcess
+                ? sampling_profiler::ProfilerProcessType::kRenderer
+                : sampling_profiler::ProfilerProcessType::kUtility;
+        heap_profiler_controller->AppendCommandLineSwitchForChildProcess(
+            command_line, profiler_process_type, child_process_id);
+      }
     }
-    base::UmaHistogramEnumeration("Android.WebView.RendererLibraryPrefetchMode",
-                                  mode);
   }
 }
 
@@ -536,11 +545,17 @@ AwContentBrowserClient::GetGeneratedCodeCacheSettings(
   // are two code caches that both use this value, so we pass half the the HTTP
   // cache size limit to keep the total cache usage to roughly 2x the HTTP cache
   // limit.
-  int code_cache_limit = 0.5 * GetHttpCacheSize();
+  int http_cache_quota = GetDefaultHttpCacheSize();
+  if (base::FeatureList::IsEnabled(features::kWebViewHttpCacheQuotaApi) &&
+      features::kWebViewHttpCacheQuotaApiAffectsCodeCache.Get()) {
+    http_cache_quota =
+        browser_context->GetHttpCacheManager()->GetQuotaBytes(/*env=*/nullptr);
+  }
+  int code_cache_limit = 0.5 * http_cache_quota;
   if (base::FeatureList::IsEnabled(
           features::kWebViewCacheSizeLimitDerivedFromAppCacheQuota)) {
-    code_cache_limit = features::kWebViewCodeCacheSizeLimitMultiplier.Get() *
-                       GetHttpCacheSize();
+    code_cache_limit =
+        features::kWebViewCodeCacheSizeLimitMultiplier.Get() * http_cache_quota;
   }
 
   return content::GeneratedCodeCacheSettings(
@@ -731,14 +746,24 @@ void AwContentBrowserClient::CreateThrottlesForNavigation(
 
   if ((navigation_handle.GetNavigatingFrameType() ==
            FrameType::kPrimaryMainFrame ||
-       navigation_handle.GetNavigatingFrameType() == FrameType::kSubframe) &&
-      registry.IsHTTPOrHTTPS()) {
+       navigation_handle.GetNavigatingFrameType() == FrameType::kSubframe ||
+       navigation_handle.GetNavigatingFrameType() ==
+           FrameType::kPrerenderMainFrame) &&
+      registry.GetNavigationHandle().GetURL().SchemeIsHTTPOrHTTPS()) {
     AwSupervisedUserUrlClassifier* urlClassifier =
         AwSupervisedUserUrlClassifier::GetInstance();
     if (urlClassifier->ShouldCreateThrottle()) {
       registry.AddThrottle(
           std::make_unique<AwSupervisedUserThrottle>(registry, urlClassifier));
     }
+  }
+
+  if (base::FeatureList::IsEnabled(
+          android_webview::features::kWebViewContentRestrictionSupport)) {
+    registry.AddThrottle(
+        std::make_unique<AwContentRestrictionNavigationThrottle>(
+            registry, context->GetContentRestrictionBlockedNavigationTracker(),
+            context->GetContentRestrictionManagerClient()));
   }
 }
 
@@ -793,6 +818,17 @@ AwContentBrowserClient::CreateURLLoaderThrottles(
       hash_real_time_selection,
       /* async_check_tracker */ async_check_tracker,
       /*referring_app_info=*/std::nullopt));
+
+  if (browser_context &&
+      base::FeatureList::IsEnabled(
+          android_webview::features::kWebViewContentRestrictionSupport)) {
+    AwBrowserContext* const aw_browser_context =
+        static_cast<AwBrowserContext*>(browser_context);
+    result.push_back(std::make_unique<AwContentRestrictionURLLoaderThrottle>(
+        aw_browser_context->GetContentRestrictionManagerClient(),
+        aw_browser_context->GetContentRestrictionBlockedNavigationTracker(),
+        navigation_id));
+  }
 
   if (request.destination == network::mojom::RequestDestination::kDocument) {
     const bool is_load_url =
@@ -1226,11 +1262,13 @@ void AwContentBrowserClient::WillCreateURLLoaderFactory(
   }
 }
 
-uint32_t AwContentBrowserClient::GetWebSocketOptions(
-    content::RenderFrameHost* frame) {
+content::ContentBrowserClient::WebSocketOptions
+AwContentBrowserClient::GetWebSocketOptions(content::RenderFrameHost* frame) {
+  content::ContentBrowserClient::WebSocketOptions options_struct;
   uint32_t options = network::mojom::kWebSocketOptionNone;
   if (!frame) {
-    return options;
+    options_struct.options = options;
+    return options_struct;
   }
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(frame);
@@ -1247,7 +1285,9 @@ uint32_t AwContentBrowserClient::GetWebSocketOptions(
   } else if (!third_party_cookie_policy) {
     options |= network::mojom::kWebSocketOptionBlockThirdPartyCookies;
   }
-  return options;
+
+  options_struct.options = options;
+  return options_struct;
 }
 
 bool AwContentBrowserClient::WillCreateRestrictedCookieManager(
@@ -1273,7 +1313,8 @@ bool AwContentBrowserClient::WillCreateRestrictedCookieManager(
 
   AwProxyingRestrictedCookieManager::CreateAndBind(
       std::move(target_rcm_remote), is_service_worker, process_id, routing_id,
-      std::move(orig_receiver), aw_cookie_access_policy);
+      isolation_info.site_for_cookies(), std::move(orig_receiver),
+      aw_cookie_access_policy);
 
   return false;  // only made a proxy, still need the actual impl to be made.
 }
@@ -1488,7 +1529,9 @@ bool AwContentBrowserClient::IsFullCookieAccessAllowed(
     const GURL& url,
     const blink::StorageKey& storage_key,
     net::CookieSettingOverrides overrides) {
-  return AreThirdPartyCookiesGenerallyAllowed(browser_context, web_contents);
+  // Third-party cookie access is never allowed from opaque contexts.
+  return !storage_key.ForbidsUnpartitionedStorageAccess() &&
+         AreThirdPartyCookiesGenerallyAllowed(browser_context, web_contents);
 }
 
 bool AwContentBrowserClient::AreThirdPartyCookiesGenerallyAllowed(
