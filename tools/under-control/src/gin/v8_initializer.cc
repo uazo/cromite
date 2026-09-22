@@ -29,7 +29,6 @@
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
@@ -385,9 +384,6 @@ void SetFeatureFlags() {
       features::kV8ExperimentalRegexpEngine,
       "--enable-experimental-regexp-engine-on-excessive-backtracks",
       "--no-enable-experimental-regexp-engine-on-excessive-backtracks");
-  SetV8FlagsIfOverridden(features::kV8ExternalMemoryAccountedInGlobalLimit,
-                         "--external-memory-accounted-in-global-limit",
-                         "--no-external-memory-accounted-in-global-limit");
   SetV8FlagsIfOverridden(features::kV8TurboFastApiCalls,
                          "--turbo-fast-api-calls", "--no-turbo-fast-api-calls");
   SetV8FlagsIfOverridden(features::kV8MegaDomIC, "--mega-dom-ic",
