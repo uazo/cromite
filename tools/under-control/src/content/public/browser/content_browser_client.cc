@@ -28,7 +28,6 @@
 #include "components/language_detection/content/common/language_detection.mojom.h"
 #include "components/language_detection/core/browser/language_detection_model_provider.h"
 #include "content/browser/ai/echo_ai_manager_impl.h"
-#include "content/browser/cpu_performance/cpu_performance.h"
 #include "content/browser/renderer_host/render_frame_host_impl.h"
 #include "content/browser/webauth/default_authenticator_request_client_delegate.h"
 #include "content/public/browser/anchor_element_preconnect_delegate.h"
@@ -232,14 +231,14 @@ bool ContentBrowserClient::DoesWebUIUrlRequireProcessLock(const GURL& url) {
   return true;
 }
 
-bool ContentBrowserClient::ShouldTreatURLSchemeAsFirstPartyWhenTopLevel(
-    std::string_view scheme,
+bool ContentBrowserClient::ShouldTreatAsFirstPartyWhenTopLevel(
+    const url::Origin& top_frame_origin,
     bool is_embedded_origin_secure) {
   return false;
 }
 
 bool ContentBrowserClient::ShouldIgnoreSameSiteCookieRestrictionsWhenTopLevel(
-    std::string_view scheme,
+    const url::Origin& top_frame_origin,
     bool is_embedded_origin_secure) {
   return false;
 }
@@ -424,12 +423,6 @@ bool ContentBrowserClient::IsTopChromeWebUIURL(const GURL& url) {
   return false;
 }
 
-bool ContentBrowserClient::IsIsolatedContextAllowedForUrl(
-    BrowserContext* browser_context,
-    const GURL& lock_url) {
-  return false;
-}
-
 bool ContentBrowserClient::IsMultiCaptureAllowed(
     content::RenderFrameHost* render_frame_host) {
   return false;
@@ -499,11 +492,6 @@ bool ContentBrowserClient::ShouldTryToUpdateServiceWorkerRegistration(
   return true;
 }
 
-void ContentBrowserClient::UpdateEnabledBlinkRuntimeFeaturesInIsolatedWorker(
-    BrowserContext* context,
-    const GURL& script_url,
-    std::vector<std::string>& out_forced_enabled_runtime_features) {}
-
 bool ContentBrowserClient::AllowSharedWorker(
     const GURL& worker_url,
     const net::SiteForCookies& site_for_cookies,
@@ -547,6 +535,17 @@ bool ContentBrowserClient::AllowSharedWorkerBlobURLFix(
   return true;
 }
 
+bool ContentBrowserClient::IsDataUrlInWebWorkerOpaqueOriginEnabled(
+    BrowserContext* context) {
+  return base::FeatureList::IsEnabled(
+      blink::features::kDataUrlWorkerOpaqueOrigin);
+}
+
+bool ContentBrowserClient::AllowSharedWorkerExtendedLifetime(
+    BrowserContext* context) {
+  return true;
+}
+
 bool ContentBrowserClient::OverrideWebPreferencesAfterNavigation(
     WebContents* web_contents,
     SiteInstance& main_frame_site,
@@ -563,6 +562,11 @@ bool ContentBrowserClient::WebPreferencesNeedUpdateForColorRelatedStateChanges(
 bool ContentBrowserClient::IsDataSaverEnabled(BrowserContext* context) {
   DCHECK(context);
   return false;
+}
+
+bool ContentBrowserClient::IsPinchToZoomAllowed(BrowserContext* context) {
+  DCHECK(context);
+  return true;
 }
 
 void ContentBrowserClient::UpdateRendererPreferencesForWorker(
@@ -611,19 +615,6 @@ bool ContentBrowserClient::AllowWorkerWebLocks(
     const std::vector<GlobalRenderFrameHostId>& render_frames,
     const blink::StorageKey& storage_key) {
   return true;
-}
-
-ContentBrowserClient::AllowWebBluetoothResult
-ContentBrowserClient::AllowWebBluetooth(
-    content::BrowserContext* browser_context,
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin) {
-  DCHECK(browser_context);
-  return AllowWebBluetoothResult::ALLOW;
-}
-
-std::string ContentBrowserClient::GetWebBluetoothBlocklist() {
-  return std::string();
 }
 
 bool ContentBrowserClient::IsInterestGroupAPIAllowed(
@@ -706,14 +697,6 @@ bool ContentBrowserClient::IsSharedStorageSelectURLAllowed(
   return false;
 }
 
-bool ContentBrowserClient::IsFencedStorageReadAllowed(
-    content::BrowserContext* browser_context,
-    content::RenderFrameHost* rfh,
-    const url::Origin& top_frame_origin,
-    const url::Origin& accessing_origin) {
-  return false;
-}
-
 bool ContentBrowserClient::IsPrivateAggregationAllowed(
     content::BrowserContext* browser_context,
     const url::Origin& top_frame_origin,
@@ -735,7 +718,7 @@ bool ContentBrowserClient::IsFullCookieAccessAllowed(
     const GURL& url,
     const blink::StorageKey& storage_key,
     net::CookieSettingOverrides overrides) {
-  return true;
+  return !storage_key.ForbidsUnpartitionedStorageAccess();
 }
 
 bool ContentBrowserClient::IsPrefetchWithServiceWorkerAllowed(
@@ -748,13 +731,6 @@ bool ContentBrowserClient::IsServiceWorkerSyntheticResponseAllowed(
     const GURL& url) {
   return false;
 }
-
-void ContentBrowserClient::GrantCookieAccessDueToHeuristic(
-    content::BrowserContext* browser_context,
-    const net::SchemefulSite& top_frame_site,
-    const net::SchemefulSite& accessing_site,
-    base::TimeDelta ttl,
-    bool ignore_schemes) {}
 
 bool ContentBrowserClient::AreThirdPartyCookiesGenerallyAllowed(
     content::BrowserContext* browser_context,
@@ -866,6 +842,11 @@ FeatureObserverClient* ContentBrowserClient::GetFeatureObserverClient() {
   return nullptr;
 }
 
+bool ContentBrowserClient::IsPopupBypassAllowed(
+    RenderFrameHost* render_frame_host) {
+  return false;
+}
+
 bool ContentBrowserClient::CanCreateWindow(
     RenderFrameHost* opener,
     const GURL& opener_url,
@@ -897,7 +878,8 @@ ContentBrowserClient::CreateModelBrokerClient(BrowserContext* browser_context) {
 media::mojom::AvailabilityStatus
 ContentBrowserClient::GetOnDeviceSpeechRecognitionAvailabilityStatus(
     BrowserContext* context,
-    const std::string& language) {
+    const std::string& language,
+    media::mojom::SpeechRecognitionQuality quality) {
   return media::mojom::AvailabilityStatus::kUnavailable;
 }
 
@@ -1124,6 +1106,8 @@ ContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
 void ContentBrowserClient::
     RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
         BrowserContext* browser_context,
+        const std::optional<url::Origin>& request_initiator,
+        network::mojom::RequestDestination request_destination,
         NonNetworkURLLoaderFactoryMap* factories) {}
 
 void ContentBrowserClient::
@@ -1466,13 +1450,14 @@ bool ContentBrowserClient::IsBuiltinComponent(BrowserContext* browser_context,
 void ContentBrowserClient::StartRtcDiagnosticLogging(
     RenderFrameHost& frame_host,
     bool should_upload_on_stop,
-    base::flat_map<std::string, std::string> metadata,
+    const base::flat_map<std::string, std::string>& metadata,
     base::OnceCallback<void(const std::string&)> callback) {
   std::move(callback).Run(base::Uuid::GenerateRandomV4().AsLowercaseString());
 }
 
 void ContentBrowserClient::FinishRtcDiagnosticLogging(
     RenderFrameHost& frame_host,
+    const base::flat_map<std::string, std::string>& metadata,
     base::OnceClosure callback) {
   std::move(callback).Run();
 }
@@ -1537,18 +1522,6 @@ int ContentBrowserClient::NumVersionsInTopicsEpochs(
     content::RenderFrameHost* main_frame) const {
   return 0;
 }
-
-bool ContentBrowserClient::IsBluetoothScanningBlocked(
-    content::BrowserContext* browser_context,
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin) {
-  return false;
-}
-
-void ContentBrowserClient::BlockBluetoothScanning(
-    content::BrowserContext* browser_context,
-    const url::Origin& requesting_origin,
-    const url::Origin& embedding_origin) {}
 
 void ContentBrowserClient::GetMediaDeviceIDSalt(
     content::RenderFrameHost* rfh,
@@ -2032,8 +2005,9 @@ bool ContentBrowserClient::ShouldAnimateBackForwardTransitions() {
 #endif
 }
 
-blink::mojom::PerformanceTier ContentBrowserClient::GetCpuPerformanceTier() {
-  return content::cpu_performance::GetTier();
+std::optional<int> ContentBrowserClient::GetCpuPerformanceTierOverride(
+    BrowserContext* browser_context) {
+  return std::nullopt;
 }
 
 void ContentBrowserClient::RecordAssistedLogin(AssistedLoginType login_type) {}
@@ -2065,6 +2039,15 @@ void ContentBrowserClient::UpdateCorsExemptHeaderForPrefetch(
 bool ContentBrowserClient::OriginSupportsConcreteCrossOriginIsolation(
     const url::Origin& origin) {
   return true;
+}
+
+bool ContentBrowserClient::IsAttributionInternalsWebUIEnabled() {
+  return true;
+}
+
+bool ContentBrowserClient::IsFullscreenAllowedForUnfocusedWebContents(
+    content::WebContents* unfocused_web_contents) {
+  return false;
 }
 
 }  // namespace content
