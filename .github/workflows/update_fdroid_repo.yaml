@@ -23,51 +23,101 @@ jobs:
         - /tmp/forward-proxy:/tmp/forward-proxy
 
     steps:
-       - name: Update fdroid repo
-         shell: bash
-         run: |
-            export https_proxy=http://127.0.0.1:8118
+      - name: Update fdroid repo
+        shell: bash
+        run: |
+            export DEBIAN_FRONTEND='noninteractive'
+            export GITHUB_API_KEY="${GITHUB_TOKEN:-"${GH_TOKEN:-}"}"
+            export https_proxy='http://127.0.0.1:8118'
             socat TCP-LISTEN:8118,reuseaddr,fork UNIX-CLIENT:/tmp/forward-proxy/proxy.sock &
             socat TCP-LISTEN:1080,reuseaddr,fork UNIX-CLIENT:/tmp/forward-proxy/ftp.sock &
-            touch /etc/apt/apt.conf.d/proxy.conf
-            echo "Acquire::http::Proxy \"$https_proxy\";" >/etc/apt/apt.conf.d/proxy.conf
+            printf -- >|/etc/apt/apt.conf.d/proxy.conf \
+                'Acquire::http::Proxy "%s";\n' "${https_proxy}"
 
             cd /
-            . fdroidserver-env/bin/activate
-            apt update
+            source ./fdroidserver-env/bin/activate
 
-            DEBIAN_FRONTEND=noninteractive apt update && apt install -y wget unzip
-            wget https://github.com/rclone/rclone/releases/download/v1.72.0/rclone-v1.72.0-linux-amd64.zip
-            unzip rclone-v1.72.0-linux-amd64.zip
-            export rclone=rclone-v1.72.0-linux-amd64/rclone
+            apt update && apt install -y aria2 curl unzip
 
-            mkdir -p  ~/.config/rclone
-            echo "${{ secrets.RCLONE_CONF }}" > ~/.config/rclone/rclone.conf
+            # Install asfald
+            aria2c --no-conf --no-netrc --dir='.bin' --out='asfald' \
+                --lowest-speed-limit=1 --max-tries=25 \
+                --allow-overwrite=true --check-integrity=true --auto-file-renaming=false \
+                --summary-interval=0 --console-log-level='info' \
+                --remote-time=true --max-file-not-found=5 --always-resume=false \
+                --max-connection-per-server=2 --min-split-size=4M --retry-wait=20 \
+                --show-console-readout=false --download-result='full' \
+                --https-proxy="${https_proxy}" --http-proxy="${https_proxy}" \
+                --checksum='sha-256=0b7e1270ecc5a4c37785511b032477ddc3a7cf718b0b2f8542229f39adf2ce6a' \
+                'https://github.com/asfaload/asfald/releases/download/v0.9.0/asfald-x86_64-unknown-linux-musl'
+            chmod -c a+rx '.bin/asfald'
+            PATH="$(realpath -e .bin):${PATH}"
 
-            $rclone sync ftp:www.cromite.org/fdroid fdroid --log-level INFO --ftp-socks-proxy 127.0.0.1:1080
+            fetch_apks() (
+                local dir='github/cromite'
+                local releases_url='https://github.com/uazo/cromite/rclone/releases'
+                local latest_version="$( \
+                    curl -sSiI \
+                        "${releases_url}/latest/download/file" | \
+                    tr '\r' '\n' | \
+                    awk -v IGNORECASE=1 '$1 ~ /^location:/ { \
+                        sub(/.*\/download\//, ""); \
+                        sub(/\/.*$/, ""); \
+                        print; exit; }' \
+                )"
+                local release_url="${releases_url}/download/${latest_version}"
+
+                mkdir -p "${dir}"
+                cd "${dir}" || exit
+
+                local _arg; for _arg in "$@"; do
+                    asfald -qv "${release_url}/${_arg}" || exit
+                done
+            )
+            fetch_apks {arm,{arm,x}64}_ChromePublic.apk
+
+            fetch_rclone() {
+                local artifact="${1:-}" ; shift ;
+
+                local dir='github/rclone'
+                local rclone_version='1.72.1'
+                local release="v${rclone_version}"
+                local release_url="https://github.com/rclone/rclone/releases/download/${release}"
+
+                mkdir -p "${dir}"
+                cd "${dir}"
+                asfald -qv "${release_url}/${artifact}"
+            }
+            fetch_rclone 'SHA256SUMS'
+            _artifact='rclone-v1.72.1-linux-amd64.zip'
+            fetch_rclone "${_artifact}"
+            ( cd 'github/rclone' && \
+                awk -v artifact="${_artifact}" '$0 ~ artifact "$" { print $1; exit; }' 'SHA256SUMS' | \
+                sha256sum --check --strict --warn && \
+                unzip -o -d extracted "${_artifact}" )
+            unset -v _artifact
+            PATH="$(realpath -e 'github/rclone/extracted'/*-linux-*):${PATH}"
+
+            mkdir -p ~/.config/rclone
+            ( cd ~/.config/rclone/ && \
+                echo >|./rclone.conf '${{ secrets.RCLONE_CONF }}' )
+
+            rclone sync ftp:www.cromite.org/fdroid fdroid --log-level INFO --ftp-socks-proxy 127.0.0.1:1080
 
             test -d /usr/share/man/man1 || mkdir -p /usr/share/man/man1
-            DEBIAN_FRONTEND=noninteractive apt install -y fdroidserver
+            apt install -y fdroidserver
 
-            cd fdroid/repo/
-            wget https://github.com/uazo/cromite/releases/latest/download/arm_ChromePublic.apk
-            wget https://github.com/uazo/cromite/releases/latest/download/arm64_ChromePublic.apk
-            wget https://github.com/uazo/cromite/releases/latest/download/x64_ChromePublic.apk
+            mv -v -f --backup=none -t fdroid/repo/ github/cromite/*.apk 
+            cd fdroid/ || exit
 
-            test arm_ChromePublic.apk.1 && rm arm_ChromePublic.apk && mv arm_ChromePublic.apk.1 arm_ChromePublic.apk
-            test arm64_ChromePublic.apk.1 && rm arm64_ChromePublic.apk && mv arm64_ChromePublic.apk.1 arm64_ChromePublic.apk
-            test x64_ChromePublic.apk.1 && rm x64_ChromePublic.apk && mv x64_ChromePublic.apk.1 x64_ChromePublic.apk
-            cd ..
-
-            gpg -d --passphrase "${{ secrets.FDROID_PASSPHRASE }}" --batch config.yml.asc >config.yml
-            gpg -d --passphrase "${{ secrets.FDROID_PASSPHRASE }}" --batch keystore.p12.asc >keystore.p12
+            gpg -o config.yml -d --passphrase "${{ secrets.FDROID_PASSPHRASE }}" --batch config.yml.asc
+            gpg -o keystore.p12 -d --passphrase "${{ secrets.FDROID_PASSPHRASE }}" --batch keystore.p12.asc
 
             fdroid update -c; fdroid update
-            rm config.yml keystore.p12
+            rm -v -f config.yml keystore.p12
             cd ..
 
-            test -f fdroid/config.yml && exit 1
-            test -f fdroid/keystore.p12 && exit 1
+            [[ ! -e fdroid/config.yml && ! -e fdroid/keystore.p12 ]] || exit
 
-            $rclone sync fdroid ftp:www.cromite.org/fdroid --log-level INFO --ftp-socks-proxy 127.0.0.1:1080
-            $rclone sync fdroid ftp:www.cromite.org/fdroid --log-level INFO --ftp-socks-proxy 127.0.0.1:1080
+            rclone sync fdroid ftp:www.cromite.org/fdroid --log-level INFO --ftp-socks-proxy 127.0.0.1:1080
+            rclone sync fdroid ftp:www.cromite.org/fdroid --log-level INFO --ftp-socks-proxy 127.0.0.1:1080
