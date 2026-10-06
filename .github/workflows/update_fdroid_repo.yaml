@@ -12,6 +12,7 @@ env:
   REMOVEDOCKERSUPPORT: true
   USELOCALIMAGE: true
   USEINTERNALNETWORK: true
+  VERSION_RCLONE: '1.72.1'
 
 jobs:
   update-fdroid:
@@ -53,18 +54,19 @@ jobs:
             chmod -c a+rx '.bin/asfald'
             PATH="$(realpath -e .bin):${PATH}"
 
-            fetch_apks() (
-                local dir='github/cromite'
-                local releases_url='https://github.com/uazo/cromite/rclone/releases'
-                local latest_version="$( \
-                    curl -sSiI \
-                        "${releases_url}/latest/download/file" | \
+            resolve_github_latest() {
+                curl -sSiI "$1" | \
                     tr '\r' '\n' | \
                     awk -v IGNORECASE=1 '$1 ~ /^location:/ { \
-                        sub(/.*\/download\//, ""); \
+                        sub(/^.*\/download\//, ""); \
                         sub(/\/.*$/, ""); \
-                        print; exit; }' \
-                )"
+                        print; exit; }'
+            }
+
+            fetch_apks() (
+                local dir='github/cromite'
+                local releases_url='https://github.com/uazo/cromite/releases'
+                local latest_version="$(resolve_github_latest "${releases_url}/latest/download/file")"
                 local release_url="${releases_url}/download/${latest_version}"
 
                 mkdir -p "${dir}"
@@ -76,21 +78,30 @@ jobs:
             )
             fetch_apks {arm,{arm,x}64}_ChromePublic.apk
 
-            fetch_rclone() {
-                local artifact="${1:-}" ; shift ;
-
+            fetch_rclone() (
                 local dir='github/rclone'
-                local rclone_version='1.72.1'
+                local releases_url='https://github.com/rclone/rclone/releases'
+                local rclone_version="$1"; shift;
                 local release="v${rclone_version}"
-                local release_url="https://github.com/rclone/rclone/releases/download/${release}"
+                local release_url="${releases_url}/download/${release}"
+
+                if [[ 'LATEST' == "${rclone_version}" ]]; then
+                    local latest_version="$(resolve_github_latest "${releases_url}/latest/download/file")"
+                    release_url="${releases_url}/download/${latest_version}"
+                fi
 
                 mkdir -p "${dir}"
-                cd "${dir}"
-                asfald -qv "${release_url}/${artifact}"
-            }
-            fetch_rclone 'SHA256SUMS'
-            _artifact='rclone-v1.72.1-linux-amd64.zip'
-            fetch_rclone "${_artifact}"
+                cd "${dir}" || exit
+
+                local _arg; for _arg in "$@"; do
+                    if if [[ 'LATEST' == "${rclone_version}" ]]; then
+                        _arg="${_arg//vLATEST/"${latest_version}"}"
+                    fi
+                    asfald -qv "${release_url}/${_arg}" || exit
+                done
+            )
+            _artifact="rclone-v${VERSION_RCLONE:-LATEST}-linux-amd64.zip*
+            fetch_rclone "${VERSION_RCLONE:-LATEST}" 'SHA256SUMS' "${_artifact}"
             ( cd 'github/rclone' && \
                 awk -v artifact="${_artifact}" '$0 ~ artifact "$" { print $1; exit; }' 'SHA256SUMS' | \
                 sha256sum --check --strict --warn && \
