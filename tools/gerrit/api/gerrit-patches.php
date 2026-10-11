@@ -27,7 +27,33 @@ const GERRIT_PATCH_PUBLIC_CACHE_SECONDS = 31536000;
 // This source file is intentionally outside web/public and is not deployed by the Astro build.
 const GERRIT_PATCH_STORAGE_DIRECTORY_NAME = 'gerrit-patches';
 
+final class GerritPatchResponse extends RuntimeException
+{
+    public int $status;
+    public ?string $payloadMessage;
+
+    public function __construct(int $status, ?string $payloadMessage = null)
+    {
+        parent::__construct($payloadMessage ?? '');
+        $this->status = $status;
+        $this->payloadMessage = $payloadMessage;
+    }
+}
+
+/*
+ * Terminate the request by throwing instead of calling exit().
+ *
+ * exit() bypasses pending `finally` blocks, so the cleanup in upload_patch()
+ * (removing the temporary upload file and releasing the shard lock) never ran
+ * on the 4xx/5xx paths. Throwing lets those blocks run before the response is
+ * emitted by the top-level handler.
+ */
 function respond(int $status, ?string $message = null): void
+{
+    throw new GerritPatchResponse($status, $message);
+}
+
+function emit_response(int $status, ?string $message = null): void
 {
     http_response_code($status);
     header('X-Content-Type-Options: nosniff');
@@ -267,18 +293,22 @@ function download_patch(string $changeId, string $revision, bool $includeBody): 
     exit;
 }
 
-$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? '');
-[$changeId, $revision] = validated_identifiers();
+try {
+    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? '');
+    [$changeId, $revision] = validated_identifiers();
 
-if ($method === 'PUT') {
-    upload_patch($changeId, $revision);
-}
-if ($method === 'GET') {
-    download_patch($changeId, $revision, true);
-}
-if ($method === 'HEAD') {
-    download_patch($changeId, $revision, false);
-}
+    if ($method === 'PUT') {
+        upload_patch($changeId, $revision);
+    }
+    if ($method === 'GET') {
+        download_patch($changeId, $revision, true);
+    }
+    if ($method === 'HEAD') {
+        download_patch($changeId, $revision, false);
+    }
 
-header('Allow: GET, HEAD, PUT');
-respond(405, 'Method not allowed.');
+    header('Allow: GET, HEAD, PUT');
+    respond(405, 'Method not allowed.');
+} catch (GerritPatchResponse $response) {
+    emit_response($response->status, $response->payloadMessage);
+}
