@@ -123,6 +123,10 @@ export function parseDiff(diffText: string): ParsedDiff {
   let currentFile: ParsedDiffFile | null = null;
   let oldLineNumber: number | null = null;
   let newLineNumber: number | null = null;
+  // File headers (`--- `/`+++ `) only appear before the first hunk of a file.
+  // Once inside a hunk, a line starting with those prefixes is diff content
+  // (e.g. an added line whose text begins with `++ `), not a path header.
+  let inHunk = false;
 
   for (const line of diffText.split(/\r?\n/)) {
     if (line.startsWith("diff --git ")) {
@@ -138,6 +142,7 @@ export function parseDiff(diffText: string): ParsedDiff {
       files.push(currentFile);
       oldLineNumber = null;
       newLineNumber = null;
+      inHunk = false;
       continue;
     }
 
@@ -163,17 +168,18 @@ export function parseDiff(diffText: string): ParsedDiff {
       currentFile.newPath = line.slice("rename to ".length);
       continue;
     }
-    if (line.startsWith("--- ")) {
+    if (!inHunk && line.startsWith("--- ")) {
       currentFile.oldPath = normalizeDiffPath(line.slice(4).trim());
       continue;
     }
-    if (line.startsWith("+++ ")) {
+    if (!inHunk && line.startsWith("+++ ")) {
       currentFile.newPath = normalizeDiffPath(line.slice(4).trim()) ?? currentFile.newPath;
       continue;
     }
 
     const hunk = parseHunkHeader(line);
     if (hunk) {
+      inHunk = true;
       oldLineNumber = hunk.oldLine;
       newLineNumber = hunk.newLine;
       continue;

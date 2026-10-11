@@ -1,7 +1,7 @@
 ﻿import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
-import { extractDiffFilePaths, getPatchCacheAbsolutePath, getPatchCacheRelativePath } from "./diff_utils";
+import { extractDiffFilePaths, getPatchCacheAbsolutePath, getPatchCacheRelativePath, parseDiff } from "./diff_utils";
 
 test("patch cache paths remain database-compatible and resolve beside the tool", () => {
   const relativePath = getPatchCacheRelativePath(7910401, 3);
@@ -50,3 +50,31 @@ test("extractDiffFilePaths retains the old path for deleted files", () => {
 
   assert.deepEqual(extractDiffFilePaths(diff), ["deleted/file.cc"]);
 });
+
+test("parseDiff keeps hunk content that looks like a file header", () => {
+  const diff = [
+    "diff --git a/src/foo.cc b/src/foo.cc",
+    "--- a/src/foo.cc",
+    "+++ b/src/foo.cc",
+    "@@ -1,3 +1,3 @@",
+    " context",
+    "+++ b/not-a-header.cc",
+    "+plain added",
+    "--- not-an-old-header.cc",
+  ].join("\n");
+
+  const parsed = parseDiff(diff);
+
+  assert.equal(parsed.files.length, 1);
+  assert.equal(parsed.files[0].newPath, "src/foo.cc");
+  assert.equal(parsed.files[0].oldPath, "src/foo.cc");
+  assert.equal(parsed.files[0].addedCount, 2);
+  assert.equal(parsed.files[0].removedCount, 1);
+  assert.equal(parsed.addedLines, 2);
+  assert.equal(parsed.removedLines, 1);
+  assert.deepEqual(
+    parsed.files[0].addedLines.map((line) => line.text),
+    ["++ b/not-a-header.cc", "plain added"],
+  );
+});
+
