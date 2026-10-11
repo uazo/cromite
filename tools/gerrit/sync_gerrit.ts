@@ -1680,8 +1680,11 @@ async function processTargetedChange(
   const fileNames = await processPendingFileNamesForSyncTarget(
     pool, syncState.SyncName, selected._number, skippedPatchIds,
   );
+  const parsed = await processPendingPatchesForSyncTarget(
+    pool, syncState.SyncName, selected._number,
+  );
   logInfo(
-    `[targeted_change] Done. GerritChangeID=${selected._number} ChangeID=${selected.change_id} fetched_patches=${result.fetchedPatches} pending_patches=${result.pendingPatches} file_name_indexed_patches=${fileNames.indexedPatches} indexed_file_names=${fileNames.indexedFileNames}. GerritSyncState was not modified.`,
+    `[targeted_change] Done. GerritChangeID=${selected._number} ChangeID=${selected.change_id} fetched_patches=${result.fetchedPatches} pending_patches=${result.pendingPatches} file_name_indexed_patches=${fileNames.indexedPatches} indexed_file_names=${fileNames.indexedFileNames} parsed_patches=${parsed.parsedPatches} files=${parsed.parsedFiles} added_lines=${parsed.parsedAddedLines}. GerritSyncState was not modified.`,
   );
 }
 
@@ -1715,6 +1718,9 @@ async function main(): Promise<void> {
   let totalChanges = 0;
   let fetchedPatches = 0;
   let pendingPatches = 0;
+  let parsedPatches = 0;
+  let parsedFiles = 0;
+  let parsedAddedLines = 0;
   let fileNameIndexedPatches = 0;
   let indexedFileNames = 0;
 
@@ -1797,10 +1803,18 @@ async function main(): Promise<void> {
       fileNameIndexedPatches += fileNameResult.indexedPatches;
       indexedFileNames += fileNameResult.indexedFileNames;
 
+      const pendingResult = await processPendingPatchesForSyncTarget(
+        pool,
+        syncState.SyncName,
+      );
+      parsedPatches += pendingResult.parsedPatches;
+      parsedFiles += pendingResult.parsedFiles;
+      parsedAddedLines += pendingResult.parsedAddedLines;
+
     }
 
     logInfo(
-      `Done in ${formatDuration(startedAt)}. targets=${totalTargets} changes=${totalChanges} fetched_patches=${fetchedPatches} pending_patches=${pendingPatches} file_name_indexed_patches=${fileNameIndexedPatches} indexed_file_names=${indexedFileNames}`,
+      `Done in ${formatDuration(startedAt)}. targets=${totalTargets} changes=${totalChanges} fetched_patches=${fetchedPatches} pending_patches=${pendingPatches} file_name_indexed_patches=${fileNameIndexedPatches} indexed_file_names=${indexedFileNames} parsed_patches=${parsedPatches} files=${parsedFiles} added_lines=${parsedAddedLines}`,
     );
   } catch (error) {
     throw error;
