@@ -97,9 +97,38 @@ The app id is `org.cromiko.cromiko` (set in `build/cromiko.gn_args`), so
 CromIKO installs next to Cromite instead of replacing it. Do not change the
 id after your first release: Android treats a new id as a different app.
 
+## Building on a rented server with one command
+
+You can also rent a server by the hour (for example a Hetzner Cloud CCX53:
+32 cores, 128 GB memory, 600 GB disk) and build there, without GitHub
+Actions. Create the server with Debian 12 or Ubuntu 24.04, log in as root and
+run:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh
+bash server-build.sh
+```
+
+`tools/cromiko/server-build.sh` installs the basic tools, creates a `builder`
+user, clones this repository and starts the build in a tmux session, so it
+keeps running if your connection drops. Press Ctrl+b, then d to leave it
+running, and `sudo -u builder tmux attach -t cromiko` to look again. When the
+build is finished it prints the `scp` command that copies the APK to your
+computer. Then delete the server: it is billed for as long as it exists,
+even when switched off.
+
+For a signed build, copy your keystore to the server first
+(`scp cromiko.keystore root@SERVER-IP:`), then start the build with:
+
+```sh
+export CROMIKO_KEYSTORE_PATH=/root/cromiko.keystore
+read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTORE_PASSWORD
+bash server-build.sh
+```
+
 ## Building without GitHub Actions
 
-The same script works on any machine from the table above:
+The build script itself works on any machine from the table above:
 
 ```sh
 git clone https://github.com/PupJune2/cromIKO
