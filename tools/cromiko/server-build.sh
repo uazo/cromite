@@ -71,7 +71,11 @@ echo "$BUILD_USER ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$BUILD_USER"
 chmod 440 "/etc/sudoers.d/$BUILD_USER"
 
 if as_builder tmux has-session -t "$SESSION" 2> /dev/null; then
-  fail "A build is already running. Watch it with: sudo -u $BUILD_USER tmux attach -t $SESSION"
+  if pgrep -u "$BUILD_USER" -f tools/cromiko/build-android.sh > /dev/null; then
+    fail "A build is already running. Watch it with: sudo -u $BUILD_USER tmux attach -t $SESSION"
+  fi
+  # The previous build has finished and only its window is still open.
+  as_builder tmux kill-session -t "$SESSION"
 fi
 
 mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
@@ -88,6 +92,7 @@ fi
 
 say "Getting $REPO ($BRANCH)"
 if [ -d "$CHECKOUT/.git" ]; then
+  as_builder git -C "$CHECKOUT" remote set-url origin "$REPO"
   as_builder git -C "$CHECKOUT" fetch -q --depth 1 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
   as_builder git -C "$CHECKOUT" checkout -q -B "$BRANCH" "origin/$BRANCH"
 else

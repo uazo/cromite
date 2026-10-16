@@ -162,14 +162,27 @@ cd "$SRC"
 git config user.email "cromiko-build@users.noreply.github.com"
 git config user.name "CromIKO build"
 git am --abort > /dev/null 2>&1 || true
-git reset -q --hard cromiko-base
-count=0
-while read -r patch; do
+mapfile -t patches < <(grep -v '^#' "$REPO_DIR/build/cromite_patches_list.txt" | grep '\.patch$')
+# Patches that are already applied unchanged (same name, same changes) stay in place, so that
+# their files keep their timestamps and the build only recompiles what the other patches touch.
+base=cromiko-base
+keep=0
+while read -r commit; do
+  [ "$keep" -lt "${#patches[@]}" ] || break
+  patch=${patches[$keep]}
+  git log -1 --format=%B "$commit" | grep -qx "FILE:$patch" || break
+  [ "$(git show --binary "$commit" | git patch-id --stable | cut -d' ' -f1)" = \
+    "$(git patch-id --stable < "$REPO_DIR/build/patches/$patch" | cut -d' ' -f1)" ] || break
+  base=$commit
+  keep=$((keep + 1))
+done < <(git rev-list --reverse cromiko-base..HEAD)
+git reset -q --hard "$base"
+echo "$keep patches already applied, applying $(( ${#patches[@]} - keep ))"
+for patch in "${patches[@]:$keep}"; do
   sed "0,/^---/s//FILE:$patch\n---/" "$REPO_DIR/build/patches/$patch" | git am -q \
     || fail "Patch $patch does not apply to Chromium $VERSION"
-  count=$((count + 1))
-done < <(grep -v '^#' "$REPO_DIR/build/cromite_patches_list.txt" | grep '\.patch$')
-echo "Applied $count patches"
+done
+echo "All ${#patches[@]} patches applied"
 
 step "Configuring the build"
 gn gen "$OUT" --args="target_os=\"android\" $(cat "$REPO_DIR/build/cromite.gn_args") target_cpu=\"$TARGET_CPU\" $(cat "$REPO_DIR/build/cromiko.gn_args")"

@@ -126,6 +126,26 @@ read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTO
 bash server-build.sh
 ```
 
+## Building again after changes
+
+A server that has built CromIKO once keeps the Chromium download and the
+compiled files. Later builds only apply the patches that changed (and those
+after them) and only recompile what they touch, so they are much faster than
+the first one.
+
+1. Merge the changes into `master` on GitHub.
+2. Log in to the server as root and run the same two commands as above. A
+   window left open by the previous build is closed automatically.
+3. Copy the new APK to your computer with the `scp` command it prints.
+
+To update the app, open the new APK on the phone and choose **Update**.
+Bookmarks, tabs and settings are kept. This works as long as both builds are
+signed with the same key: builds without your own keystore all use
+Chromium's public debug key, so they update each other. When you switch to
+your own keystore, Android refuses the update; uninstall the old CromIKO once
+(this deletes its data) and install the new one. Keep using that keystore
+from then on.
+
 ## Building without GitHub Actions
 
 The build script itself works on any machine from the table above:
@@ -153,5 +173,6 @@ unchanged keeps merging future Cromite updates simple.
 
 Merge the new Cromite version into this repository. If a CromIKO patch no
 longer applies, the build stops at "Applying patches" and names the patch.
-The colors and icons can be regenerated with `tools/cromiko/gen_palette.py`
-and `tools/cromiko/gen_icons.py`; each script explains its usage at the top.
+The colors, icons and animated drawables can be regenerated with
+`tools/cromiko/gen_palette.py`, `tools/cromiko/gen_icons.py` and
+`tools/cromiko/gen_drawables.py`; each script explains its usage at the top.
