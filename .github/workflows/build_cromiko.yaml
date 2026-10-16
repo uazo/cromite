@@ -1,0 +1,112 @@
+name: Build CromIKO
+
+# Builds the CromIKO Android APK with tools/cromiko/build-android.sh.
+# A Chromium build does not fit on GitHub's standard runners (6 hour limit,
+# ~14 GB of disk); see docs/BUILD_CROMIKO.md for the runner and secrets setup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_cpu:
+        description: 'Android CPU (arm64 fits almost every recent phone)'
+        type: choice
+        options:
+          - arm64
+          - arm
+          - x64
+        default: arm64
+      runner:
+        description: 'Runner label: self-hosted, or the label of a large GitHub-hosted runner'
+        type: string
+        default: self-hosted
+      install_deps:
+        description: 'Install Chromium build dependencies (needs sudo on the runner)'
+        type: boolean
+        default: true
+      publish_release:
+        description: 'Also publish the APK as a GitHub release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-cromiko-${{ inputs.runner }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build CromIKO (${{ inputs.target_cpu }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 2880
+    permissions:
+      contents: write
+    steps:
+      - name: Check out CromIKO
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.CROMIKO_KEYSTORE_BASE64 }}
+          KEYSTORE_ALIAS: ${{ secrets.CROMIKO_KEYSTORE_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::No CROMIKO_KEYSTORE_BASE64 secret, so the APK is signed with Chromium's public debug key. That is fine for testing but not for releases."
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/cromiko.keystore"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+          echo "CROMIKO_KEYSTORE_PATH=$keystore" >> "$GITHUB_ENV"
+          echo "CROMIKO_KEYSTORE_ALIAS=${KEYSTORE_ALIAS:-cromiko}" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        id: build
+        env:
+          TARGET_CPU: ${{ inputs.target_cpu }}
+          CROMIKO_DIST: ${{ github.workspace }}/dist
+          CROMIKO_INSTALL_DEPS: ${{ inputs.install_deps && '1' || '0' }}
+          CROMIKO_KEYSTORE_PASSWORD: ${{ secrets.CROMIKO_KEYSTORE_PASSWORD }}
+          CROMITE_PREF_HASH_SEED_BIN: ${{ secrets.CROMIKO_PREF_HASH_SEED }}
+        run: tools/cromiko/build-android.sh "$TARGET_CPU"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: CromIKO-${{ steps.build.outputs.version }}-${{ inputs.target_cpu }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Publish release
+        if: inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.build.outputs.version }}
+          TARGET_CPU: ${{ inputs.target_cpu }}
+        run: |
+          if ! command -v gh > /dev/null; then
+            echo "::error::Publishing needs the GitHub CLI (gh) on the runner."
+            exit 1
+          fi
+          # The in-app update check (CromIKO-Update-Check.patch) expects the tag
+          # v<version>-<commit> and an asset named <cpu>_ChromePublic.apk.
+          release_dir="$RUNNER_TEMP/release"
+          rm -rf "$release_dir" && mkdir -p "$release_dir"
+          for f in dist/*; do
+            cp "$f" "$release_dir/${TARGET_CPU}_ChromePublic.apk${f##*.apk}"
+          done
+          tag="v$VERSION-${GITHUB_SHA::8}"
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$release_dir"/* --clobber
+          else
+            gh release create "$tag" "$release_dir"/* --title "CromIKO $VERSION" \
+              --notes "Built from $GITHUB_SHA by the Build CromIKO workflow."
+          fi
+
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/cromiko.keystore"
