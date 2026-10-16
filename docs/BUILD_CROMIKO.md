@@ -1,7 +1,7 @@
 # Building CromIKO
 
-CromIKO is Cromite plus a few extra patches (theme, app icon, app name and
-update check, listed at the end of `build/cromite_patches_list.txt`). It is
+CromIKO is Cromite plus its own patches (look, name and new features, the
+`CromIKO-*` entries at the end of `build/cromite_patches_list.txt`). It is
 built the same way as Cromite: download Chromium at the version in
 `build/RELEASE`, apply all the patches, compile.
 
