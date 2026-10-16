@@ -35,6 +35,16 @@ SESSION=cromiko
 say() { echo -e "\n==== $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 as_builder() { sudo -u "$BUILD_USER" -H "$@"; }
+# Whether this script runs inside a tmux window (for example the one of the previous
+# build). $TMUX is not reliable here because sudo removes it.
+inside_tmux() {
+  local pid=$$
+  while [ "$pid" -gt 1 ]; do
+    case "$(ps -o comm= -p "$pid")" in tmux*) return 0 ;; esac
+    pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+  done
+  return 1
+}
 
 [ "$(id -u)" = 0 ] || fail "Run this as root (for example: sudo bash server-build.sh)."
 # Commands run as the build user need a working directory they can read.
@@ -70,12 +80,8 @@ fi
 echo "$BUILD_USER ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/$BUILD_USER"
 chmod 440 "/etc/sudoers.d/$BUILD_USER"
 
-if as_builder tmux has-session -t "$SESSION" 2> /dev/null; then
-  if pgrep -u "$BUILD_USER" -f tools/cromiko/build-android.sh > /dev/null; then
-    fail "A build is already running. Watch it with: sudo -u $BUILD_USER tmux attach -t $SESSION"
-  fi
-  # The previous build has finished and only its window is still open.
-  as_builder tmux kill-session -t "$SESSION"
+if pgrep -u "$BUILD_USER" -f tools/cromiko/build-android.sh > /dev/null; then
+  fail "A build is already running. Watch it with: sudo -u $BUILD_USER tmux attach -t $SESSION"
 fi
 
 mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
@@ -153,7 +159,12 @@ chown "$BUILD_USER:" "$RUNNER"
 chmod 755 "$RUNNER"
 
 say "Starting the build in the background (tmux session \"$SESSION\")"
-as_builder tmux new-session -d -s "$SESSION" "bash $RUNNER"
+if as_builder tmux has-session -t "$SESSION" 2> /dev/null; then
+  # Keep the windows of earlier builds: this script may be running in one of them.
+  as_builder tmux new-window -t "$SESSION:" "bash $RUNNER"
+else
+  as_builder tmux new-session -d -s "$SESSION" "bash $RUNNER"
+fi
 cat <<EOF
 
 The build is running and keeps running if you disconnect.
@@ -166,6 +177,6 @@ A first build takes several hours.
 
 EOF
 
-if [ -t 0 ] && [ -t 1 ]; then
+if [ -t 0 ] && [ -t 1 ] && ! inside_tmux; then
   exec sudo -u "$BUILD_USER" -H tmux attach -t "$SESSION"
 fi
