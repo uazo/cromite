@@ -1,0 +1,164 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 13:00:00 +0000
+Subject: CromIKO Incognito Tile
+
+Add an "Incognito tab" tile for Android's Quick Settings. Tapping it
+opens a new incognito tab in CromIKO, the same way as the "New
+incognito tab" launcher shortcut; on a locked phone it asks to unlock
+first. Add it by editing the Quick Settings tiles.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/chrome_java_sources.gni        |  1 +
+ chrome/android/java/AndroidManifest.xml       | 11 ++++
+ .../cromiko/CromikoIncognitoTileService.java  | 61 +++++++++++++++++++
+ .../CromIKO-Incognito-Tile.grdp               |  6 ++
+ components/browser_ui/theme/android/BUILD.gn  |  1 +
+ .../drawable/cromiko_ic_incognito_tile.xml    | 16 +++++
+ 6 files changed, 96 insertions(+)
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Tile.grdp
+ create mode 100644 components/browser_ui/theme/android/java/res/drawable/cromiko_ic_incognito_tile.xml
+
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -478,6 +478,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/crash/LogcatExtractionRunnable.java",
+   "java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabColorProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabIntentDataProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java",
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -957,6 +957,17 @@ by a child template that "extends" this file.
+             android:exported="false">
+         </service>
+ 
++        <!-- CromIKO: Quick Settings tile that opens a new incognito tab -->
++        <service android:name="org.chromium.chrome.browser.cromiko.CromikoIncognitoTileService"
++            android:icon="@drawable/cromiko_ic_incognito_tile"
++            android:label="@string/cromiko_incognito_tile_label"
++            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
++            android:exported="true">
++            <intent-filter>
++                <action android:name="android.service.quicksettings.action.QS_TILE" />
++            </intent-filter>
++        </service>
++
+         <!-- Quick Action Search widget -->
+         <receiver
+             android:name="org.chromium.chrome.browser.quickactionsearchwidget.QuickActionSearchWidgetProvider$QuickActionSearchWidgetProviderSearch"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java
+@@ -0,0 +1,61 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.app.PendingIntent;
++import android.content.Intent;
++import android.os.Build;
++import android.service.quicksettings.Tile;
++import android.service.quicksettings.TileService;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.LauncherShortcutActivity;
++
++/**
++ * CromIKO: a Quick Settings tile that opens a new incognito tab, the same way as the "New
++ * incognito tab" launcher shortcut.
++ */
++@NullMarked
++public class CromikoIncognitoTileService extends TileService {
++    @Override
++    public void onStartListening() {
++        Tile tile = getQsTile();
++        if (tile == null) return;
++        // The tile is a button, not a switch, so it is never shown as "on".
++        tile.setState(Tile.STATE_INACTIVE);
++        tile.setSubtitle(getApplicationInfo().loadLabel(getPackageManager()));
++        tile.updateTile();
++    }
++
++    @Override
++    public void onClick() {
++        if (isLocked()) {
++            unlockAndRun(this::openIncognitoTab);
++        } else {
++            openIncognitoTab();
++        }
++    }
++
++    private void openIncognitoTab() {
++        Intent intent = new Intent(LauncherShortcutActivity.ACTION_OPEN_NEW_INCOGNITO_TAB);
++        intent.setClass(this, LauncherShortcutActivity.class);
++        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++            startActivityAndCollapse(
++                    PendingIntent.getActivity(
++                            this,
++                            /* requestCode= */ 0,
++                            intent,
++                            PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
++        } else {
++            startActivityAndCollapseBeforeU(intent);
++        }
++    }
++
++    // Starting an activity with an Intent is not allowed from Android 14 on.
++    @SuppressWarnings("deprecation")
++    private void startActivityAndCollapseBeforeU(Intent intent) {
++        startActivityAndCollapse(intent);
++    }
++}
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Tile.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Tile.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Tile.grdp
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_INCOGNITO_TILE_LABEL" desc="Label of the Android Quick Settings tile that opens a new incognito tab. [CHAR_LIMIT=20]">
++        Incognito tab
++    </message>
++</grit-part>
+diff --git a/components/browser_ui/theme/android/BUILD.gn b/components/browser_ui/theme/android/BUILD.gn
+--- a/components/browser_ui/theme/android/BUILD.gn
++++ b/components/browser_ui/theme/android/BUILD.gn
+@@ -12,6 +12,7 @@ jinja_template_resources("theme_template_resources") {
+ android_resources("java_resources") {
+   sources = [
+     "java/res/drawable/cromiko_ic_fire_24dp.xml",
++    "java/res/drawable/cromiko_ic_incognito_tile.xml",
+     "java/res/drawable/cromiko_splash_icon.xml",
+     "java/res/drawable/cromiko_welcome_mascot.xml",
+     "java/res/values-night/colors.xml",
+diff --git a/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_incognito_tile.xml b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_incognito_tile.xml
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_incognito_tile.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++Icon of the incognito Quick Settings tile, the shape of ic_incognito_fill_24dp. Quick Settings
++tints it, so it is plain white without theme attributes (it is drawn by the system UI).
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="960"
++    android:viewportHeight="960">
++  <path
++      android:fillColor="#FFFFFFFF"
++      android:pathData="M300,800Q241,800 200.5,759.5Q160,719 160,660Q160,601 200.5,560.5Q241,520 300,520Q350,520 387.5,550.5Q425,581 436,628Q447,623 457.5,621.5Q468,620 480,620Q492,620 502.5,621.5Q513,623 524,628Q535,581 572.5,550.5Q610,520 660,520Q719,520 759.5,560.5Q800,601 800,660Q800,719 759.5,759.5Q719,800 660,800Q610,800 573,770.5Q536,741 524,694Q515,688 503.5,684Q492,680 480,680Q468,680 456.5,684Q445,688 436,694Q424,741 387,770.5Q350,800 300,800ZM300,740Q333,740 356.5,716.5Q380,693 380,660Q380,627 356.5,603.5Q333,580 300,580Q267,580 243.5,603.5Q220,627 220,660Q220,693 243.5,716.5Q267,740 300,740ZM660,740Q693,740 716.5,716.5Q740,693 740,660Q740,627 716.5,603.5Q693,580 660,580Q627,580 603.5,603.5Q580,627 580,660Q580,693 603.5,716.5Q627,740 660,740ZM120,480L120,420L244,420L348,146Q353,132 366.5,125.5Q380,119 394,122L480,142L566,122Q580,119 593.5,125.5Q607,132 612,146L716,420L840,420L840,480L120,480Z" />
++</vector>
+--
