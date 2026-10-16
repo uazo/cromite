@@ -183,6 +183,19 @@ for patch in "${patches[@]:$keep}"; do
     || fail "Patch $patch does not apply to Chromium $VERSION"
 done
 echo "All ${#patches[@]} patches applied"
+# Cromite includes all .grdp files of a folder in a .grd file through the folder's placeholder.txt,
+# which the build does not track: a repeat build would not compile a new or changed .grdp file.
+# Touch the .grd file in that case.
+while read -r placeholder; do
+  dir=$(dirname "$placeholder")
+  mapfile -t grds < <(git grep -l -F "$(basename "$dir")/placeholder.txt" -- '*.grd' '*.grdp')
+  for grd in "${grds[@]}"; do
+    if [ -n "$(find "$dir" -name '*.grdp' -newer "$grd" -print -quit)" ]; then
+      echo "Strings changed in $dir, rebuilding $grd"
+      touch "$grd"
+    fi
+  done
+done < <(git ls-files '*/placeholder.txt')
 
 step "Configuring the build"
 gn gen "$OUT" --args="target_os=\"android\" $(cat "$REPO_DIR/build/cromite.gn_args") target_cpu=\"$TARGET_CPU\" $(cat "$REPO_DIR/build/cromiko.gn_args")"
