@@ -6,7 +6,7 @@ its own `CromIKO-*.patch`, like the features so far.
 | Feature                           | Weight | Effort | Status  |
 |-----------------------------------|:------:|:------:|:-------:|
 | Video and audio player            | 10     | large  | done    |
-| Download manager with threads     | 9      | medium |         |
+| Download manager with threads     | 9      | medium | done    |
 | Manga mode: continue reading      | 6      | small  |         |
 | Incognito lock                    | 5      | small  |         |
 | Dark mode per site                | 4      | small  |         |
@@ -38,16 +38,20 @@ Integrated video assistant (PiP and background playback).
   - Copy-protected (DRM) streams such as Netflix only get the fullscreen
     and picture-in-picture help.
 
-## Download manager with threads (weight 9)
+## Download manager with threads (weight 9) - done
 
-- Chromium already has parallel downloading: several connections per file
-  using HTTP range requests (`enable-parallel-downloading`, currently off).
-  Turn it on, and let the user choose 1 to 8 connections.
-- A downloads page that shows speed, time left and connections for each
-  file.
-- Pause, resume and automatic retry after network loss.
-- A queue with a limit on simultaneous downloads, and a "Wi-Fi only" option.
-- Sorting into folders by type (video, music, documents, APKs).
+Done in `CromIKO-Download-Manager.patch`, in Settings > Downloads >
+CromIKO download manager.
+
+- Several connections per file (HTTP range requests): 1 to 8, 4 by
+  default.
+- Speed and time left in the notification; speed, connections and time
+  left in the download list.
+- Pause, resume and automatic retry after network loss (Chromium's).
+- A queue with a limit on simultaneous downloads (3 by default), and a
+  "Wi-Fi only" option. "Start now" runs a waiting download right away.
+- Sorting into folders by type (Download/CromIKO/Videos, Music, Pictures,
+  Documents, Apps, Archives), off by default.
 
 ## Manga mode: continue reading (weight 6)
 

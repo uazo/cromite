@@ -1,0 +1,1445 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 13:00:00 +0000
+Subject: CromIKO Download Manager
+
+Add the CromIKO download manager, with its settings in Settings >
+Downloads > CromIKO download manager (with the mascot):
+
+- Connections per file: 1, 2, 3, 4 (the default), 6 or 8. Chromium
+  already downloads big files over several connections with HTTP range
+  requests when the server allows it; this sets how many.
+- Downloads at the same time: 1 to 5 (3 by default) or no limit. The
+  newer downloads wait in a queue and start when an older one ends.
+  The queue survives a restart.
+- Wi-Fi only: downloads wait while the phone uses mobile data (or a
+  metered network) and continue on Wi-Fi.
+- Sort into folders: new files go to Download/CromIKO/Videos, Music,
+  Pictures, Documents, Apps or Archives (off by default).
+
+A waiting download says "In queue" or "Waiting for Wi-Fi" in its
+notification and in the download list. Resuming it (the notification
+button says "Start now") runs it right away, whatever the limit and
+the network are; so does resuming a download the user paused.
+Downloads that could not continue after waiting (no ETag or
+Last-Modified) and downloads still waiting for a decision of the user
+(location, danger warnings) never wait in the queue.
+
+Running downloads show their speed in the notification, and speed and
+connections in the download list, next to the time left. Pausing,
+resuming and the automatic retry after a network loss are Chromium's.
+
+The queue is chrome/browser/download/cromiko_download_queue.cc, owned
+by ChromeDownloadManagerDelegate; tools/cromiko/download-test tests it.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/chrome_java_resources.gni      |   2 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ .../cromiko_download_settings_header.xml      |  51 +++
+ .../res/xml/cromiko_download_preferences.xml  |  37 ++
+ .../cromiko/CromikoDownloadSettings.java      | 133 +++++++
+ .../download/DownloadNotificationFactory.java |  29 +-
+ chrome/browser/download/BUILD.gn              |   2 +
+ chrome/browser/download/android/BUILD.gn      |   1 +
+ .../android/download_manager_service.cc       |   8 +-
+ .../java/res/xml/download_preferences.xml     |   7 +
+ .../download/CromikoDownloadStatus.java       | 118 ++++++
+ .../chrome/browser/download/DownloadInfo.java |   8 +-
+ .../chrome_download_manager_delegate.cc       |   7 +
+ .../chrome_download_manager_delegate.h        |   4 +
+ .../download/cromiko_download_queue.cc        | 347 ++++++++++++++++++
+ .../browser/download/cromiko_download_queue.h | 105 ++++++
+ chrome/browser/download/download_prefs.cc     |   2 +
+ .../browser/download/home/list/UiUtils.java   |  28 +-
+ .../CromIKO-Download-Manager.grdp             |  57 +++
+ .../download/DownloadCollectionBridge.java    |  74 ++++
+ .../common/parallel_download_utils.cc         |  13 +
+ .../public/common/parallel_download_configs.h |   7 +
+ .../android/provider/MediaStoreUtils.java     |  11 +
+ 23 files changed, 1046 insertions(+), 6 deletions(-)
+ create mode 100644 chrome/android/java/res/layout/cromiko_download_settings_header.xml
+ create mode 100644 chrome/android/java/res/xml/cromiko_download_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoDownloadSettings.java
+ create mode 100644 chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/CromikoDownloadStatus.java
+ create mode 100644 chrome/browser/download/cromiko_download_queue.cc
+ create mode 100644 chrome/browser/download/cromiko_download_queue.h
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Download-Manager.grdp
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -505,6 +505,7 @@ chrome_java_resources = [
+   "java/res/layout/contextual_search_quick_action_icon_view.xml",
+   "java/res/layout/contextual_search_related_searches_view.xml",
+   "java/res/layout/contextual_search_term_view.xml",
++  "java/res/layout/cromiko_download_settings_header.xml",
+   "java/res/layout/cromiko_shield_stats.xml",
+   "java/res/layout/custom_tab_close_button.xml",
+   "java/res/layout/custom_tab_desktop_popup_header_layout.xml",
+@@ -690,6 +691,7 @@ chrome_java_resources = [
+   "java/res/xml/bookmark_widget_info.xml",
+   "java/res/xml/clear_browsing_data_preferences.xml",
+   "java/res/xml/contextual_search_preferences.xml",
++  "java/res/xml/cromiko_download_preferences.xml",
+   "java/res/xml/developer_preferences.xml",
+   "java/res/xml/do_not_track_preferences.xml",
+   "java/res/xml/gpc_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -477,6 +477,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/crash/CrashUploadCountStore.java",
+   "java/src/org/chromium/chrome/browser/crash/LogcatExtractionRunnable.java",
+   "java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoDownloadSettings.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java",
+diff --git a/chrome/android/java/res/layout/cromiko_download_settings_header.xml b/chrome/android/java/res/layout/cromiko_download_settings_header.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/layout/cromiko_download_settings_header.xml
+@@ -0,0 +1,51 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The top of the CromIKO download settings: the mascot and what the download manager does. -->
++<LinearLayout
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:layout_marginStart="16dp"
++    android:layout_marginTop="8dp"
++    android:layout_marginEnd="16dp"
++    android:layout_marginBottom="8dp"
++    android:background="@drawable/cromiko_shield_stats_background"
++    android:gravity="center_vertical"
++    android:orientation="horizontal"
++    android:paddingStart="12dp"
++    android:paddingTop="12dp"
++    android:paddingEnd="16dp"
++    android:paddingBottom="12dp">
++
++    <ImageView
++        android:layout_width="56dp"
++        android:layout_height="48dp"
++        android:importantForAccessibility="no"
++        android:scaleType="fitCenter"
++        android:src="@drawable/cromiko_welcome_mascot" />
++
++    <LinearLayout
++        android:layout_width="0dp"
++        android:layout_height="wrap_content"
++        android:layout_marginStart="12dp"
++        android:layout_weight="1"
++        android:orientation="vertical">
++
++        <TextView
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:text="@string/cromiko_download_settings_title"
++            android:textAppearance="@style/TextAppearance.TextLarge.Primary" />
++
++        <TextView
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:layout_marginTop="2dp"
++            android:text="@string/cromiko_download_settings_header"
++            android:textAppearance="@style/TextAppearance.TextMedium.Secondary" />
++    </LinearLayout>
++</LinearLayout>
+diff --git a/chrome/android/java/res/xml/cromiko_download_preferences.xml b/chrome/android/java/res/xml/cromiko_download_preferences.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/xml/cromiko_download_preferences.xml
+@@ -0,0 +1,37 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The settings of the CromIKO download manager, see CromikoDownloadSettings. -->
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <Preference
++        android:key="header"
++        android:layout="@layout/cromiko_download_settings_header"
++        android:selectable="false" />
++
++    <ListPreference
++        android:key="connections"
++        android:persistent="false"
++        android:title="@string/cromiko_download_connections_title"
++        android:dialogTitle="@string/cromiko_download_connections_title" />
++
++    <ListPreference
++        android:key="max_active"
++        android:persistent="false"
++        android:title="@string/cromiko_download_max_active_title"
++        android:dialogTitle="@string/cromiko_download_max_active_title" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="wifi_only"
++        android:persistent="false"
++        android:title="@string/cromiko_download_wifi_only_title"
++        android:summary="@string/cromiko_download_wifi_only_summary" />
++
++    <org.chromium.components.browser_ui.settings.ChromeSwitchPreference
++        android:key="sort"
++        android:persistent="false"
++        android:title="@string/cromiko_download_sort_title"
++        android:summary="@string/cromiko_download_sort_summary" />
++</PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoDownloadSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoDownloadSettings.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoDownloadSettings.java
+@@ -0,0 +1,133 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.os.Bundle;
++
++import androidx.preference.ListPreference;
++import androidx.preference.Preference;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.ChromeSwitchPreference;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++import org.chromium.components.prefs.PrefService;
++import org.chromium.components.user_prefs.UserPrefs;
++
++/**
++ * CromIKO: the settings of the CromIKO download manager, in Settings > Downloads: the number of
++ * connections per file, the number of downloads at the same time, "Wi-Fi only", and the sorting of
++ * new files into folders. chrome/browser/download/cromiko_download_queue.cc uses the first three,
++ * DownloadCollectionBridge.java the last one.
++ */
++@NullMarked
++public class CromikoDownloadSettings extends ChromeBaseSettingsFragment
++        implements Preference.OnPreferenceChangeListener {
++    // The keys of the preferences in cromiko_download_preferences.xml.
++    private static final String PREF_CONNECTIONS = "connections";
++    private static final String PREF_MAX_ACTIVE = "max_active";
++    private static final String PREF_WIFI_ONLY = "wifi_only";
++    private static final String PREF_SORT = "sort";
++
++    // The profile prefs of cromiko_download_queue.cc.
++    private static final String CONNECTIONS_PREF = "cromiko.downloads.connections";
++    private static final String MAX_ACTIVE_PREF = "cromiko.downloads.max_active";
++    private static final String WIFI_ONLY_PREF = "cromiko.downloads.wifi_only";
++    // The app shared preference of DownloadCollectionBridge.java.
++    private static final String SORT_PREF = "cromiko_sort_downloads";
++
++    private static final int[] CONNECTIONS = {1, 2, 3, 4, 6, 8};
++    // 0 is no limit.
++    private static final int[] MAX_ACTIVE = {1, 2, 3, 4, 5, 0};
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getString(R.string.cromiko_download_settings_title));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.cromiko_download_preferences);
++        PrefService prefs = getPrefs();
++
++        String[] connections = new String[CONNECTIONS.length];
++        for (int i = 0; i < CONNECTIONS.length; i++) {
++            connections[i] =
++                    CONNECTIONS[i] == 1
++                            ? getString(R.string.cromiko_download_one_connection)
++                            : getString(R.string.cromiko_download_connections, CONNECTIONS[i]);
++        }
++        setUpList(PREF_CONNECTIONS, CONNECTIONS, connections, prefs.getInteger(CONNECTIONS_PREF));
++
++        String[] maxActive = new String[MAX_ACTIVE.length];
++        for (int i = 0; i < MAX_ACTIVE.length; i++) {
++            maxActive[i] =
++                    MAX_ACTIVE[i] == 0
++                            ? getString(R.string.cromiko_download_no_limit)
++                            : String.valueOf(MAX_ACTIVE[i]);
++        }
++        setUpList(PREF_MAX_ACTIVE, MAX_ACTIVE, maxActive, prefs.getInteger(MAX_ACTIVE_PREF));
++
++        ChromeSwitchPreference wifiOnly = (ChromeSwitchPreference) findPreference(PREF_WIFI_ONLY);
++        wifiOnly.setChecked(prefs.getBoolean(WIFI_ONLY_PREF));
++        wifiOnly.setOnPreferenceChangeListener(this);
++
++        ChromeSwitchPreference sort = (ChromeSwitchPreference) findPreference(PREF_SORT);
++        sort.setChecked(ContextUtils.getAppSharedPreferences().getBoolean(SORT_PREF, false));
++        sort.setOnPreferenceChangeListener(this);
++    }
++
++    private void setUpList(String key, int[] values, String[] entries, int value) {
++        ListPreference list = (ListPreference) findPreference(key);
++        String[] entryValues = new String[values.length];
++        for (int i = 0; i < values.length; i++) entryValues[i] = String.valueOf(values[i]);
++        list.setEntries(entries);
++        list.setEntryValues(entryValues);
++        list.setValue(String.valueOf(value));
++        list.setSummaryProvider(ListPreference.SimpleSummaryProvider.getInstance());
++        list.setOnPreferenceChangeListener(this);
++    }
++
++    private PrefService getPrefs() {
++        return UserPrefs.get(getProfile().getOriginalProfile());
++    }
++
++    @Override
++    public boolean onPreferenceChange(Preference preference, Object newValue) {
++        String key = preference.getKey();
++        if (PREF_CONNECTIONS.equals(key)) {
++            getPrefs().setInteger(CONNECTIONS_PREF, Integer.parseInt((String) newValue));
++        } else if (PREF_MAX_ACTIVE.equals(key)) {
++            getPrefs().setInteger(MAX_ACTIVE_PREF, Integer.parseInt((String) newValue));
++        } else if (PREF_WIFI_ONLY.equals(key)) {
++            getPrefs().setBoolean(WIFI_ONLY_PREF, (boolean) newValue);
++        } else if (PREF_SORT.equals(key)) {
++            ContextUtils.getAppSharedPreferences()
++                    .edit()
++                    .putBoolean(SORT_PREF, (boolean) newValue)
++                    .apply();
++        }
++        return true;
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++
++    @Override
++    public @Nullable String getMainMenuKey() {
++        return "downloads";
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/download/DownloadNotificationFactory.java
+@@ -140,6 +140,21 @@ public final class DownloadNotificationFactory {
+                                     ? OfflineItem.Progress.createIndeterminateProgress()
+                                     : downloadUpdate.getProgress();
+                     contentText = StringUtils.getProgressTextForUi(progress);
++                    // CromIKO: show the speed of the download.
++                    String speedText =
++                            downloadUpdate.getIsOffTheRecord()
++                                    ? null
++                                    : CromikoDownloadStatus.getSpeedText(
++                                            context,
++                                            downloadUpdate.getContentId(),
++                                            /* withConnections= */ false);
++                    if (speedText != null) {
++                        contentText =
++                                resources.getString(
++                                        R.string.download_manager_in_progress_description,
++                                        contentText,
++                                        speedText);
++                    }
+                 }
+ 
+                 iconId =
+@@ -208,7 +223,14 @@ public final class DownloadNotificationFactory {
+                 assertNonNull(downloadUpdate.getContentId());
+                 checkArgument(downloadUpdate.getNotificationId() != -1);
+ 
+-                contentText = resources.getString(R.string.download_notification_paused);
++                // CromIKO: say why a download waits in the queue of the CromIKO download manager.
++                String waitText =
++                        CromikoDownloadStatus.getWaitText(
++                                context, downloadUpdate.getContentId(), /* forList= */ false);
++                contentText =
++                        waitText != null
++                                ? waitText
++                                : resources.getString(R.string.download_notification_paused);
+                 iconId = R.drawable.ic_download_pause;
+ 
+                 Intent resumeIntent =
+@@ -227,7 +249,10 @@ public final class DownloadNotificationFactory {
+                 builder.setAutoCancel(false)
+                         .addAction(
+                                 R.drawable.ic_file_download_white_24dp,
+-                                resources.getString(R.string.download_notification_resume_button),
++                                resources.getString(
++                                        waitText != null
++                                                ? R.string.cromiko_download_start_now
++                                                : R.string.download_notification_resume_button),
+                                 buildPendingIntentProvider(
+                                         context, resumeIntent, downloadUpdate.getNotificationId()),
+                                 resumeActionType)
+diff --git a/chrome/browser/download/BUILD.gn b/chrome/browser/download/BUILD.gn
+--- a/chrome/browser/download/BUILD.gn
++++ b/chrome/browser/download/BUILD.gn
+@@ -149,6 +149,8 @@ source_set("impl") {
+   sources = [
+     "background_download_service_factory.cc",
+     "chrome_download_manager_delegate.cc",
++    "cromiko_download_queue.cc",
++    "cromiko_download_queue.h",
+     "deferred_client_wrapper.cc",
+     "download_completion_blocker.cc",
+     "download_core_service.cc",
+diff --git a/chrome/browser/download/android/BUILD.gn b/chrome/browser/download/android/BUILD.gn
+--- a/chrome/browser/download/android/BUILD.gn
++++ b/chrome/browser/download/android/BUILD.gn
+@@ -26,6 +26,7 @@ android_library("file_provider_java") {
+ 
+ android_library("java") {
+   sources = [
++    "java/src/org/chromium/chrome/browser/download/CromikoDownloadStatus.java",
+     "java/src/org/chromium/chrome/browser/download/DangerousDownloadDialogBridge.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadConstants.java",
+     "java/src/org/chromium/chrome/browser/download/DownloadDelegateImpl.java",
+diff --git a/chrome/browser/download/android/download_manager_service.cc b/chrome/browser/download/android/download_manager_service.cc
+--- a/chrome/browser/download/android/download_manager_service.cc
++++ b/chrome/browser/download/android/download_manager_service.cc
+@@ -25,6 +25,7 @@
+ #include "chrome/browser/download/android/download_startup_utils.h"
+ #include "chrome/browser/download/android/download_utils.h"
+ #include "chrome/browser/download/android/service/download_task_scheduler.h"
++#include "chrome/browser/download/cromiko_download_queue.h"
+ #include "chrome/browser/download/offline_item_utils.h"
+ #include "chrome/browser/download/simple_download_manager_coordinator_factory.h"
+ #include "chrome/browser/flags/android/chrome_feature_list.h"
+@@ -153,6 +154,9 @@ ScopedJavaLocalRef<jobject> DownloadManagerService::CreateJavaDownloadInfo(
+     otr_profile_id = profile->GetOTRProfileID().ConvertToJavaOTRProfileID(env);
+   }
+ 
++  // CromIKO: the number of connections that the download uses now.
++  int connections = CromikoDownloadQueue::GetConnectionCount(item);
++
+   return Java_DownloadInfo_createDownloadInfo(
+       env, item->GetGuid(), item->GetFileNameToReportUser().value(),
+       item->GetTargetFilePath().value(), item->GetURL(), item->GetMimeType(),
+@@ -167,7 +171,9 @@ ScopedJavaLocalRef<jobject> DownloadManagerService::CreateJavaDownloadInfo(
+       static_cast<int>(
+           OfflineItemUtils::ConvertDownloadInterruptReasonToFailState(
+               item->GetLastReason())),
+-      item->IsTransient(), item->AllowAutoOpenAfterCompletion());
++      item->IsTransient(), item->AllowAutoOpenAfterCompletion(),
++      static_cast<int>(CromikoDownloadQueue::GetWaitReason(item)),
++      connections > 0 ? item->CurrentSpeed() : 0, connections);
+ }
+ 
+ static int64_t JNI_DownloadManagerService_Init(JNIEnv* env,
+diff --git a/chrome/browser/download/android/java/res/xml/download_preferences.xml b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+--- a/chrome/browser/download/android/java/res/xml/download_preferences.xml
++++ b/chrome/browser/download/android/java/res/xml/download_preferences.xml
+@@ -6,6 +6,13 @@ found in the LICENSE file.
+ -->
+ 
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <!-- CromIKO: the settings of the CromIKO download manager. -->
++    <Preference
++        android:key="cromiko_download_manager"
++        android:title="@string/cromiko_download_settings_title"
++        android:summary="@string/cromiko_download_settings_summary"
++        android:fragment="org.chromium.chrome.browser.cromiko.CromikoDownloadSettings" />
++
+     <org.chromium.chrome.browser.download.settings.DownloadLocationPreference
+         android:key="location_change"
+         android:title="@string/downloads_location_selector_title"
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/CromikoDownloadStatus.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/CromikoDownloadStatus.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/CromikoDownloadStatus.java
+@@ -0,0 +1,118 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.download;
++
++import android.content.Context;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.components.browser_ui.util.DownloadUtils;
++import org.chromium.components.offline_items_collection.ContentId;
++
++import java.util.Map;
++import java.util.concurrent.ConcurrentHashMap;
++
++/**
++ * CromIKO: what the CromIKO download manager shows about the downloads that run or wait: their
++ * speed, their number of connections, and why they wait in the queue of
++ * chrome/browser/download/cromiko_download_queue.cc. The native side sends it with each update of
++ * a download, see {@link DownloadInfo}.
++ */
++@NullMarked
++public final class CromikoDownloadStatus {
++    // The values of CromikoDownloadQueue::WaitReason.
++    private static final int WAIT_REASON_NONE = 0;
++    private static final int WAIT_REASON_QUEUE = 1;
++    private static final int WAIT_REASON_WIFI = 2;
++
++    private static final class Status {
++        final int mWaitReason;
++        final long mBytesPerSecond;
++        final int mConnections;
++
++        Status(int waitReason, long bytesPerSecond, int connections) {
++            mWaitReason = waitReason;
++            mBytesPerSecond = bytesPerSecond;
++            mConnections = connections;
++        }
++    }
++
++    // By download GUID, only for the downloads that run or wait.
++    private static final Map<String, Status> sStatuses = new ConcurrentHashMap<>();
++
++    private CromikoDownloadStatus() {}
++
++    /**
++     * Keeps the status of a download.
++     *
++     * @param guid The GUID of the download.
++     * @param waitReason Why the download waits in the queue.
++     * @param bytesPerSecond The speed of the download, 0 if it does not run.
++     * @param connections The number of connections that the download uses, 0 if it does not run.
++     */
++    static void update(String guid, int waitReason, long bytesPerSecond, int connections) {
++        if (waitReason == WAIT_REASON_NONE && connections <= 0) {
++            sStatuses.remove(guid);
++        } else {
++            sStatuses.put(guid, new Status(waitReason, bytesPerSecond, connections));
++        }
++    }
++
++    /** Whether the download with |id| waits in the queue of the CromIKO download manager. */
++    public static boolean isWaiting(@Nullable ContentId id) {
++        Status status = get(id);
++        return status != null && status.mWaitReason != WAIT_REASON_NONE;
++    }
++
++    /**
++     * Why the download with |id| waits, for its notification, or null if it does not wait.
++     *
++     * @param forList Whether the text is part of a caption of the download list, which is
++     *     lowercase.
++     */
++    public static @Nullable String getWaitText(
++            Context context, @Nullable ContentId id, boolean forList) {
++        Status status = get(id);
++        if (status == null) return null;
++        switch (status.mWaitReason) {
++            case WAIT_REASON_QUEUE:
++                return context.getString(
++                        forList
++                                ? R.string.cromiko_download_manager_queued
++                                : R.string.cromiko_download_queued);
++            case WAIT_REASON_WIFI:
++                return context.getString(
++                        forList
++                                ? R.string.cromiko_download_manager_waiting_for_wifi
++                                : R.string.cromiko_download_waiting_for_wifi);
++            default:
++                return null;
++        }
++    }
++
++    /**
++     * The speed of the running download with |id|, like "2.4 MB/s", or null if it is not known.
++     *
++     * @param withConnections Whether to add the number of connections when there are several, like
++     *     "2.4 MB/s • 4 connections".
++     */
++    public static @Nullable String getSpeedText(
++            Context context, @Nullable ContentId id, boolean withConnections) {
++        Status status = get(id);
++        if (status == null || status.mBytesPerSecond <= 0) return null;
++        String speed =
++                context.getString(
++                        R.string.cromiko_download_speed,
++                        DownloadUtils.getStringForBytes(context, status.mBytesPerSecond));
++        if (!withConnections || status.mConnections <= 1) return speed;
++        return context.getString(
++                R.string.download_manager_in_progress_description,
++                speed,
++                context.getString(R.string.cromiko_download_connections, status.mConnections));
++    }
++
++    private static @Nullable Status get(@Nullable ContentId id) {
++        return id != null && id.id != null ? sStatuses.get(id.id) : null;
++    }
++}
+diff --git a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/DownloadInfo.java b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/DownloadInfo.java
+--- a/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/DownloadInfo.java
++++ b/chrome/browser/download/android/java/src/org/chromium/chrome/browser/download/DownloadInfo.java
+@@ -608,7 +608,13 @@ public final class DownloadInfo {
+             boolean isDangerous,
+             @FailState int failState,
+             boolean isTransient,
+-            boolean allowAutoOpenAfterCompletion) {
++            boolean allowAutoOpenAfterCompletion,
++            int cromikoWaitReason,
++            long cromikoBytesPerSecond,
++            int cromikoConnections) {
++        // CromIKO: keep what the CromIKO download manager shows about the download.
++        CromikoDownloadStatus.update(
++                downloadGuid, cromikoWaitReason, cromikoBytesPerSecond, cromikoConnections);
+         String remappedMimeType = MimeUtils.remapGenericMimeType(mimeType, url.getSpec(), fileName);
+ 
+         Progress progress =
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -32,6 +32,7 @@
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/download/cromiko_download_queue.h"
+ #include "chrome/browser/download/download_core_service.h"
+ #include "chrome/browser/download/download_core_service_factory.h"
+ #include "chrome/browser/download/download_crx_util.h"
+@@ -680,6 +681,7 @@ bool ChromeDownloadManagerDelegate::SupportsHistoryLoading() {
+ }
+ 
+ void ChromeDownloadManagerDelegate::SetDownloadManager(DownloadManager* dm) {
++  cromiko_download_queue_.reset();
+   if (download_manager_) {
+     download_manager_->RemoveObserver(this);
+   }
+@@ -699,6 +701,10 @@ void ChromeDownloadManagerDelegate::SetDownloadManager(DownloadManager* dm) {
+ 
+   if (download_manager_) {
+     download_manager_->AddObserver(this);
++#if BUILDFLAG(IS_ANDROID)
++    cromiko_download_queue_ = std::make_unique<CromikoDownloadQueue>(
++        download_manager_, profile_->GetPrefs(), profile_->IsOffTheRecord());
++#endif
+   }
+ }
+ 
+@@ -729,6 +735,7 @@ void ChromeDownloadManagerDelegate::SetDownloadMessageBridgeForTesting(
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+ void ChromeDownloadManagerDelegate::Shutdown() {
++  cromiko_download_queue_.reset();
+   download_prefs_.reset();
+   weak_ptr_factory_.InvalidateWeakPtrs();
+   if (download_manager_) {
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.h b/chrome/browser/download/chrome_download_manager_delegate.h
+--- a/chrome/browser/download/chrome_download_manager_delegate.h
++++ b/chrome/browser/download/chrome_download_manager_delegate.h
+@@ -48,6 +48,7 @@
+ #include "chrome/browser/download/download_completion_blocker.h"
+ #endif
+ 
++class CromikoDownloadQueue;
+ class DownloadPrefs;
+ class Profile;
+ 
+@@ -432,6 +433,9 @@ class ChromeDownloadManagerDelegate
+   IdCallbackVector id_callbacks_;
+   std::unique_ptr<DownloadPrefs> download_prefs_;
+ 
++  // CromIKO: the queue of the CromIKO download manager.
++  std::unique_ptr<CromikoDownloadQueue> cromiko_download_queue_;
++
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   // CRX installs that are currently in progress.
+   std::map<base::UnguessableToken, scoped_refptr<extensions::CrxInstaller>>
+diff --git a/chrome/browser/download/cromiko_download_queue.cc b/chrome/browser/download/cromiko_download_queue.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/download/cromiko_download_queue.cc
+@@ -0,0 +1,347 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++#include "chrome/browser/download/cromiko_download_queue.h"
++
++#include <algorithm>
++#include <climits>
++#include <memory>
++#include <vector>
++
++#include "base/auto_reset.h"
++#include "base/functional/bind.h"
++#include "base/values.h"
++#include "components/download/public/common/parallel_download_configs.h"
++#include "components/pref_registry/pref_registry_syncable.h"
++#include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
++
++namespace {
++
++// Profile prefs. The first three are also used in CromikoDownloadSettings.java.
++// The number of connections of a parallel download.
++constexpr char kConnectionsPref[] = "cromiko.downloads.connections";
++// The number of downloads that run at the same time, 0 for no limit.
++constexpr char kMaxActivePref[] = "cromiko.downloads.max_active";
++// Whether downloads wait while the device is on mobile data.
++constexpr char kWifiOnlyPref[] = "cromiko.downloads.wifi_only";
++// The GUIDs of the waiting downloads, so that they still wait after a restart.
++constexpr char kQueuePref[] = "cromiko.downloads.queue";
++
++constexpr int kDefaultConnections = 4;
++constexpr int kMaxConnections = 8;
++constexpr int kDefaultMaxActive = 3;
++
++// The user data of the downloads: why a download waits (WaitReasonData), its
++// status at the last update (StatusData), and whether the user paused it.
++constexpr char kWaitReasonKey[] = "cromiko_download_queue_wait_reason";
++constexpr char kStatusKey[] = "cromiko_download_queue_status";
++constexpr char kUserPausedKey[] = "cromiko_download_queue_user_paused";
++
++class WaitReasonData : public base::SupportsUserData::Data {
++ public:
++  explicit WaitReasonData(CromikoDownloadQueue::WaitReason reason)
++      : reason(reason) {}
++
++  const CromikoDownloadQueue::WaitReason reason;
++};
++
++class StatusData : public base::SupportsUserData::Data {
++ public:
++  explicit StatusData(int status) : status(status) {}
++
++  const int status;
++};
++
++bool IsRunning(const download::DownloadItem* item) {
++  return item->GetState() == download::DownloadItem::IN_PROGRESS &&
++         !item->IsPaused();
++}
++
++// Whether the queue may pause |item| and resume it later.
++bool CanWait(const download::DownloadItem* item) {
++  return !item->IsTransient() && !item->IsTemporary() &&
++         !item->IsSavePackageDownload() && !item->IsDangerous() &&
++         !item->IsInsecure() && !item->AllDataSaved() &&
++         // The user still has to choose where to save it.
++         !item->GetTargetFilePath().empty() &&
++         // Without a validator, a download that stops cannot continue.
++         (!item->GetETag().empty() || !item->GetLastModifiedTime().empty());
++}
++
++// What the queue looks at, to update only when it changes.
++int StatusOf(const download::DownloadItem* item) {
++  return item->GetState() * 8 + item->IsPaused() * 4 + CanWait(item) * 2 +
++         item->AllDataSaved();
++}
++
++bool IsOnMobileData() {
++  net::NetworkChangeNotifier::ConnectionType type =
++      net::NetworkChangeNotifier::GetConnectionType();
++  if (type == net::NetworkChangeNotifier::CONNECTION_NONE) {
++    return false;
++  }
++  return net::NetworkChangeNotifier::IsConnectionCellular(type) ||
++         net::NetworkChangeNotifier::GetConnectionCost() ==
++             net::NetworkChangeNotifier::CONNECTION_COST_METERED;
++}
++
++bool StartedBefore(const download::DownloadItem* a,
++                   const download::DownloadItem* b) {
++  return a->GetStartTime() < b->GetStartTime();
++}
++
++}  // namespace
++
++CromikoDownloadQueue::CromikoDownloadQueue(content::DownloadManager* manager,
++                                           PrefService* prefs,
++                                           bool off_the_record)
++    : manager_(manager), prefs_(prefs), off_the_record_(off_the_record) {
++  pref_change_registrar_.Init(prefs_);
++  pref_change_registrar_.Add(
++      kConnectionsPref,
++      base::BindRepeating(&CromikoDownloadQueue::OnConnectionsChanged,
++                          base::Unretained(this)));
++  pref_change_registrar_.Add(kMaxActivePref,
++                             base::BindRepeating(&CromikoDownloadQueue::Update,
++                                                 base::Unretained(this)));
++  pref_change_registrar_.Add(kWifiOnlyPref,
++                             base::BindRepeating(&CromikoDownloadQueue::Update,
++                                                 base::Unretained(this)));
++  OnConnectionsChanged();
++
++  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
++  net::NetworkChangeNotifier::AddConnectionCostObserver(this);
++
++  manager_observation_.Observe(manager_);
++  download::SimpleDownloadManager::DownloadVector items;
++  manager_->GetAllDownloads(&items);
++  for (download::DownloadItem* item : items) {
++    Observe(item);
++  }
++  if (manager_->IsManagerInitialized()) {
++    PruneSavedQueue();
++  }
++  Update();
++}
++
++CromikoDownloadQueue::~CromikoDownloadQueue() {
++  net::NetworkChangeNotifier::RemoveConnectionCostObserver(this);
++  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
++}
++
++// static
++void CromikoDownloadQueue::RegisterProfilePrefs(
++    user_prefs::PrefRegistrySyncable* registry) {
++  registry->RegisterIntegerPref(kConnectionsPref, kDefaultConnections);
++  registry->RegisterIntegerPref(kMaxActivePref, kDefaultMaxActive);
++  registry->RegisterBooleanPref(kWifiOnlyPref, false);
++  registry->RegisterListPref(kQueuePref);
++}
++
++// static
++CromikoDownloadQueue::WaitReason CromikoDownloadQueue::GetWaitReason(
++    const download::DownloadItem* item) {
++  auto* data = static_cast<WaitReasonData*>(item->GetUserData(kWaitReasonKey));
++  return data && item->IsPaused() && !item->IsDone() ? data->reason
++                                                     : WaitReason::kNone;
++}
++
++// static
++int CromikoDownloadQueue::GetConnectionCount(
++    const download::DownloadItem* item) {
++  if (!IsRunning(item) || item->AllDataSaved()) {
++    return 0;
++  }
++  if (!item->IsParallelDownload()) {
++    return 1;
++  }
++  // Each connection of a parallel download writes its own slice of the file.
++  int unfinished_slices = static_cast<int>(std::ranges::count_if(
++      item->GetReceivedSlices(),
++      [](const download::DownloadItem::ReceivedSlice& slice) {
++        return !slice.finished;
++      }));
++  return std::max(1, unfinished_slices);
++}
++
++void CromikoDownloadQueue::OnDownloadCreated(content::DownloadManager* manager,
++                                             download::DownloadItem* item) {
++  Observe(item);
++  Update();
++}
++
++void CromikoDownloadQueue::OnManagerInitialized() {
++  PruneSavedQueue();
++  Update();
++}
++
++void CromikoDownloadQueue::ManagerGoingDown(content::DownloadManager* manager) {
++  item_observations_.RemoveAllObservations();
++  manager_observation_.Reset();
++  manager_ = nullptr;
++}
++
++void CromikoDownloadQueue::OnDownloadUpdated(download::DownloadItem* item) {
++  if (updating_) {
++    return;
++  }
++  auto* data = static_cast<StatusData*>(item->GetUserData(kStatusKey));
++  if (data && data->status == StatusOf(item)) {
++    // Only the progress changed.
++    return;
++  }
++  if (item->IsDone()) {
++    item_observations_.RemoveObservation(item);
++    forced_.erase(item->GetGuid());
++    SetWaitReason(item, WaitReason::kNone);
++  }
++  Update();
++}
++
++void CromikoDownloadQueue::OnDownloadDestroyed(download::DownloadItem* item) {
++  item_observations_.RemoveObservation(item);
++  forced_.erase(item->GetGuid());
++  // The user removed the download: it no longer waits. (When the browser shuts
++  // down, the downloads are destroyed after ManagerGoingDown(), and keep their
++  // place in the queue.)
++  SetWaitReason(item, WaitReason::kNone);
++}
++
++void CromikoDownloadQueue::OnNetworkChanged(
++    net::NetworkChangeNotifier::ConnectionType type) {
++  Update();
++}
++
++void CromikoDownloadQueue::OnConnectionCostChanged(
++    net::NetworkChangeNotifier::ConnectionCost cost) {
++  Update();
++}
++
++void CromikoDownloadQueue::Observe(download::DownloadItem* item) {
++  if (item->IsDone() || item_observations_.IsObservingSource(item)) {
++    return;
++  }
++  item_observations_.AddObservation(item);
++  // A download that waited before the browser restarted still waits.
++  if (!off_the_record_ &&
++      prefs_->GetList(kQueuePref).contains(item->GetGuid())) {
++    if (item->IsPaused()) {
++      item->SetUserData(kWaitReasonKey,
++                        std::make_unique<WaitReasonData>(WaitReason::kQueue));
++    } else {
++      SetWaitReason(item, WaitReason::kNone);
++    }
++  }
++}
++
++void CromikoDownloadQueue::OnConnectionsChanged() {
++  download::SetParallelRequestCountOverride(
++      std::clamp(prefs_->GetInteger(kConnectionsPref), 1, kMaxConnections));
++}
++
++void CromikoDownloadQueue::Update() {
++  if (!manager_ || updating_) {
++    return;
++  }
++  base::AutoReset<bool> updating(&updating_, true);
++
++  download::SimpleDownloadManager::DownloadVector items;
++  manager_->GetAllDownloads(&items);
++  std::vector<download::DownloadItem*> running;
++  std::vector<download::DownloadItem*> waiting;
++  for (download::DownloadItem* item : items) {
++    if (!item_observations_.IsObservingSource(item)) {
++      continue;
++    }
++    item->SetUserData(kStatusKey, std::make_unique<StatusData>(StatusOf(item)));
++    const std::string& guid = item->GetGuid();
++    bool marked = item->GetUserData(kWaitReasonKey) != nullptr;
++    if (marked && item->IsPaused() && !item->IsDone()) {
++      waiting.push_back(item);
++      continue;
++    }
++    if (marked) {
++      SetWaitReason(item, WaitReason::kNone);
++    }
++    if (IsRunning(item)) {
++      // A download resumed by the user runs, whatever the limit and the
++      // network are.
++      if (marked || item->GetUserData(kUserPausedKey)) {
++        forced_.insert(guid);
++      }
++      item->RemoveUserData(kUserPausedKey);
++      running.push_back(item);
++    } else if (item->IsPaused()) {
++      item->SetUserData(kUserPausedKey,
++                        std::make_unique<base::SupportsUserData::Data>());
++      forced_.erase(guid);
++    }
++  }
++  std::ranges::sort(running, StartedBefore);
++  std::ranges::sort(waiting, StartedBefore);
++
++  const bool wifi_wait = prefs_->GetBoolean(kWifiOnlyPref) && IsOnMobileData();
++  const int max_active = prefs_->GetInteger(kMaxActivePref);
++  const int limit = max_active > 0 ? max_active : INT_MAX;
++
++  // The oldest downloads run, the newest ones wait.
++  int active = 0;
++  for (download::DownloadItem* item : running) {
++    if (forced_.contains(item->GetGuid()) || item->AllDataSaved()) {
++      continue;
++    }
++    if (CanWait(item) && (wifi_wait || active >= limit)) {
++      // Mark it first, so that the observers of the pause see why it waits.
++      SetWaitReason(item, wifi_wait ? WaitReason::kWifi : WaitReason::kQueue);
++      item->Pause();
++      continue;
++    }
++    ++active;
++  }
++  for (download::DownloadItem* item : waiting) {
++    if (wifi_wait) {
++      SetWaitReason(item, WaitReason::kWifi);
++    } else if (active >= limit) {
++      SetWaitReason(item, WaitReason::kQueue);
++    } else {
++      SetWaitReason(item, WaitReason::kNone);
++      if (item->CanResume()) {
++        item->Resume(/*user_resume=*/true);
++        ++active;
++      }
++    }
++  }
++}
++
++void CromikoDownloadQueue::SetWaitReason(download::DownloadItem* item,
++                                         WaitReason reason) {
++  if (reason == WaitReason::kNone) {
++    item->RemoveUserData(kWaitReasonKey);
++  } else {
++    item->SetUserData(kWaitReasonKey,
++                      std::make_unique<WaitReasonData>(reason));
++  }
++  if (off_the_record_) {
++    return;
++  }
++  const std::string& guid = item->GetGuid();
++  bool saved = prefs_->GetList(kQueuePref).contains(guid);
++  if (reason != WaitReason::kNone && !saved) {
++    ScopedListPrefUpdate(prefs_, kQueuePref)->Append(guid);
++  } else if (reason == WaitReason::kNone && saved) {
++    ScopedListPrefUpdate(prefs_, kQueuePref)->EraseValue(base::Value(guid));
++  }
++}
++
++void CromikoDownloadQueue::PruneSavedQueue() {
++  if (off_the_record_ || !manager_) {
++    return;
++  }
++  auto is_gone = [this](const base::Value& guid) {
++    return !guid.is_string() || !manager_->GetDownloadByGuid(guid.GetString());
++  };
++  if (std::ranges::any_of(prefs_->GetList(kQueuePref), is_gone)) {
++    ScopedListPrefUpdate(prefs_, kQueuePref)->EraseIf(is_gone);
++  }
++}
+diff --git a/chrome/browser/download/cromiko_download_queue.h b/chrome/browser/download/cromiko_download_queue.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/download/cromiko_download_queue.h
+@@ -0,0 +1,105 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++#ifndef CHROME_BROWSER_DOWNLOAD_CROMIKO_DOWNLOAD_QUEUE_H_
++#define CHROME_BROWSER_DOWNLOAD_CROMIKO_DOWNLOAD_QUEUE_H_
++
++#include <set>
++#include <string>
++
++#include "base/memory/raw_ptr.h"
++#include "base/scoped_multi_source_observation.h"
++#include "base/scoped_observation.h"
++#include "components/download/public/common/download_item.h"
++#include "components/prefs/pref_change_registrar.h"
++#include "content/public/browser/download_manager.h"
++#include "net/base/network_change_notifier.h"
++
++class PrefService;
++
++namespace user_prefs {
++class PrefRegistrySyncable;
++}
++
++// CromIKO: the queue of the CromIKO download manager. It lets only a number of
++// downloads run at the same time and pauses the others until it is their turn,
++// keeps downloads waiting while the user is on mobile data if they turned on
++// "Wi-Fi only", and sets the number of connections of parallel downloads. A
++// waiting download that the user resumes runs right away. The settings are
++// profile prefs, changed in CromikoDownloadSettings.java.
++class CromikoDownloadQueue
++    : public content::DownloadManager::Observer,
++      public download::DownloadItem::Observer,
++      public net::NetworkChangeNotifier::NetworkChangeObserver,
++      public net::NetworkChangeNotifier::ConnectionCostObserver {
++ public:
++  // Why a download waits. Java uses the same values, see
++  // CromikoDownloadStatus.java.
++  enum class WaitReason {
++    kNone = 0,
++    kQueue = 1,
++    kWifi = 2,
++  };
++
++  CromikoDownloadQueue(content::DownloadManager* manager,
++                       PrefService* prefs,
++                       bool off_the_record);
++  CromikoDownloadQueue(const CromikoDownloadQueue&) = delete;
++  CromikoDownloadQueue& operator=(const CromikoDownloadQueue&) = delete;
++  ~CromikoDownloadQueue() override;
++
++  static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
++
++  // Why |item| waits in the queue.
++  static WaitReason GetWaitReason(const download::DownloadItem* item);
++
++  // The number of connections that |item| uses now.
++  static int GetConnectionCount(const download::DownloadItem* item);
++
++  // content::DownloadManager::Observer:
++  void OnDownloadCreated(content::DownloadManager* manager,
++                         download::DownloadItem* item) override;
++  void OnManagerInitialized() override;
++  void ManagerGoingDown(content::DownloadManager* manager) override;
++
++  // download::DownloadItem::Observer:
++  void OnDownloadUpdated(download::DownloadItem* item) override;
++  void OnDownloadDestroyed(download::DownloadItem* item) override;
++
++  // net::NetworkChangeNotifier::NetworkChangeObserver:
++  void OnNetworkChanged(
++      net::NetworkChangeNotifier::ConnectionType type) override;
++
++  // net::NetworkChangeNotifier::ConnectionCostObserver:
++  void OnConnectionCostChanged(
++      net::NetworkChangeNotifier::ConnectionCost cost) override;
++
++ private:
++  void Observe(download::DownloadItem* item);
++  void OnConnectionsChanged();
++  void Update();
++  void SetWaitReason(download::DownloadItem* item, WaitReason reason);
++  // Removes the downloads that no longer exist from the saved queue.
++  void PruneSavedQueue();
++
++  raw_ptr<content::DownloadManager> manager_;
++  raw_ptr<PrefService> prefs_;
++  // Off the record downloads do not survive a restart: their queue is not
++  // saved.
++  const bool off_the_record_;
++  PrefChangeRegistrar pref_change_registrar_;
++  // The downloads the user resumed while they waited: they run whatever the
++  // limit and the network are.
++  std::set<std::string> forced_;
++  // Guards against the updates that Update() causes itself.
++  bool updating_ = false;
++
++  base::ScopedObservation<content::DownloadManager,
++                          content::DownloadManager::Observer>
++      manager_observation_{this};
++  base::ScopedMultiSourceObservation<download::DownloadItem,
++                                     download::DownloadItem::Observer>
++      item_observations_{this};
++};
++
++#endif  // CHROME_BROWSER_DOWNLOAD_CROMIKO_DOWNLOAD_QUEUE_H_
+diff --git a/chrome/browser/download/download_prefs.cc b/chrome/browser/download/download_prefs.cc
+--- a/chrome/browser/download/download_prefs.cc
++++ b/chrome/browser/download/download_prefs.cc
+@@ -23,6 +23,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/download/chrome_download_manager_delegate.h"
++#include "chrome/browser/download/cromiko_download_queue.h"
+ #include "chrome/browser/download/download_core_service_factory.h"
+ #include "chrome/browser/download/download_core_service_impl.h"
+ #include "chrome/browser/download/download_dir_util.h"
+@@ -349,6 +350,7 @@ DownloadPrefs::~DownloadPrefs() = default;
+ // static
+ void DownloadPrefs::RegisterProfilePrefs(
+     user_prefs::PrefRegistrySyncable* registry) {
++  CromikoDownloadQueue::RegisterProfilePrefs(registry);
+   registry->RegisterBooleanPref(
+       prefs::kPromptForDownload,
+       true,
+diff --git a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/UiUtils.java b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/UiUtils.java
+--- a/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/UiUtils.java
++++ b/chrome/browser/download/internal/android/java/src/org/chromium/chrome/browser/download/home/list/UiUtils.java
+@@ -20,6 +20,7 @@ import org.chromium.base.DeviceInfo;
+ import org.chromium.base.MathUtils;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.download.CromikoDownloadStatus;
+ import org.chromium.chrome.browser.download.StringUtils;
+ import org.chromium.chrome.browser.download.home.filter.Filters;
+ import org.chromium.chrome.browser.download.home.list.view.CircularProgressView;
+@@ -384,6 +385,19 @@ public final class UiUtils {
+                 if (item.timeRemainingMs > 0) {
+                     statusString = StringUtils.timeLeftForUi(context, item.timeRemainingMs);
+                 }
++                // CromIKO: show the speed and the connections of the download.
++                String speedString =
++                        CromikoDownloadStatus.getSpeedText(
++                                context, item.id, /* withConnections= */ true);
++                if (speedString != null) {
++                    statusString =
++                            statusString == null
++                                    ? speedString
++                                    : context.getString(
++                                            R.string.download_manager_in_progress_description,
++                                            speedString,
++                                            statusString);
++                }
+                 break;
+             case OfflineItemState.FAILED: // Intentional fallthrough.
+             case OfflineItemState.CANCELLED: // Intentional fallthrough.
+@@ -393,7 +407,12 @@ public final class UiUtils {
+                 statusString = context.getString(R.string.download_manager_failed);
+                 break;
+             case OfflineItemState.PAUSED:
+-                statusString = context.getString(R.string.download_manager_paused);
++                // CromIKO: say why a download waits in the queue of the CromIKO download manager.
++                statusString =
++                        CromikoDownloadStatus.getWaitText(context, item.id, /* forList= */ true);
++                if (statusString == null) {
++                    statusString = context.getString(R.string.download_manager_paused);
++                }
+                 break;
+             case OfflineItemState.COMPLETE: // Intentional fallthrough.
+             default:
+@@ -431,7 +450,12 @@ public final class UiUtils {
+             case OfflineItemState.INTERRUPTED:
+                 return context.getString(R.string.download_manager_failed);
+             case OfflineItemState.PAUSED:
+-                return context.getString(R.string.download_manager_paused);
++                // CromIKO: say why a download waits in the queue of the CromIKO download manager.
++                String waitString =
++                        CromikoDownloadStatus.getWaitText(context, item.id, /* forList= */ true);
++                return waitString != null
++                        ? waitString
++                        : context.getString(R.string.download_manager_paused);
+             case OfflineItemState.COMPLETE: // Intentional fallthrough.
+             default:
+                 assert false;
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Download-Manager.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Download-Manager.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Download-Manager.grdp
+@@ -0,0 +1,57 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_DOWNLOAD_SETTINGS_TITLE" desc="Title of the settings of the CromIKO download manager, and of their entry in the download settings.">
++        CromIKO download manager
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_SETTINGS_SUMMARY" desc="Summary of the entry of the CromIKO download manager in the download settings.">
++        Connections, queue, Wi-Fi only and folders
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_SETTINGS_HEADER" desc="Shown at the top of the settings of the CromIKO download manager, next to the mascot.">
++        Big files download faster over several connections at once. Downloads over the limit wait in a queue: resume one to start it right away.
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_CONNECTIONS_TITLE" desc="Title of the setting for the number of connections that CromIKO opens to download one file.">
++        Connections per file
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_ONE_CONNECTION" desc="Choice of the setting for the number of connections per file.">
++        1 connection
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_CONNECTIONS" desc="Choice of the setting for the number of connections per file, and part of the status of a running download in the download list.">
++        <ph name="COUNT">%1$d<ex>4</ex></ph> connections
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_MAX_ACTIVE_TITLE" desc="Title of the setting for the number of downloads that run at the same time; the others wait in a queue.">
++        Downloads at the same time
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_NO_LIMIT" desc="Choice of the setting for the number of downloads at the same time: all downloads run.">
++        No limit
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_WIFI_ONLY_TITLE" desc="Title of the setting that makes downloads wait while the phone uses mobile data.">
++        Wi-Fi only
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_WIFI_ONLY_SUMMARY" desc="Summary of the Wi-Fi only setting of the CromIKO download manager.">
++        Downloads wait while you use mobile data
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_SORT_TITLE" desc="Title of the setting that saves new downloads in folders by type.">
++        Sort into folders
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_SORT_SUMMARY" desc="Summary of the setting that saves new downloads in folders by type.">
++        Save new files in Download/CromIKO: Videos, Music, Pictures, Documents, Apps and Archives
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_SPEED" desc="The speed of a running download, in its notification and in the download list.">
++        <ph name="SIZE">%1$s<ex>2.4 MB</ex></ph>/s
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_QUEUED" desc="Notification text of a download that waits for other downloads to finish.">
++        In queue
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_WAITING_FOR_WIFI" desc="Notification text of a download that waits for Wi-Fi, because the user chose to download over Wi-Fi only.">
++        Waiting for Wi-Fi…
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_MANAGER_QUEUED" desc="Shown in the download list, after the size, for a download that waits for other downloads to finish. Lowercase like 'paused'.">
++        in queue
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_MANAGER_WAITING_FOR_WIFI" desc="Shown in the download list, after the size, for a download that waits for Wi-Fi. Lowercase like 'paused'.">
++        waiting for Wi-Fi
++    </message>
++    <message name="IDS_CROMIKO_DOWNLOAD_START_NOW" desc="Button of the notification of a waiting download, to start it right away.">
++        Start now
++    </message>
++</grit-part>
+diff --git a/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java b/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
+--- a/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
++++ b/components/download/internal/common/android/java/src/org/chromium/components/download/DownloadCollectionBridge.java
+@@ -11,6 +11,7 @@ import android.content.ContentUris;
+ import android.content.ContentValues;
+ import android.database.Cursor;
+ import android.net.Uri;
++import android.os.Environment;
+ import android.os.FileUtils;
+ import android.os.ParcelFileDescriptor;
+ import android.provider.BaseColumns;
+@@ -50,6 +51,25 @@ import java.util.Locale;
+ public class DownloadCollectionBridge {
+     private static final String TAG = "DownloadCollection";
+ 
++    // CromIKO: the app shared preference of "Sort into folders", see getCromikoFolder().
++    private static final String CROMIKO_SORT_DOWNLOADS_PREF = "cromiko_sort_downloads";
++    private static final List<String> CROMIKO_ARCHIVE_TYPES =
++            Arrays.asList(
++                    "application/zip",
++                    "application/x-zip-compressed",
++                    "application/x-7z-compressed",
++                    "application/vnd.rar",
++                    "application/x-rar",
++                    "application/x-rar-compressed",
++                    "application/x-tar",
++                    "application/gzip",
++                    "application/x-gzip",
++                    "application/x-bzip2",
++                    "application/x-xz",
++                    "application/zstd");
++    private static final List<String> CROMIKO_ARCHIVE_EXTENSIONS =
++            Arrays.asList("zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "zst");
++
+     // File name pattern to be used when media store has too many duplicates. This matches
+     // that of download_path_reservation_tracker.cc.
+     private static final String FILE_NAME_PATTERN = "yyyy-MM-dd'T'HHmmss.SSS";
+@@ -401,9 +421,63 @@ public class DownloadCollectionBridge {
+         Uri referrerUri = TextUtils.isEmpty(referrer) ? null : Uri.parse(referrer);
+         pendingParams.setDownloadUri(originalUri);
+         pendingParams.setRefererUri(referrerUri);
++        String folder = getCromikoFolder(newMimeType, fileName);
++        if (folder != null) {
++            pendingParams.setRelativePath(Environment.DIRECTORY_DOWNLOADS + "/" + folder);
++        }
+         return pendingParams;
+     }
+ 
++    /**
++     * CromIKO: the folder for a new download if the user turned on "Sort into folders" in the
++     * CromIKO download settings (CromikoDownloadSettings.java), or null.
++     *
++     * @param mimeType Mime type of the file.
++     * @param fileName Name of the file.
++     * @return The folder, relative to the download folder.
++     */
++    private static @Nullable String getCromikoFolder(String mimeType, String fileName) {
++        if (!ContextUtils.getAppSharedPreferences()
++                .getBoolean(CROMIKO_SORT_DOWNLOADS_PREF, false)) {
++            return null;
++        }
++        String type = mimeType.toLowerCase(Locale.ROOT);
++        String name = fileName.toLowerCase(Locale.ROOT);
++        String folder;
++        if (type.startsWith("video/")) {
++            folder = "Videos";
++        } else if (type.startsWith("audio/")) {
++            folder = "Music";
++        } else if (type.startsWith("image/")) {
++            folder = "Pictures";
++        } else if (type.equals("application/vnd.android.package-archive")
++                || name.endsWith(".apk")
++                || name.endsWith(".apks")
++                || name.endsWith(".xapk")) {
++            folder = "Apps";
++        } else if (CROMIKO_ARCHIVE_TYPES.contains(type)
++                || CROMIKO_ARCHIVE_EXTENSIONS.contains(getExtension(name))) {
++            folder = "Archives";
++        } else if (type.startsWith("text/")
++                || type.equals("application/pdf")
++                || type.equals("application/rtf")
++                || type.equals("application/epub+zip")
++                || type.equals("application/msword")
++                || type.startsWith("application/vnd.ms-")
++                || type.startsWith("application/vnd.openxmlformats-officedocument.")
++                || type.startsWith("application/vnd.oasis.opendocument.")) {
++            folder = "Documents";
++        } else {
++            return null;
++        }
++        return "CromIKO/" + folder;
++    }
++
++    private static String getExtension(String fileName) {
++        int index = fileName.lastIndexOf('.');
++        return index == -1 ? "" : fileName.substring(index + 1);
++    }
++
+     /**
+      *  Gets the base name, without extension, from a file name.
+      *  TODO(qinmin): move this into a common utility class.
+diff --git a/components/download/internal/common/parallel_download_utils.cc b/components/download/internal/common/parallel_download_utils.cc
+--- a/components/download/internal/common/parallel_download_utils.cc
++++ b/components/download/internal/common/parallel_download_utils.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "components/download/internal/common/parallel_download_utils.h"
+ 
++#include <atomic>
++
+ #include "base/metrics/field_trial_params.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/time/time.h"
+@@ -26,6 +28,9 @@ const int kParallelRequestCount = 3;
+ // creation.
+ const int kDefaultRemainingTimeInSeconds = 2;
+ 
++// CromIKO: the number of parallel requests chosen by the user, 0 if not set.
++std::atomic<int> g_parallel_request_count_override{0};
++
+ // TODO(qinmin): replace this with a comparator operator in
+ // DownloadItem::ReceivedSlice.
+ bool compareReceivedSlices(const DownloadItem::ReceivedSlice& lhs,
+@@ -166,7 +171,15 @@ int64_t GetMinSliceSizeConfig() {
+              : kMinSliceSizeParallelDownload;
+ }
+ 
++void SetParallelRequestCountOverride(int count) {
++  g_parallel_request_count_override = count;
++}
++
+ int GetParallelRequestCountConfig() {
++  int count_override = g_parallel_request_count_override;
++  if (count_override > 0) {
++    return count_override;
++  }
+   std::string finch_value = base::GetFieldTrialParamValueByFeature(
+       features::kParallelDownloading, kParallelRequestCountFinchKey);
+   int result;
+diff --git a/components/download/public/common/parallel_download_configs.h b/components/download/public/common/parallel_download_configs.h
+--- a/components/download/public/common/parallel_download_configs.h
++++ b/components/download/public/common/parallel_download_configs.h
+@@ -5,6 +5,8 @@
+ #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_PARALLEL_DOWNLOAD_CONFIGS_H_
+ #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_PARALLEL_DOWNLOAD_CONFIGS_H_
+ 
++#include "components/download/public/common/download_export.h"
++
+ namespace download {
+ 
+ // Finch parameter key value to enable parallel download. Used in enabled
+@@ -29,6 +31,11 @@ constexpr char kParallelRequestDelayFinchKey[] = "parallel_request_delay";
+ constexpr char kParallelRequestRemainingTimeFinchKey[] =
+     "parallel_request_remaining_time";
+ 
++// CromIKO: sets the number of parallel requests of new parallel downloads,
++// including the original request, chosen by the user in the CromIKO download
++// settings. 0 uses the default.
++COMPONENTS_DOWNLOAD_EXPORT void SetParallelRequestCountOverride(int count);
++
+ }  //  namespace download
+ 
+ #endif  // COMPONENTS_DOWNLOAD_PUBLIC_COMMON_PARALLEL_DOWNLOAD_CONFIGS_H_
+diff --git a/third_party/android_provider/java/src/org/chromium/third_party/android/provider/MediaStoreUtils.java b/third_party/android_provider/java/src/org/chromium/third_party/android/provider/MediaStoreUtils.java
+--- a/third_party/android_provider/java/src/org/chromium/third_party/android/provider/MediaStoreUtils.java
++++ b/third_party/android_provider/java/src/org/chromium/third_party/android/provider/MediaStoreUtils.java
+@@ -139,6 +139,17 @@ public class MediaStoreUtils {
+         public void setExpirationTime(long time) {
+             mInsertValues.put("date_expires", time);
+         }
++
++        /**
++         * CromIKO: optionally sets the folder of the item, relative to the root of the storage,
++         * like "Download/CromIKO/Videos".
++         *
++         * @see MediaColumns#RELATIVE_PATH
++         */
++        @RequiresApi(Build.VERSION_CODES.Q)
++        public void setRelativePath(String relativePath) {
++            mInsertValues.put(MediaColumns.RELATIVE_PATH, relativePath);
++        }
+     }
+ 
+     /**
+--
