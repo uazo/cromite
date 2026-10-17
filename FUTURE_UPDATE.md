@@ -8,7 +8,6 @@ its own `CromIKO-*.patch`, like the features so far.
 | Video and audio player            | 10     | large  |
 | Download manager with threads     | 9      | medium |
 | Manga mode: continue reading      | 6      | small  |
-| Cookie banner blocker             | 5      | small  |
 | Incognito lock                    | 5      | small  |
 | Dark mode per site                | 4      | small  |
 | Built-in DNS                      | 2      | small  |
@@ -53,11 +52,6 @@ Integrated video assistant (PiP and background playback).
 - Remember the last chapter and scroll position for each series.
 - A "Continue reading" row on the new tab page, with the series cover.
 - Optionally load the next chapter while you read the current one.
-
-## Cookie banner blocker (weight 5)
-
-- Hide cookie banners and reject them where possible, using the public
-  cookie banner filter lists in the ad blocker.
 
 ## Incognito lock (weight 5)
 
