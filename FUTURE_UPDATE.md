@@ -3,17 +3,19 @@
 Planned features, sorted by weight (10 = most important). Each one becomes
 its own `CromIKO-*.patch`, like the features so far.
 
-| Feature                           | Weight | Effort |
-|-----------------------------------|:------:|:------:|
-| Video and audio player            | 10     | large  |
-| Download manager with threads     | 9      | medium |
-| Manga mode: continue reading      | 6      | small  |
-| Incognito lock                    | 5      | small  |
-| Dark mode per site                | 4      | small  |
-| Built-in DNS                      | 2      | small  |
-| Customizable home screen          | 1      | large  |
+| Feature                           | Weight | Effort | Status  |
+|-----------------------------------|:------:|:------:|:-------:|
+| Video and audio player            | 10     | large  | done    |
+| Download manager with threads     | 9      | medium |         |
+| Manga mode: continue reading      | 6      | small  |         |
+| Incognito lock                    | 5      | small  |         |
+| Dark mode per site                | 4      | small  |         |
+| Built-in DNS                      | 2      | small  |         |
+| Customizable home screen          | 1      | large  |         |
 
-## Video and audio player (weight 10)
+## Video and audio player (weight 10) - done
+
+Done in `CromIKO-Video-Player.patch`.
 
 Integrated video assistant (PiP and background playback).
 

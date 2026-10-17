@@ -1,0 +1,2408 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 12:00:00 +0000
+Subject: CromIKO Video Player
+
+Add the CromIKO player. Videos on web pages, also in frames of other
+sites (where most streaming sites put their player), get a small round
+button with the CromIKO mascot; playing audio gets one in the corner.
+A tap opens the video full screen in the CromIKO player, without the
+site's controls, overlays and ads: the player keeps the site's media
+element, so streams only the site can play keep playing, and hides
+everything else. While it is open, taps go to the player only, so the
+site cannot open pop-ups on them. "CromIKO player" in the app menu
+opens the main video of the page.
+
+Tap controls:
+- tap: show or hide the controls (the first tap goes full screen)
+- double tap left or right: 10 s back or forward; more taps add more
+- double tap in the middle: play or pause
+- hold: 2x speed while holding
+- swipe sideways: seek; swipe up or down: brightness (left) or
+  volume (right)
+- pinch: zoom to fill the screen or fit the video
+
+Buttons: play/pause, 10 s back/forward, time bar with buffered part,
+playback speed (0.25x to 3x), subtitles, picture in picture (where the
+platform has it), lock the controls, fit/zoom/stretch, rotate, close.
+More options: loop, background play (undoes the pause sites make when
+the app goes to the background) and a sleep timer. The player offers
+to continue where you stopped, and audio gets a page with the mascot.
+A long press on the small button hides the buttons on that page.
+
+The page script (res/raw/cromiko_video.js) runs in every frame through
+the CromikoPageScripts bridge, which gets executeInAllFrames.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/chrome_java_resources.gni      |    1 +
+ chrome/android/chrome_java_sources.gni        |    1 +
+ chrome/android/java/res/raw/cromiko_video.js  | 1745 +++++++++++++++++
+ chrome/android/java/res/values/ids.xml        |    1 +
+ .../chrome/browser/ChromeTabbedActivity.java  |   10 +
+ .../browser/cromiko/CromikoVideoPlayer.java   |  224 +++
+ .../TabbedAppMenuPropertiesDelegate.java      |   17 +
+ .../cromiko/android/cromiko_page_scripts.cc   |   42 +
+ .../browser/cromiko/CromikoPageScripts.java   |   14 +
+ .../CromIKO-Video-Player.grdp                 |  120 ++
+ components/browser_ui/theme/android/BUILD.gn  |    1 +
+ .../res/drawable/cromiko_ic_player_24dp.xml   |   16 +
+ 12 files changed, 2192 insertions(+)
+ create mode 100644 chrome/android/java/res/raw/cromiko_video.js
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Video-Player.grdp
+ create mode 100644 components/browser_ui/theme/android/java/res/drawable/cromiko_ic_player_24dp.xml
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -650,6 +650,7 @@ chrome_java_resources = [
+   "java/res/menu/history_manager_menu.xml",
+   "java/res/raw/back_gesture_arrow_animation.json",
+   "java/res/raw/cromiko_manga.js",
++  "java/res/raw/cromiko_video.js",
+   "java/res/raw/finds_opt_in_animation.json",
+   "java/res/raw/tips_notifications_quick_delete_logo_anim.json",
+   "java/res/transition/fade.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -481,6 +481,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabColorProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabIntentDataProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java",
+diff --git a/chrome/android/java/res/raw/cromiko_video.js b/chrome/android/java/res/raw/cromiko_video.js
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/raw/cromiko_video.js
+@@ -0,0 +1,1745 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++//
++// CromIKO video player, run by CromikoVideoPlayer.java in an isolated world of
++// every frame of the page. The Java side replaces the arguments placeholder at
++// the end with (command, options, texts) and reads the returned JSON.
++//
++// Commands:
++//   "scan"  Put a small CromIKO button on the videos of the frame (and on audio
++//           that is playing). A tap on it opens the player.
++//   "probe" Return the main video or audio of the frame as a score (the one
++//           playing, else the largest on the screen) and the frame's token.
++//   "open"  Open the player on the main video or audio of the frame, if there
++//           is one. With options.token, only in the frame with that token: the
++//           browser opens the best one of the frames of the page.
++//   "close" Close the player.
++//   "state" Return what is running.
++//
++// The player keeps the media element of the site, so streams that only the
++// site can play keep playing, and lays it out full screen while it hides
++// everything else of the page: the site's controls, overlays and ads. Taps go
++// to the player only, never to the site.
++
++(function(command, options, texts) {
++  'use strict';
++  if (!window.__cromikoVideo) {
++    window.__cromikoVideo = createVideo();
++  }
++  return JSON.stringify(window.__cromikoVideo.run(command, options, texts));
++
++  function createVideo() {
++    const ACCENT = '#5C7CFC';
++    const SEEK_STEP = 10;
++    const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
++    const SLEEP_MINUTES = [0, 15, 30, 60];
++    const DOUBLE_TAP_MS = 280;
++    const HOLD_MS = 450;
++    const CONTROLS_MS = 3200;
++    const NOT_RENDERED =
++        new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE']);
++    const POSITIONS_KEY = 'cromiko-player-positions';
++    const SETTINGS_KEY = 'cromiko-player-settings';
++
++    // The CromIKO mascot, from tools/cromiko/cromiko-logo.svg.
++    const MASCOT = {
++      viewBox: '458 588 566 469',
++      body: 'M803.93 593.11 C838.39 589.85 851.01 624.09 864.97 649.82 C884.68 685.41 902.32 722.11 917.8 759.73 C925.28 777.9 931.31 796.56 938.78 814.54 C936.01 817.99 931.67 822.69 928.52 825.7 C839.78 910.44 685.13 973.41 563.18 972.11 C534.86 971.05 495.27 965.19 475.34 943.51 C466.31 933.8 461.67 920.82 462.5 907.59 C464.55 870.78 500.89 834.18 527.1 811.09 C525.11 774.06 520.67 696.72 539.67 664.53 C564.4 622.62 616.8 661.34 645.13 679.34 C677.99 666.89 709.82 656.58 744.25 649.57 C762.72 629.72 777.86 599.34 803.93 593.11 Z M797.41 727.23 C848.2 720.94 860.38 755.72 871.47 795.57 C878.96 822.49 871.64 848.19 847.4 863.79 C833.33 872.84 807.12 879.43 791.41 884.51 C762.85 893.98 734.15 903.01 705.3 911.59 C669.3 919.28 641.37 902.72 633.44 866.84 C627.32 839.19 626.05 816.23 641.11 790.84 C655.96 765.79 679.85 762.23 705.24 753.6 C735.79 743.44 766.03 734.47 797.41 727.23 Z M814.02 766.18 C830.19 766.36 833.9 783.97 838.69 796.38 C844.23 810.73 847.51 825.01 830.19 831.19 C818.34 830.43 813.9 824.25 810.13 813.43 C804.41 796.99 791.12 774.86 814.02 766.18 Z M721.03 796.19 C729.88 795.12 738.03 798.5 741.22 807.04 C747.4 823.57 763.84 848.59 742.5 859.49 C721.79 862.61 721.57 841.99 715.01 827.2 C709.12 813.9 707.11 804.88 721.03 796.19 Z M528.61 833.78 C529.04 834.23 538.96 885.73 541.55 893.73 C547.09 910.85 552.48 923.54 560.45 940.09 C550 939.07 542.66 937.76 532.54 935.42 C473.97 915.88 495.05 867.32 528.61 833.78 Z M740.42 672.1 C742.82 671.69 746.1 671.21 748.47 672.04 C750.81 672.88 752.7 674.67 753.68 676.96 C754.66 679.26 754.61 681.62 753.48 683.87 C748.49 693.82 699.81 703.99 687.43 707.86 C684.67 708.42 681.73 708.54 679.11 707.39 C676.57 706.27 674.68 704.21 673.86 701.56 C673.26 699.65 673.46 697.65 674.47 695.89 C680.09 686.09 727.36 675.82 740.42 672.1 Z',
++      ring: 'M928.66 702.48 C929.31 702.53 929.97 702.58 930.62 702.65 C958.31 705.41 988.37 713.72 1006.68 735.9 C1046.14 790.42 989.39 843.43 953.83 879.86 C956.98 892.57 961.98 909.37 961.5 922.2 C960.32 953.38 939.16 964.4 911.52 963.76 C909.23 972.07 906.62 980.28 903.7 988.39 C892.25 1019.81 866.77 1063.68 823.8 1050.55 C809.47 1046.17 802.55 1025.85 797.09 1012.93 C736.01 1060.33 611.55 1072.24 561.65 1004.06 C572.23 1005.29 591.03 1004.35 601.99 1003.17 C695.26 993.1 796.68 951.13 873.87 898.75 C914.18 869.7 969.81 827.4 982.11 776.91 C990.37 743.06 957.07 726.34 928.82 721.65 L928.66 702.48 Z',
++      highlight: 'M1006.68 735.9 C1046.14 790.42 989.39 843.43 953.83 879.86 L938.4 892.46 C934.96 888.54 931.41 884.15 928.04 880.12 C966.17 847.37 1027.42 791.53 1006.68 735.9 Z',
++      star: 'M928 605.54 C929.99 607.52 936.6 627.46 939.22 631.81 C946.04 643.17 964.61 647.94 976.55 651.07 C943.29 660.87 938.05 665.19 928.72 698.31 C915.91 663.98 917.43 661.01 879.8 651.48 C912.83 641.16 918.04 638.91 928 605.54 Z',
++    };
++
++    // Material icons.
++    const ICONS = {
++      play: 'M8 5v14l11-7z',
++      pause: 'M6 19h4V5H6v14zm8-14v14h4V5h-4z',
++      replay:
++          'M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z',
++      close:
++          'M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
++      pip:
++          'M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z',
++      lock:
++          'M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z',
++      unlock:
++          'M12 17c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm6-9h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6h1.9c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm0 12H6V10h12v10z',
++      fit:
++          'M19 12h-2v3h-3v2h5v-5zM7 9h3V7H5v5h2V9zm14-6H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.99h18v14.02z',
++      rotate:
++          'M16.48 2.52c3.27 1.55 5.61 4.72 5.97 8.48h1.5C23.44 4.84 18.29 0 12 0l-.66.03 3.81 3.81 1.33-1.32zm-6.25-.77c-.59-.59-1.54-.59-2.12 0L1.75 8.11c-.59.59-.59 1.54 0 2.12l12.02 12.02c.59.59 1.54.59 2.12 0l6.36-6.36c.59-.59.59-1.54 0-2.12L10.23 1.75zm4.6 19.44L2.81 9.17l6.36-6.36 12.02 12.02-6.36 6.36zm-7.31.29C4.25 19.94 1.91 16.76 1.55 13H.05C.56 19.16 5.71 24 12 24l.66-.03-3.81-3.81-1.33 1.32z',
++      cc:
++          'M19 4H5c-1.11 0-2 .9-2 2v12c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-8 7H9.5v-.5h-2v3h2V13H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2V13H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z',
++      more:
++          'M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
++      volume:
++          'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z',
++      brightness:
++          'M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18V6c3.31 0 6 2.69 6 6s-2.69 6-6 6z',
++      fast: 'M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z',
++    };
++
++    let t = {};
++    let scanning = false;
++    let buttons = null;
++    let player = null;
++    let hiddenOnPage = false;
++    let routerInstalled = false;
++    const token = Math.random().toString(36).slice(2);
++    // After the player closes on a tap, the click that follows the tap must
++    // not reach the page below.
++    let swallowUntil = 0;
++
++    function run(cmd, opts, txt) {
++      if (txt) {
++        t = txt;
++      }
++      switch (cmd) {
++        case 'scan':
++          startScanning();
++          return {state: 'scanning'};
++        case 'probe': {
++          const media = bestMedia();
++          return {token, score: media ? mediaScore(media) : 0};
++        }
++        case 'open': {
++          if (opts && opts.token && opts.token !== token) {
++            return {opened: false};
++          }
++          const media = bestMedia();
++          if (!media) {
++            return {opened: false};
++          }
++          openPlayer(media);
++          return {opened: true};
++        }
++        case 'close':
++          closePlayer();
++          return {state: 'closed'};
++        case 'state':
++          return {
++            state: player ? 'playing' : scanning ? 'scanning' : 'idle',
++            buttons: buttons ? buttons.map.size : 0,
++            controls: !!player && player.root.classList.contains('visible'),
++            locked: !!player && player.locked,
++            audio: !!player && player.isAudio,
++            sleepMinutes: player ? player.sleepMinutes : 0,
++          };
++      }
++      return {state: 'unknown'};
++    }
++
++    // ---------------------------------------------------------------------
++    // Helpers
++
++    function clamp(value, min, max) {
++      return Math.min(max, Math.max(min, value));
++    }
++
++    function formatTime(seconds) {
++      if (!isFinite(seconds) || seconds < 0) {
++        return '--:--';
++      }
++      seconds = Math.floor(seconds);
++      const h = Math.floor(seconds / 3600);
++      const m = Math.floor(seconds / 60) % 60;
++      const s = String(seconds % 60).padStart(2, '0');
++      return h ? h + ':' + String(m).padStart(2, '0') + ':' + s : m + ':' + s;
++    }
++
++    function throttle(fn, ms) {
++      let timer = null;
++      return () => {
++        if (timer === null) {
++          timer = setTimeout(() => {
++            timer = null;
++            fn();
++          }, ms);
++        }
++      };
++    }
++
++    function readStore(key) {
++      try {
++        return JSON.parse(localStorage.getItem(key) || '{}') || {};
++      } catch (e) {
++        return {};
++      }
++    }
++
++    function writeStore(key, value) {
++      try {
++        localStorage.setItem(key, JSON.stringify(value));
++      } catch (e) {
++        // Storage can be blocked, for example in sandboxed frames.
++      }
++    }
++
++    function element(tag, className, parent, text) {
++      const el = document.createElement(tag);
++      if (className) {
++        el.className = className;
++      }
++      if (text) {
++        el.textContent = text;
++      }
++      if (parent) {
++        parent.appendChild(el);
++      }
++      return el;
++    }
++
++    const SVG_NS = 'http://www.w3.org/2000/svg';
++
++    function svg(parent, viewBox, paths, className) {
++      const el = document.createElementNS(SVG_NS, 'svg');
++      el.setAttribute('viewBox', viewBox);
++      el.setAttribute('aria-hidden', 'true');
++      if (className) {
++        el.setAttribute('class', className);
++      }
++      for (const [d, cls, evenOdd] of paths) {
++        const p = document.createElementNS(SVG_NS, 'path');
++        p.setAttribute('d', d);
++        if (cls) {
++          p.setAttribute('class', cls);
++        }
++        if (evenOdd) {
++          p.setAttribute('fill-rule', 'evenodd');
++        }
++        el.appendChild(p);
++      }
++      parent.appendChild(el);
++      return el;
++    }
++
++    function icon(parent, name, className) {
++      return svg(parent, '0 0 24 24', [[ICONS[name]]], className);
++    }
++
++    function mascot(parent, className) {
++      return svg(parent, MASCOT.viewBox, [
++        [MASCOT.body, 'm-body', true],
++        [MASCOT.ring, 'm-body'],
++        [MASCOT.highlight, 'm-accent'],
++        [MASCOT.star, 'm-accent m-star'],
++      ], className);
++    }
++
++    function button(parent, action, iconName, label, className) {
++      const el = element('button', className || '', parent);
++      el.setAttribute('data-action', action);
++      if (label) {
++        el.setAttribute('aria-label', label);
++      }
++      if (iconName) {
++        icon(el, iconName);
++      }
++      return el;
++    }
++
++    function createHost(css) {
++      const host = document.createElement('div');
++      host.setAttribute('data-cromiko-video', '');
++      for (const [name, value] of Object.entries({
++             all: 'initial',
++             position: 'fixed',
++             top: '0',
++             left: '0',
++             width: '0',
++             height: '0',
++             'z-index': '2147483647',
++           })) {
++        host.style.setProperty(name, value, 'important');
++      }
++      const root = host.attachShadow({mode: 'closed'});
++      try {
++        const sheet = new CSSStyleSheet();
++        sheet.replaceSync(css);
++        root.adoptedStyleSheets = [sheet];
++      } catch (e) {
++        const style = document.createElement('style');
++        style.textContent = css;
++        root.appendChild(style);
++      }
++      document.documentElement.appendChild(host);
++      return {host, root};
++    }
++
++    const SHARED_CSS = `
++      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
++      button { font: inherit; color: inherit; border: 0; padding: 0;
++        background: none; }
++      svg { fill: currentColor; display: block; }
++      .m-body { fill: #fff; }
++      .m-accent { fill: ${ACCENT}; }
++    `;
++
++    // ---------------------------------------------------------------------
++    // Media on the page
++
++    function allMedia() {
++      return [...document.querySelectorAll('video, audio')];
++    }
++
++    function isPlaying(media) {
++      return !media.paused && !media.ended && media.readyState > 2;
++    }
++
++    function isCandidate(media) {
++      if (!media.isConnected) {
++        return false;
++      }
++      if (media.tagName === 'AUDIO') {
++        return !media.paused;
++      }
++      // Muted looping videos without controls are decoration.
++      if (media.loop && media.muted && !media.controls) {
++        return false;
++      }
++      const r = media.getBoundingClientRect();
++      return (r.width >= 160 && r.height >= 90) ||
++          (!media.paused && r.width >= 80 && r.height >= 45);
++    }
++
++    function visibleArea(media) {
++      const r = media.getBoundingClientRect();
++      const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0);
++      const h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
++      return Math.max(0, w) * Math.max(0, h);
++    }
++
++    function mediaScore(media) {
++      return (isPlaying(media) ? 1e9 : 0) + visibleArea(media) + 1;
++    }
++
++    // The media to open from the menu: the one playing, else the largest
++    // video on the screen.
++    function bestMedia() {
++      const media = allMedia().filter(m => m.isConnected);
++      const playing = media.find(isPlaying);
++      if (playing) {
++        return playing;
++      }
++      let best = null;
++      let bestArea = 0;
++      for (const m of media) {
++        if (m.tagName !== 'VIDEO') {
++          continue;
++        }
++        const area = visibleArea(m);
++        if (area > bestArea && m.getBoundingClientRect().width >= 120) {
++          best = m;
++          bestArea = area;
++        }
++      }
++      return best || media.find(m => m.tagName === 'AUDIO' && m.currentSrc) ||
++          null;
++    }
++
++    // ---------------------------------------------------------------------
++    // Small buttons on the videos
++
++    const BUTTONS_CSS = SHARED_CSS + `
++      .open { position: fixed; left: 0; top: 0; width: 38px; height: 38px;
++        border-radius: 50%; display: grid; place-items: center;
++        background: rgba(22, 24, 30, 0.78);
++        border: 1.5px solid ${ACCENT};
++        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
++        transition: opacity 0.3s, transform 0.12s; }
++      .open svg { width: 26px; height: 26px; }
++      .open.dim { opacity: 0.55; }
++      .open.pressed { transform: scale(0.88); }
++      .open[hidden] { display: none; }
++      .toast { position: fixed; left: 50%; bottom: 32px;
++        transform: translateX(-50%); background: rgba(18, 18, 22, 0.92);
++        color: #fff; padding: 8px 14px; border-radius: 999px;
++        font: 14px system-ui, sans-serif; white-space: nowrap;
++        transition: opacity 0.2s; }
++      .toast:empty { opacity: 0; }
++    `;
++
++    function startScanning() {
++      if (!scanning) {
++        scanning = true;
++        installRouter();
++        for (const type of ['play', 'playing', 'loadedmetadata', 'emptied']) {
++          document.addEventListener(type, refreshButtons, true);
++        }
++        window.addEventListener('scroll', positionButtonsSoon,
++                                {passive: true, capture: true});
++        window.addEventListener('resize', positionButtonsSoon, {passive: true});
++        setInterval(refreshButtons, 1500);
++      }
++      refreshButtons();
++    }
++
++    function refreshButtons() {
++      if (player || hiddenOnPage) {
++        if (buttons) {
++          buttons.ui.host.style.setProperty('display', 'none', 'important');
++        }
++        return;
++      }
++      const media = allMedia().filter(isCandidate);
++      if (!media.length && !buttons) {
++        return;
++      }
++      if (!buttons) {
++        const ui = createHost(BUTTONS_CSS);
++        buttons = {ui, map: new Map(), toast: element('div', 'toast', ui.root)};
++        buttons.toast.setAttribute('role', 'status');
++      }
++      buttons.ui.host.style.removeProperty('display');
++      buttons.ui.host.style.setProperty('display', 'block', 'important');
++      for (const [m, b] of buttons.map) {
++        if (!media.includes(m)) {
++          b.remove();
++          buttons.map.delete(m);
++        }
++      }
++      for (const m of media) {
++        if (!buttons.map.has(m)) {
++          const b = element('button', 'open', buttons.ui.root);
++          b.setAttribute('aria-label', t.open || 'Open in CromIKO player');
++          mascot(b);
++          b.cromikoMedia = m;
++          b.addEventListener('click', () => openPlayer(m));
++          setTimeout(() => b.classList.add('dim'), 3500);
++          buttons.map.set(m, b);
++        }
++      }
++      positionButtons();
++    }
++
++    let positionPending = false;
++    function positionButtonsSoon() {
++      if (buttons && !positionPending) {
++        positionPending = true;
++        requestAnimationFrame(() => {
++          positionPending = false;
++          positionButtons();
++        });
++      }
++    }
++
++    function positionButtons() {
++      if (!buttons) {
++        return;
++      }
++      let floating = 0;
++      for (const [m, b] of buttons.map) {
++        const r = m.getBoundingClientRect();
++        let x;
++        let y;
++        if (m.tagName === 'AUDIO' && (r.width < 100 || r.height < 20)) {
++          // Audio without a visible player: a floating button in the corner.
++          x = innerWidth - 16 - 38;
++          y = innerHeight - 96 - floating * 48;
++          floating++;
++        } else {
++          const visible = r.bottom > 46 && r.top < innerHeight - 46 &&
++              r.right > 46 && r.left < innerWidth - 46;
++          b.hidden = !visible;
++          if (!visible) {
++            continue;
++          }
++          x = Math.min(r.right, innerWidth) - 8 - 38;
++          y = Math.max(r.top, 0) + 8;
++        }
++        b.hidden = false;
++        // Positioned with left and top: transform is the press effect.
++        b.style.left = Math.round(x) + 'px';
++        b.style.top = Math.round(y) + 'px';
++      }
++    }
++
++    function hideButtonsOnPage() {
++      hiddenOnPage = true;
++      refreshButtons();
++      buttons.ui.host.style.removeProperty('display');
++      showButtonsToast(t.hiddenOnPage || 'Player buttons hidden on this page');
++      setTimeout(() => {
++        if (hiddenOnPage && buttons) {
++          buttons.ui.host.style.setProperty('display', 'none', 'important');
++        }
++      }, 2200);
++      for (const b of buttons.map.values()) {
++        b.hidden = true;
++      }
++    }
++
++    function showButtonsToast(text) {
++      buttons.toast.textContent = text;
++      setTimeout(() => {
++        if (buttons) {
++          buttons.toast.textContent = '';
++        }
++      }, 2000);
++    }
++
++    // ---------------------------------------------------------------------
++    // Input: taps on CromIKO elements, and every tap while the player is
++    // open, go to CromIKO only. The site does not see them, so it cannot open
++    // pop-ups or ads on them.
++
++    const INPUT_EVENTS = [
++      'pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'click',
++      'dblclick', 'auxclick', 'contextmenu', 'mousedown', 'mouseup',
++      'touchstart', 'touchmove', 'touchend', 'touchcancel',
++    ];
++
++    function installRouter() {
++      if (routerInstalled) {
++        return;
++      }
++      routerInstalled = true;
++      for (const type of INPUT_EVENTS) {
++        window.addEventListener(type, onInput, {capture: true, passive: false});
++      }
++    }
++
++    let buttonPress = null;
++
++    function onInput(e) {
++      if (!e.isTrusted) {
++        return;
++      }
++      if (e.type === 'pointerdown') {
++        swallowUntil = 0;
++      } else if (performance.now() < swallowUntil &&
++          ['click', 'dblclick', 'mousedown', 'mouseup', 'touchend']
++              .includes(e.type)) {
++        e.stopImmediatePropagation();
++        if (e.cancelable && !e.type.startsWith('touch')) {
++          e.preventDefault();
++        }
++        return;
++      }
++      if (!player && !buttons) {
++        return;
++      }
++      const ui = player ? player.ui : buttons.ui;
++      const onUi = e.composedPath().includes(ui.host);
++      if (!player && !onUi) {
++        return;
++      }
++      // Clicks from accessibility services and keyboards reach the buttons.
++      if (e.type === 'click' && e.detail === 0 && onUi) {
++        return;
++      }
++      e.stopImmediatePropagation();
++      if (e.cancelable && !e.type.startsWith('touch') &&
++          !e.type.startsWith('pointer')) {
++        e.preventDefault();
++      }
++      if (!e.type.startsWith('pointer')) {
++        return;
++      }
++      if (player) {
++        playerPointer(e);
++      } else {
++        smallButtonPointer(e);
++      }
++    }
++
++    function smallButtonPointer(e) {
++      const target = buttons.ui.root.elementFromPoint(e.clientX, e.clientY);
++      const b = target && target.closest('.open');
++      if (e.type === 'pointerdown' && b) {
++        b.classList.add('pressed');
++        b.classList.remove('dim');
++        buttonPress = {
++          b,
++          timer: setTimeout(() => {
++            b.classList.remove('pressed');
++            buttonPress = null;
++            hideButtonsOnPage();
++          }, 650),
++        };
++      } else if ((e.type === 'pointerup' || e.type === 'pointercancel') &&
++                 buttonPress) {
++        clearTimeout(buttonPress.timer);
++        buttonPress.b.classList.remove('pressed');
++        const pressed = buttonPress.b;
++        buttonPress = null;
++        if (e.type === 'pointerup' && b === pressed) {
++          openPlayer(pressed.cromikoMedia);
++        }
++      }
++    }
++
++    // ---------------------------------------------------------------------
++    // Player
++
++    const PLAYER_CSS = SHARED_CSS + `
++      .player { position: fixed; inset: 0; color: #fff; touch-action: none;
++        font: 14px/1.3 system-ui, sans-serif; user-select: none;
++        -webkit-user-select: none; }
++      .gesture { position: absolute; inset: 0; }
++      .art { position: absolute; inset: 0; display: none; justify-items: center;
++        align-content: start; gap: 28px; padding-top: 17vh;
++        background: radial-gradient(circle at 50% 35%, #2c3470, #101218 70%); }
++      .audio .art { display: grid; }
++      .audio .middle { top: auto; bottom: 17vh; transform: none; }
++      .art .disc { width: min(52vw, 40vh); animation: float 3.2s ease-in-out
++        infinite alternate; animation-play-state: paused; }
++      .playing .art .disc { animation-play-state: running; }
++      .art .disc .m-star { transform-origin: 928px 652px;
++        animation: twinkle 1.6s ease-in-out infinite alternate; }
++      .art .name { max-width: calc(100vw - 48px); text-align: center;
++        font-size: 18px; font-weight: 600; opacity: 0.9; overflow: hidden;
++        text-overflow: ellipsis; white-space: nowrap; }
++      @keyframes float { to { transform: translateY(-14px); } }
++      @keyframes twinkle { to { transform: scale(0.7); } }
++
++      .shade { position: absolute; left: 0; right: 0; height: 120px;
++        pointer-events: none; opacity: 0; transition: opacity 0.25s; }
++      .shade.top { top: 0;
++        background: linear-gradient(rgba(0, 0, 0, 0.7), transparent); }
++      .shade.bottom { bottom: 0;
++        background: linear-gradient(transparent, rgba(0, 0, 0, 0.75)); }
++      .top, .bottom, .middle { position: absolute; left: 0; right: 0;
++        display: flex; align-items: center; gap: 4px; opacity: 0;
++        pointer-events: none; transition: opacity 0.25s; }
++      .visible .top, .visible .bottom, .visible .middle, .visible .shade {
++        opacity: 1; }
++      .visible .top, .visible .bottom, .visible .middle {
++        pointer-events: auto; }
++      .locked .top, .locked .bottom, .locked .middle, .locked .shade {
++        opacity: 0 !important; pointer-events: none !important; }
++      .top { top: 0; padding: max(8px, env(safe-area-inset-top)) 8px 0; }
++      .bottom { bottom: 0; flex-wrap: wrap;
++        padding: 0 8px max(8px, env(safe-area-inset-bottom)); }
++      .middle { top: 50%; transform: translateY(-50%); justify-content: center;
++        gap: 40px; }
++      .brand { display: flex; align-items: center; gap: 6px; padding: 0 6px;
++        font-weight: 700; letter-spacing: 0.02em; flex: none; }
++      .brand svg { width: 30px; height: 30px; }
++      .brand span b { color: ${ACCENT}; }
++      .title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap;
++        text-overflow: ellipsis; opacity: 0.85; padding: 0 4px; }
++      .icon { width: 44px; height: 44px; border-radius: 50%; display: grid;
++        place-items: center; flex: none; }
++      .icon svg { width: 24px; height: 24px; }
++      .icon.pressed, .big.pressed, .menu button.pressed {
++        background: rgba(255, 255, 255, 0.18); }
++      .icon[hidden], .big[hidden] { display: none; }
++      .speed { font-weight: 700; font-size: 13px; }
++      .big { width: 72px; height: 72px; border-radius: 50%; display: grid;
++        place-items: center; background: rgba(0, 0, 0, 0.45); }
++      .big svg { width: 44px; height: 44px; }
++      .skip { position: relative; width: 56px; height: 56px; display: grid;
++        place-items: center; border-radius: 50%; }
++      .skip svg { width: 40px; height: 40px; }
++      .skip span { position: absolute; font-size: 11px; font-weight: 800;
++        top: 54%; left: 50%; transform: translate(-50%, -50%); }
++      .skip.forward svg { transform: scaleX(-1); }
++      .time { font-variant-numeric: tabular-nums; font-size: 13px;
++        padding: 0 8px; min-width: 52px; text-align: center; }
++      .bar { flex: 1 1 100%; order: -1; height: 32px; position: relative;
++        margin: 0 8px; }
++      .track, .buffered, .played { position: absolute; left: 0; top: 14px;
++        height: 4px; border-radius: 2px; }
++      .track { right: 0; background: rgba(255, 255, 255, 0.25); }
++      .buffered { background: rgba(255, 255, 255, 0.45); width: 0; }
++      .played { background: ${ACCENT}; width: 0; }
++      .thumb { position: absolute; top: 9px; width: 14px; height: 14px;
++        margin-left: -7px; border-radius: 50%; background: #fff;
++        box-shadow: 0 0 0 3px rgba(92, 124, 252, 0.45); left: 0; }
++      .scrubbing .thumb { transform: scale(1.3); }
++      .spacer { flex: 1; }
++
++      .label { position: absolute; left: 50%; top: 22%;
++        transform: translateX(-50%); background: rgba(0, 0, 0, 0.65);
++        padding: 8px 16px; border-radius: 999px; font-weight: 700;
++        font-size: 16px; display: none; align-items: center; gap: 8px;
++        white-space: nowrap; }
++      .label.show { display: flex; }
++      .label svg { width: 20px; height: 20px; }
++      .ripple { position: absolute; top: 0; bottom: 0; width: 38%;
++        display: grid; place-items: center; opacity: 0;
++        transition: opacity 0.25s; pointer-events: none;
++        background: radial-gradient(circle at center,
++          rgba(255, 255, 255, 0.18), transparent 70%); }
++      .ripple.left { left: 0; border-radius: 0 50% 50% 0; }
++      .ripple.right { right: 0; border-radius: 50% 0 0 50%; }
++      .ripple.show { opacity: 1; }
++      .ripple span { font-weight: 700; font-size: 15px; padding: 10px 16px;
++        border-radius: 999px; background: rgba(0, 0, 0, 0.6); }
++      .side { position: absolute; top: 25%; bottom: 25%; width: 44px;
++        display: none; flex-direction: column; align-items: center; gap: 8px;
++        padding: 10px 0; background: rgba(0, 0, 0, 0.55);
++        border-radius: 22px; }
++      .side.show { display: flex; }
++      .side.brightness { left: 24px; }
++      .side.volume { right: 24px; }
++      .side svg { width: 22px; height: 22px; flex: none; }
++      .level { flex: 1; width: 6px; border-radius: 3px; position: relative;
++        background: rgba(255, 255, 255, 0.3); overflow: hidden; }
++      .level div { position: absolute; left: 0; right: 0; bottom: 0;
++        background: ${ACCENT}; }
++      .spinner { position: absolute; left: 50%; top: 50%; width: 84px;
++        height: 84px; margin: -42px 0 0 -42px; display: none;
++        place-items: center; pointer-events: none; }
++      .waiting .spinner { display: grid; }
++      .waiting .middle .big { opacity: 0; }
++      .spinner::before { content: ''; position: absolute; inset: 0;
++        border-radius: 50%; border: 4px solid rgba(255, 255, 255, 0.15);
++        border-top-color: ${ACCENT}; animation: spin 0.9s linear infinite; }
++      .spinner svg { width: 46px; height: 46px; }
++      @keyframes spin { to { transform: rotate(360deg); } }
++      .unlock { position: absolute; left: 50%; bottom: 18%;
++        transform: translateX(-50%); width: 56px; height: 56px;
++        border-radius: 50%; display: none; place-items: center;
++        background: rgba(0, 0, 0, 0.6); }
++      .unlock svg { width: 28px; height: 28px; }
++      .locked.visible .unlock { display: grid; }
++      .chip { position: absolute; left: 16px; bottom: 96px; display: none;
++        align-items: center; gap: 6px; padding: 10px 16px;
++        border-radius: 999px; background: ${ACCENT}; font-weight: 600; }
++      .chip.show { display: flex; }
++      .chip svg { width: 18px; height: 18px; }
++      .menu { position: absolute; right: 8px; bottom: 76px; min-width: 210px;
++        max-height: 70%; overflow-y: auto; background: rgba(24, 26, 32, 0.97);
++        border-radius: 16px; padding: 6px; display: none;
++        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5); }
++      .menu.show { display: block; }
++      .menu button { display: flex; width: 100%; align-items: center;
++        gap: 10px; padding: 12px 14px; border-radius: 10px; text-align: left;
++        font-size: 15px; }
++      .menu button .value { margin-left: auto; color: ${ACCENT};
++        font-weight: 600; }
++      .menu button.selected { color: ${ACCENT}; font-weight: 700; }
++      .toast { position: absolute; left: 50%; top: 14%;
++        transform: translateX(-50%); background: rgba(18, 18, 22, 0.88);
++        padding: 8px 16px; border-radius: 999px; white-space: nowrap;
++        transition: opacity 0.2s; pointer-events: none; }
++      .toast:empty { opacity: 0; }
++    `;
++
++    function settings() {
++      return Object.assign({background: true, loop: false}, readStore(SETTINGS_KEY));
++    }
++
++    function openPlayer(media) {
++      if (player) {
++        closePlayer();
++      }
++      if (!media || !media.isConnected) {
++        return;
++      }
++      installRouter();
++      const ui = createHost(PLAYER_CSS);
++      const root = element('div', 'player', ui.root);
++      const isAudio = media.tagName === 'AUDIO' ||
++          (media.readyState >= 1 && media.videoWidth === 0);
++      root.classList.toggle('audio', isAudio);
++
++      const art = element('div', 'art', root);
++      mascot(art, 'disc');
++      const name = element('div', 'name', art, document.title || location.host);
++      element('div', 'gesture', root);
++      element('div', 'shade top', root);
++      element('div', 'shade bottom', root);
++
++      const rippleLeft = element('div', 'ripple left', root);
++      element('span', '', rippleLeft);
++      const rippleRight = element('div', 'ripple right', root);
++      element('span', '', rippleRight);
++      const label = element('div', 'label', root);
++      label.setAttribute('role', 'status');
++      const brightnessSide = element('div', 'side brightness', root);
++      icon(brightnessSide, 'brightness');
++      const brightnessLevel = element('div', '', element('div', 'level', brightnessSide));
++      const volumeSide = element('div', 'side volume', root);
++      icon(volumeSide, 'volume');
++      const volumeLevel = element('div', '', element('div', 'level', volumeSide));
++      const spinner = element('div', 'spinner', root);
++      mascot(spinner);
++
++      const top = element('div', 'top', root);
++      const brand = element('div', 'brand', top);
++      mascot(brand);
++      const brandName = element('span', '', brand, 'Crom');
++      element('b', '', brandName, 'IKO');
++      element('div', 'title', top, document.title || location.host);
++      const cc = button(top, 'cc', 'cc', t.subtitles || 'Subtitles', 'icon');
++      const speed = button(top, 'speed', null, t.speed || 'Playback speed', 'icon speed');
++      const pip = button(top, 'pip', 'pip', t.pip || 'Picture in picture', 'icon');
++      button(top, 'more', 'more', t.more || 'More options', 'icon');
++      button(top, 'close', 'close', t.close || 'Close player', 'icon');
++
++      const middle = element('div', 'middle', root);
++      const back = button(middle, 'back', 'replay', t.back || 'Back 10 seconds', 'skip');
++      element('span', '', back, String(SEEK_STEP));
++      const play = button(middle, 'play', 'play', t.play || 'Play', 'big');
++      const forward = button(middle, 'forward', 'replay', t.forward || 'Forward 10 seconds', 'skip forward');
++      element('span', '', forward, String(SEEK_STEP));
++
++      const bottom = element('div', 'bottom', root);
++      const bar = element('div', 'bar', bottom);
++      bar.setAttribute('data-action', 'seekbar');
++      bar.setAttribute('role', 'slider');
++      bar.setAttribute('aria-label', t.seek || 'Seek');
++      element('div', 'track', bar);
++      const buffered = element('div', 'buffered', bar);
++      const played = element('div', 'played', bar);
++      const thumb = element('div', 'thumb', bar);
++      const time = element('span', 'time', bottom, '0:00 / 0:00');
++      element('div', 'spacer', bottom);
++      button(bottom, 'lock', 'lock', t.lock || 'Lock controls', 'icon');
++      const fit = button(bottom, 'fit', 'fit', t.fit || 'Fit to screen', 'icon');
++      const rotate = button(bottom, 'rotate', 'rotate', t.rotate || 'Rotate', 'icon');
++
++      button(root, 'unlock', 'unlock', t.unlock || 'Unlock', 'unlock');
++      const chip = element('div', 'chip', root);
++      chip.setAttribute('data-action', 'resume');
++      const menu = element('div', 'menu', root);
++      const toast = element('div', 'toast', root);
++      toast.setAttribute('role', 'status');
++
++      const s = settings();
++      player = {
++        media,
++        ui,
++        root,
++        isAudio,
++        els: {
++          name, label, rippleLeft, rippleRight, brightnessSide, brightnessLevel,
++          volumeSide, volumeLevel, spinner, cc, speed, pip, play, bar, buffered,
++          played, thumb, time, fit, rotate, chip, menu, toast,
++        },
++        saved: new Map(),
++        wasControls: media.controls,
++        wasLoop: media.loop,
++        fit: 'contain',
++        brightness: 1,
++        locked: false,
++        background: s.background,
++        sleepMinutes: 0,
++        sleepTimer: null,
++        pointers: new Map(),
++        gesture: null,
++        lastTap: null,
++        seekChain: null,
++        fullscreen: false,
++        listeners: [],
++      };
++      if (!isAudio) {
++        media.controls = false;
++      }
++      media.loop = media.loop || s.loop;
++      for (const el of [pip, rotate, fit]) {
++        el.hidden = isAudio;
++      }
++      pip.hidden = isAudio || !document.pictureInPictureEnabled ||
++          media.disablePictureInPicture;
++
++      listen(media, ['timeupdate', 'progress', 'durationchange', 'loadedmetadata'], updateTime);
++      listen(media, ['play', 'pause', 'playing', 'waiting', 'ended', 'seeking', 'seeked', 'canplay'], updateState);
++      listen(media, ['ratechange'], updateSpeed);
++      listen(media, ['pause'], onPause);
++      listen(media, ['timeupdate'], throttle(savePosition, 4000));
++      listen(media.textTracks, ['addtrack', 'removetrack'], updateTracks);
++      listen(document, ['visibilitychange'], onVisibility);
++      listen(document, ['fullscreenchange'], onFullscreen);
++      listen(window, ['pagehide'], savePosition);
++
++      player.observer = new MutationObserver(throttle(() => {
++        if (player) {
++          isolate();
++        }
++      }, 300));
++      player.observer.observe(document.documentElement, {childList: true, subtree: true});
++
++      if (buttons) {
++        buttons.ui.host.style.setProperty('display', 'none', 'important');
++      }
++      isolate();
++      updateTime();
++      updateState();
++      updateSpeed();
++      updateTracks();
++      showResume();
++      showControls();
++      enterFullscreen();
++      if (media.paused) {
++        media.play().catch(() => {});
++      }
++    }
++
++    function listen(target, types, fn) {
++      for (const type of types) {
++        target.addEventListener(type, fn);
++        player.listeners.push([target, type, fn]);
++      }
++    }
++
++    function closePlayer() {
++      if (!player) {
++        return;
++      }
++      const p = player;
++      savePosition();
++      p.observer.disconnect();
++      for (const [target, type, fn] of p.listeners) {
++        target.removeEventListener(type, fn);
++      }
++      clearTimeout(p.controlsTimer);
++      clearTimeout(p.sleepTimer);
++      clearTimeout(p.holdTimer);
++      clearTimeout(p.tapTimer);
++      for (const [el, cssText] of p.saved) {
++        if (cssText === null) {
++          el.removeAttribute('style');
++        } else {
++          el.style.cssText = cssText;
++        }
++      }
++      if (!p.isAudio) {
++        p.media.controls = p.wasControls;
++      }
++      p.media.loop = p.wasLoop;
++      p.ui.host.remove();
++      player = null;
++      swallowUntil = performance.now() + 700;
++      if (document.fullscreenElement) {
++        document.exitFullscreen().catch(() => {});
++      }
++      try {
++        screen.orientation.unlock();
++      } catch (e) {
++        // Not in full screen.
++      }
++      refreshButtons();
++    }
++
++    function setStyles(el, styles) {
++      if (!player.saved.has(el)) {
++        player.saved.set(el, el.hasAttribute('style') ? el.style.cssText : null);
++      }
++      for (const [name, value] of Object.entries(styles)) {
++        if (el.style.getPropertyValue(name) !== value ||
++            el.style.getPropertyPriority(name) !== 'important') {
++          el.style.setProperty(name, value, 'important');
++        }
++      }
++    }
++
++    // Properties of the ancestors that would keep the media from covering the
++    // screen.
++    const ANCESTOR_STYLE = {
++      transform: 'none',
++      filter: 'none',
++      perspective: 'none',
++      contain: 'none',
++      'will-change': 'auto',
++      'clip-path': 'none',
++      mask: 'none',
++      'backdrop-filter': 'none',
++      overflow: 'visible',
++      opacity: '1',
++      visibility: 'visible',
++      animation: 'none',
++    };
++
++    function isolate() {
++      const p = player;
++      if (!p.media.isConnected) {
++        closePlayer();
++        return;
++      }
++      const keep = new Set();
++      for (let node = p.media; node; node = node.parentElement) {
++        keep.add(node);
++      }
++      for (let node = p.media; node && node !== document.body &&
++           node !== document.documentElement;
++           node = node.parentElement) {
++        const parent = node.parentElement;
++        if (!parent) {
++          break;
++        }
++        for (const sibling of parent.children) {
++          if (!keep.has(sibling) && !NOT_RENDERED.has(sibling.tagName)) {
++            setStyles(sibling, {display: 'none'});
++          }
++        }
++        if (node !== p.media) {
++          setStyles(node, ANCESTOR_STYLE);
++        }
++      }
++      for (const el of [document.documentElement, document.body]) {
++        if (el) {
++          setStyles(el, {background: '#000', overflow: 'hidden'});
++        }
++      }
++      if (p.isAudio) {
++        return;
++      }
++      setStyles(p.media, {
++        position: 'fixed',
++        top: '0',
++        left: '0',
++        right: 'auto',
++        bottom: 'auto',
++        width: '100vw',
++        height: '100vh',
++        'min-width': '0',
++        'min-height': '0',
++        'max-width': 'none',
++        'max-height': 'none',
++        margin: '0',
++        padding: '0',
++        border: '0',
++        'z-index': '2147483646',
++        'object-fit': p.fit,
++        'object-position': 'center',
++        background: '#000',
++        transform: 'none',
++        filter: 'brightness(' + p.brightness.toFixed(2) + ')',
++        display: 'block',
++        visibility: 'visible',
++        opacity: '1',
++      });
++    }
++
++    function enterFullscreen() {
++      if (document.fullscreenElement || !document.fullscreenEnabled) {
++        return;
++      }
++      // Works while handling a tap; from the browser menu the first tap on
++      // the player goes full screen.
++      document.documentElement.requestFullscreen({navigationUI: 'hide'})
++          .then(() => {
++            if (!player) {
++              return;
++            }
++            player.fullscreen = true;
++            const m = player.media;
++            if (!player.isAudio && m.videoWidth > m.videoHeight) {
++              lockOrientation('landscape');
++            }
++          })
++          .catch(() => {});
++    }
++
++    function lockOrientation(orientation) {
++      try {
++        return screen.orientation.lock(orientation).catch(() => false);
++      } catch (e) {
++        return Promise.resolve(false);
++      }
++    }
++
++    function onFullscreen() {
++      // Leaving full screen (for example with the back gesture) closes the
++      // player.
++      if (player && player.fullscreen && !document.fullscreenElement) {
++        player.fullscreen = false;
++        closePlayer();
++      }
++    }
++
++    // ---------------------------------------------------------------------
++    // State shown by the controls
++
++    function updateTime() {
++      const p = player;
++      if (!p) {
++        return;
++      }
++      const m = p.media;
++      const duration = m.duration;
++      const current = p.gesture && p.gesture.preview !== undefined ?
++          p.gesture.preview : m.currentTime;
++      const fraction = isFinite(duration) && duration > 0 ? current / duration : 0;
++      p.els.played.style.width = (fraction * 100) + '%';
++      p.els.thumb.style.left = (fraction * 100) + '%';
++      let end = 0;
++      for (let i = 0; i < m.buffered.length; i++) {
++        if (m.buffered.start(i) <= current + 1) {
++          end = Math.max(end, m.buffered.end(i));
++        }
++      }
++      p.els.buffered.style.width =
++          (isFinite(duration) && duration > 0 ? end / duration * 100 : 0) + '%';
++      p.els.time.textContent = formatTime(current) + ' / ' +
++          (isFinite(duration) ? formatTime(duration) : (t.live || 'Live'));
++      p.els.bar.setAttribute('aria-valuetext', p.els.time.textContent);
++    }
++
++    function updateState() {
++      const p = player;
++      if (!p) {
++        return;
++      }
++      const m = p.media;
++      const playing = !m.paused && !m.ended;
++      p.root.classList.toggle('playing', playing);
++      p.root.classList.toggle('waiting', playing && m.readyState < 3);
++      const play = p.els.play;
++      play.textContent = '';
++      icon(play, m.ended ? 'replay' : playing ? 'pause' : 'play');
++      play.setAttribute('aria-label', playing ? (t.pause || 'Pause') : (t.play || 'Play'));
++      if (!playing) {
++        showControls(true);
++      } else {
++        scheduleHide();
++      }
++    }
++
++    function updateSpeed() {
++      if (player) {
++        const rate = player.media.playbackRate;
++        player.els.speed.textContent = (Math.round(rate * 100) / 100) + 'x';
++      }
++    }
++
++    function updateTracks() {
++      if (player) {
++        const tracks = [...player.media.textTracks].filter(
++            track => track.kind === 'subtitles' || track.kind === 'captions');
++        player.els.cc.hidden = !tracks.length;
++      }
++    }
++
++    function showControls(stay) {
++      const p = player;
++      if (!p) {
++        return;
++      }
++      p.root.classList.add('visible');
++      clearTimeout(p.controlsTimer);
++      if (!stay) {
++        scheduleHide();
++      }
++    }
++
++    function scheduleHide() {
++      const p = player;
++      clearTimeout(p.controlsTimer);
++      // Audio has no picture to show: its controls stay.
++      if (p.isAudio) {
++        return;
++      }
++      p.controlsTimer = setTimeout(() => {
++        if (player && !player.media.paused && !player.els.menu.classList.contains('show') &&
++            !player.gesture) {
++          player.root.classList.remove('visible');
++        }
++      }, CONTROLS_MS);
++    }
++
++    function hideControls() {
++      player.root.classList.remove('visible');
++      closeMenu();
++    }
++
++    function showLabel(text, iconName) {
++      const label = player.els.label;
++      label.textContent = '';
++      if (iconName) {
++        icon(label, iconName);
++      }
++      element('span', '', label, text);
++      label.classList.add('show');
++    }
++
++    function hideLabel() {
++      if (player) {
++        player.els.label.classList.remove('show');
++      }
++    }
++
++    function showToast(text) {
++      const p = player;
++      p.els.toast.textContent = text;
++      clearTimeout(p.toastTimer);
++      p.toastTimer = setTimeout(() => {
++        if (player) {
++          player.els.toast.textContent = '';
++        }
++      }, 1800);
++    }
++
++    // ---------------------------------------------------------------------
++    // Gestures
++    //
++    // Tap: show or hide the controls. Double tap on the left or right: 10 s
++    // back or forward (more taps add more). Double tap in the middle: play or
++    // pause. Hold: 2x speed while holding. Swipe sideways: seek. Swipe up or
++    // down on the left: brightness, on the right: volume. Pinch: zoom to fill
++    // the screen or fit the video.
++
++    function playerPointer(e) {
++      const p = player;
++      const target = p.ui.root.elementFromPoint(e.clientX, e.clientY);
++      const control = target && target.closest('[data-action]');
++      switch (e.type) {
++        case 'pointerdown':
++          onDown(e, control);
++          break;
++        case 'pointermove':
++          onMove(e);
++          break;
++        case 'pointerup':
++          onUp(e, control);
++          break;
++        case 'pointercancel':
++          p.pointers.delete(e.pointerId);
++          endGesture(false);
++          break;
++      }
++    }
++
++    function onDown(e, control) {
++      const p = player;
++      p.pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
++      if (p.pointers.size === 2 && !p.locked) {
++        clearTimeout(p.holdTimer);
++        const [a, b] = [...p.pointers.values()];
++        p.gesture = {type: 'pinch', distance: Math.hypot(a.x - b.x, a.y - b.y), done: false};
++        return;
++      }
++      if (p.pointers.size > 1) {
++        return;
++      }
++      const action = control && control.getAttribute('data-action');
++      if (action === 'seekbar' && !p.locked) {
++        p.gesture = {type: 'scrub', bar: control.getBoundingClientRect()};
++        p.root.classList.add('scrubbing');
++        showControls(true);
++        scrubTo(e.clientX);
++        return;
++      }
++      if (control) {
++        control.classList.add('pressed');
++        p.gesture = {type: 'press', control};
++        return;
++      }
++      p.gesture = {
++        type: 'pending',
++        x0: e.clientX,
++        y0: e.clientY,
++        time0: performance.now(),
++      };
++      if (!p.locked) {
++        p.holdTimer = setTimeout(startHold, HOLD_MS);
++      }
++    }
++
++    function onMove(e) {
++      const p = player;
++      if (!p.pointers.has(e.pointerId)) {
++        return;
++      }
++      p.pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
++      const g = p.gesture;
++      if (!g) {
++        return;
++      }
++      if (g.type === 'pinch') {
++        const [a, b] = [...p.pointers.values()];
++        const scale = Math.hypot(a.x - b.x, a.y - b.y) / g.distance;
++        if (!g.done && (scale > 1.2 || scale < 0.83)) {
++          g.done = true;
++          setFit(scale > 1 ? 'cover' : 'contain');
++        }
++        return;
++      }
++      if (g.type === 'scrub') {
++        scrubTo(e.clientX);
++        return;
++      }
++      if (g.type !== 'pending' && g.type !== 'seek' && g.type !== 'volume' &&
++          g.type !== 'brightness') {
++        return;
++      }
++      const dx = e.clientX - g.x0;
++      const dy = e.clientY - g.y0;
++      if (g.type === 'pending') {
++        if (Math.hypot(dx, dy) < 14 || p.locked) {
++          return;
++        }
++        clearTimeout(p.holdTimer);
++        const m = p.media;
++        if (Math.abs(dx) > Math.abs(dy)) {
++          if (!isFinite(m.duration)) {
++            return;
++          }
++          g.type = 'seek';
++          g.start = m.currentTime;
++        } else if (g.x0 > innerWidth / 2) {
++          g.type = 'volume';
++          g.start = m.muted ? 0 : m.volume;
++        } else {
++          g.type = 'brightness';
++          g.start = p.brightness;
++        }
++      }
++      const m = p.media;
++      if (g.type === 'seek') {
++        // A full swipe across the screen moves up to 2 minutes.
++        const range = Math.min(m.duration, 120);
++        g.preview = clamp(g.start + dx / innerWidth * range, 0, m.duration);
++        const delta = g.preview - g.start;
++        showLabel((delta < 0 ? '-' : '+') + formatTime(Math.abs(delta)) + '  ·  ' +
++                  formatTime(g.preview));
++        showControls(true);
++        updateTime();
++      } else if (g.type === 'volume') {
++        const volume = clamp(g.start - dy / (innerHeight * 0.6), 0, 1);
++        m.volume = volume;
++        m.muted = volume === 0;
++        p.els.volumeSide.classList.add('show');
++        p.els.volumeLevel.style.height = (volume * 100) + '%';
++      } else if (g.type === 'brightness') {
++        p.brightness = clamp(g.start - dy / (innerHeight * 0.6), 0.2, 1.6);
++        setStyles(m, {filter: 'brightness(' + p.brightness.toFixed(2) + ')'});
++        p.els.brightnessSide.classList.add('show');
++        p.els.brightnessLevel.style.height = ((p.brightness - 0.2) / 1.4 * 100) + '%';
++      }
++    }
++
++    function onUp(e, control) {
++      const p = player;
++      p.pointers.delete(e.pointerId);
++      const g = p.gesture;
++      if (!g) {
++        return;
++      }
++      if (g.type === 'pinch') {
++        if (!p.pointers.size) {
++          p.gesture = null;
++        }
++        return;
++      }
++      clearTimeout(p.holdTimer);
++      if (g.type === 'press') {
++        g.control.classList.remove('pressed');
++        p.gesture = null;
++        if (control === g.control) {
++          doAction(control.getAttribute('data-action'), control);
++        }
++        return;
++      }
++      if (g.type === 'pending') {
++        p.gesture = null;
++        onTap(e.clientX, e.clientY);
++        return;
++      }
++      endGesture(true);
++    }
++
++    function endGesture(commit) {
++      const p = player;
++      const g = p.gesture;
++      p.gesture = null;
++      clearTimeout(p.holdTimer);
++      if (!g) {
++        return;
++      }
++      if (g.type === 'hold') {
++        p.media.playbackRate = g.rate;
++        hideLabel();
++      } else if (g.type === 'seek' || g.type === 'scrub') {
++        if (commit && g.preview !== undefined) {
++          p.media.currentTime = g.preview;
++        }
++        p.root.classList.remove('scrubbing');
++        hideLabel();
++        updateTime();
++        scheduleHide();
++      } else if (g.type === 'press') {
++        g.control.classList.remove('pressed');
++      }
++      setTimeout(() => {
++        if (player && !player.gesture) {
++          player.els.volumeSide.classList.remove('show');
++          player.els.brightnessSide.classList.remove('show');
++        }
++      }, 500);
++    }
++
++    function startHold() {
++      const p = player;
++      if (!p || !p.gesture || p.gesture.type !== 'pending' || p.media.paused) {
++        return;
++      }
++      p.gesture = {type: 'hold', rate: p.media.playbackRate};
++      p.media.playbackRate = 2;
++      showLabel('2x', 'fast');
++    }
++
++    function scrubTo(x) {
++      const p = player;
++      const g = p.gesture;
++      const m = p.media;
++      if (!isFinite(m.duration)) {
++        return;
++      }
++      const fraction = clamp((x - g.bar.left) / g.bar.width, 0, 1);
++      g.preview = fraction * m.duration;
++      showLabel(formatTime(g.preview) + ' / ' + formatTime(m.duration));
++      updateTime();
++    }
++
++    function onTap(x, y) {
++      const p = player;
++      const now = performance.now();
++      if (p.locked) {
++        p.root.classList.add('visible');
++        clearTimeout(p.controlsTimer);
++        p.controlsTimer = setTimeout(() => {
++          if (player) {
++            player.root.classList.remove('visible');
++          }
++        }, 2000);
++        return;
++      }
++      if (p.els.menu.classList.contains('show')) {
++        closeMenu();
++        return;
++      }
++      const side = x < innerWidth * 0.35 ? -1 : x > innerWidth * 0.65 ? 1 : 0;
++      // Taps right after a double tap keep seeking on the same side.
++      if (p.seekChain && now < p.seekChain.until && side === p.seekChain.side) {
++        seekBy(side * SEEK_STEP, side);
++        return;
++      }
++      const last = p.lastTap;
++      if (last && now - last.time < DOUBLE_TAP_MS * 1.2 &&
++          Math.hypot(x - last.x, y - last.y) < 80) {
++        clearTimeout(p.tapTimer);
++        p.lastTap = null;
++        if (side === 0) {
++          togglePlay();
++        } else {
++          seekBy(side * SEEK_STEP, side);
++        }
++        return;
++      }
++      p.lastTap = {time: now, x, y};
++      clearTimeout(p.tapTimer);
++      p.tapTimer = setTimeout(() => {
++        if (!player) {
++          return;
++        }
++        player.lastTap = null;
++        if (!document.fullscreenElement && !player.fullscreenTried) {
++          // The first tap goes full screen if it is not yet (opened from the
++          // menu); after that taps show and hide the controls.
++          player.fullscreenTried = true;
++          enterFullscreen();
++          showControls();
++        } else if (player.root.classList.contains('visible')) {
++          hideControls();
++        } else {
++          showControls();
++        }
++      }, DOUBLE_TAP_MS);
++    }
++
++    function seekBy(seconds, side, fromButton) {
++      const p = player;
++      const m = p.media;
++      if (!isFinite(m.duration) && !m.seekable.length) {
++        return;
++      }
++      const max = isFinite(m.duration) ? m.duration : m.seekable.end(m.seekable.length - 1);
++      m.currentTime = clamp(m.currentTime + seconds, 0, max);
++      const ripple = side < 0 ? p.els.rippleLeft : p.els.rippleRight;
++      // Double taps show only the seek ripple, without the controls.
++      if (!p.isAudio && !fromButton) {
++        p.root.classList.remove('visible');
++      }
++      const chain = p.seekChain && p.seekChain.side === side &&
++          performance.now() < p.seekChain.until ? p.seekChain : {side, total: 0};
++      chain.total += Math.abs(seconds);
++      chain.until = performance.now() + 700;
++      p.seekChain = chain;
++      ripple.firstChild.textContent = (side < 0 ? '« ' : '') + chain.total + ' s' +
++          (side > 0 ? ' »' : '');
++      ripple.classList.add('show');
++      clearTimeout(ripple.cromikoTimer);
++      ripple.cromikoTimer = setTimeout(() => ripple.classList.remove('show'), 650);
++      updateTime();
++    }
++
++    function togglePlay() {
++      const m = player.media;
++      if (m.ended) {
++        m.currentTime = 0;
++      }
++      if (m.paused || m.ended) {
++        m.play().catch(() => {});
++      } else {
++        m.pause();
++        player.userPaused = performance.now();
++      }
++    }
++
++    function setFit(fit) {
++      const p = player;
++      p.fit = fit;
++      setStyles(p.media, {'object-fit': fit});
++      showToast(fit === 'cover' ? (t.zoom || 'Zoom to fill') :
++                fit === 'fill' ? (t.stretch || 'Stretch') : (t.fitScreen || 'Fit to screen'));
++    }
++
++    // ---------------------------------------------------------------------
++    // Buttons and menus
++
++    function doAction(action, control) {
++      const p = player;
++      const m = p.media;
++      if (action !== 'seekbar' && action !== 'unlock') {
++        showControls();
++      }
++      switch (action) {
++        case 'play':
++          togglePlay();
++          break;
++        case 'back':
++          seekBy(-SEEK_STEP, -1, true);
++          break;
++        case 'forward':
++          seekBy(SEEK_STEP, 1, true);
++          break;
++        case 'close':
++          closePlayer();
++          break;
++        case 'pip':
++          if (document.pictureInPictureElement) {
++            document.exitPictureInPicture().catch(() => {});
++          } else {
++            m.requestPictureInPicture().catch(() => showToast(t.pipFailed || 'Picture in picture is not available'));
++          }
++          break;
++        case 'lock':
++          p.locked = true;
++          closeMenu();
++          showToast(t.locked || 'Controls locked');
++          p.root.classList.add('locked');
++          p.root.classList.remove('visible');
++          break;
++        case 'unlock':
++          p.locked = false;
++          p.root.classList.remove('locked');
++          showControls();
++          showToast(t.unlocked || 'Controls unlocked');
++          break;
++        case 'fit':
++          setFit(p.fit === 'contain' ? 'cover' : p.fit === 'cover' ? 'fill' : 'contain');
++          break;
++        case 'rotate': {
++          const portrait = screen.orientation && screen.orientation.type.startsWith('portrait');
++          lockOrientation(portrait ? 'landscape' : 'portrait').then(ok => {
++            if (ok === false) {
++              showToast(t.rotateFailed || 'Rotation is available in full screen');
++            }
++          });
++          break;
++        }
++        case 'cc':
++          nextSubtitles();
++          break;
++        case 'speed':
++          openMenu('speed');
++          break;
++        case 'more':
++          openMenu('more');
++          break;
++        case 'resume':
++          m.currentTime = Number(control.getAttribute('data-time')) || 0;
++          p.els.chip.classList.remove('show');
++          break;
++        default:
++          if (action.startsWith('rate:')) {
++            m.playbackRate = Number(action.slice(5));
++            showToast((t.speed || 'Playback speed') + ': ' + m.playbackRate + 'x');
++            closeMenu();
++          } else if (action === 'loop') {
++            m.loop = !m.loop;
++            p.wasLoop = p.wasLoop && m.loop;
++            saveSetting('loop', m.loop);
++            showToast(m.loop ? (t.loopOn || 'Loop on') : (t.loopOff || 'Loop off'));
++            openMenu('more');
++          } else if (action === 'background') {
++            p.background = !p.background;
++            saveSetting('background', p.background);
++            showToast(p.background ? (t.backgroundOn || 'Background play on') :
++                                     (t.backgroundOff || 'Background play off'));
++            openMenu('more');
++          } else if (action === 'sleep') {
++            const next = SLEEP_MINUTES[(SLEEP_MINUTES.indexOf(p.sleepMinutes) + 1) %
++                                       SLEEP_MINUTES.length];
++            setSleepTimer(next);
++            openMenu('more');
++          }
++      }
++    }
++
++    function openMenu(kind) {
++      const p = player;
++      const m = p.media;
++      const menu = p.els.menu;
++      menu.textContent = '';
++      const item = (action, text, value, selected) => {
++        const b = element('button', selected ? 'selected' : '', menu);
++        b.setAttribute('data-action', action);
++        element('span', '', b, text);
++        if (value) {
++          element('span', 'value', b, value);
++        }
++      };
++      if (kind === 'speed') {
++        for (const rate of SPEEDS) {
++          item('rate:' + rate, rate === 1 ? (t.normal || 'Normal') : rate + 'x', '',
++               Math.abs(m.playbackRate - rate) < 0.01);
++        }
++      } else {
++        const on = t.on || 'On';
++        const off = t.off || 'Off';
++        item('loop', t.loop || 'Loop', m.loop ? on : off);
++        item('background', t.background || 'Background play', p.background ? on : off);
++        item('sleep', t.sleep || 'Sleep timer',
++             p.sleepMinutes ? p.sleepMinutes + ' min' : off);
++      }
++      menu.classList.add('show');
++      showControls(true);
++    }
++
++    function closeMenu() {
++      if (player && player.els.menu.classList.contains('show')) {
++        player.els.menu.classList.remove('show');
++        scheduleHide();
++      }
++    }
++
++    function nextSubtitles() {
++      const tracks = [...player.media.textTracks].filter(
++          track => track.kind === 'subtitles' || track.kind === 'captions');
++      if (!tracks.length) {
++        return;
++      }
++      const current = tracks.findIndex(track => track.mode === 'showing');
++      for (const track of tracks) {
++        track.mode = 'disabled';
++      }
++      const next = current + 1 < tracks.length ? tracks[current + 1] : null;
++      if (next) {
++        next.mode = 'showing';
++      }
++      showToast(next ? (next.label || next.language || (t.subtitles || 'Subtitles')) :
++                       (t.subtitlesOff || 'Subtitles off'));
++    }
++
++    function setSleepTimer(minutes) {
++      const p = player;
++      clearTimeout(p.sleepTimer);
++      p.sleepMinutes = minutes;
++      if (minutes) {
++        p.sleepTimer = setTimeout(() => {
++          if (player) {
++            player.media.pause();
++            player.sleepMinutes = 0;
++            showToast(t.sleepDone || 'Sleep timer: paused');
++          }
++        }, minutes * 60000);
++        showToast((t.sleep || 'Sleep timer') + ': ' + minutes + ' min');
++      } else {
++        showToast((t.sleep || 'Sleep timer') + ': ' + (t.off || 'Off'));
++      }
++    }
++
++    function saveSetting(name, value) {
++      const s = readStore(SETTINGS_KEY);
++      s[name] = value;
++      writeStore(SETTINGS_KEY, s);
++    }
++
++    // ---------------------------------------------------------------------
++    // Background play: sites often pause their video when the page is hidden.
++    // Right after the app goes to the background, such a pause is undone.
++
++    function onVisibility() {
++      const p = player;
++      if (document.visibilityState === 'hidden') {
++        p.hiddenAt = performance.now();
++        p.playingWhenHidden = !p.media.paused;
++      }
++    }
++
++    function onPause() {
++      const p = player;
++      if (p.background && document.visibilityState === 'hidden' &&
++          p.playingWhenHidden && performance.now() - p.hiddenAt < 2000) {
++        p.playingWhenHidden = false;
++        p.media.play().catch(() => {});
++      }
++    }
++
++    // ---------------------------------------------------------------------
++    // Continue where you stopped
++
++    function positionKey() {
++      const d = player.media.duration;
++      return isFinite(d) && d > 60 ? location.origin + location.pathname + '#' + Math.round(d) : null;
++    }
++
++    function savePosition() {
++      const p = player;
++      if (!p) {
++        return;
++      }
++      const key = positionKey();
++      if (!key) {
++        return;
++      }
++      const positions = readStore(POSITIONS_KEY);
++      const m = p.media;
++      if (m.currentTime > 15 && m.currentTime < m.duration - 20) {
++        positions[key] = {time: Math.floor(m.currentTime), at: Date.now()};
++      } else {
++        delete positions[key];
++      }
++      // Keep the 40 most recent.
++      const keys = Object.keys(positions).sort((a, b) => positions[b].at - positions[a].at);
++      for (const old of keys.slice(40)) {
++        delete positions[old];
++      }
++      writeStore(POSITIONS_KEY, positions);
++    }
++
++    function showResume() {
++      const p = player;
++      const show = () => {
++        if (!player) {
++          return;
++        }
++        const key = positionKey();
++        const saved = key && readStore(POSITIONS_KEY)[key];
++        if (!saved || p.media.currentTime > 5) {
++          return;
++        }
++        const chip = p.els.chip;
++        chip.textContent = '';
++        icon(chip, 'play');
++        element('span', '', chip, (t.resume || 'Continue at') + ' ' + formatTime(saved.time));
++        chip.setAttribute('data-time', String(saved.time));
++        chip.classList.add('show');
++        setTimeout(() => chip.classList.remove('show'), 7000);
++      };
++      if (p.media.readyState >= 1) {
++        show();
++      } else {
++        p.media.addEventListener('loadedmetadata', show, {once: true});
++      }
++    }
++
++    return {run};
++  }
++})(__CROMIKO_ARGS__);
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -200,6 +200,7 @@ found in the LICENSE file.
+     <item type="id" name="create_new_tab_group_menu_id" />
+     <item type="id" name="cromiko_fire_button_menu_id" />
+     <item type="id" name="cromiko_manga_mode_menu_id" />
++    <item type="id" name="cromiko_video_player_menu_id" />
+     <item type="id" name="default_browser_promo_menu_id" />
+     <item type="id" name="direct_share_menu_id" />
+     <item type="id" name="disable_price_tracking_menu_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -129,6 +129,7 @@ import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulatorFactory
+ import org.chromium.chrome.browser.cookies.CookiesFetcher;
+ import org.chromium.chrome.browser.cromiko.CromikoFireButton;
+ import org.chromium.chrome.browser.cromiko.CromikoMangaMode;
++import org.chromium.chrome.browser.cromiko.CromikoVideoPlayer;
+ import org.chromium.chrome.browser.crypto.CipherFactory;
+ import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+ import org.chromium.chrome.browser.data_sharing.DataSharingIntentUtils;
+@@ -652,6 +653,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     private TabModelSelectorObserver mTabModelSelectorObserver;
+     private TabModelSelectorTabObserver mNavigationFinishedObserver;
+     private @Nullable TabModelSelectorTabObserver mCromikoMangaObserver;
++    private @Nullable TabModelSelectorTabObserver mCromikoVideoObserver;
+     private TabModelSelectorTabModelObserver mTabModelObserver;
+     private HistoricalTabModelObserver mHistoricalTabModelObserver;
+     private UndoRefocusHelper mUndoRefocusHelper;
+@@ -3867,6 +3869,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                 };
+         // CromIKO: opens the manga reader on the sites where manga mode is on.
+         mCromikoMangaObserver = CromikoMangaMode.observeTabs(mTabModelSelector);
++        // CromIKO: puts the CromIKO player button on the videos of web pages.
++        mCromikoVideoObserver = CromikoVideoPlayer.observeTabs(mTabModelSelector);
+         if (startIncognito) mTabModelSelector.selectModel(true);
+     }
+ 
+@@ -4669,6 +4673,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                     getTabCreator(/* incognito= */ false));
+         } else if (id == R.id.cromiko_manga_mode_menu_id) {
+             CromikoMangaMode.onMenuItemSelected(this, currentTab);
++        } else if (id == R.id.cromiko_video_player_menu_id) {
++            CromikoVideoPlayer.onMenuItemSelected(currentTab);
+         } else if (id == R.id.ntp_customization_id) {
+             openCustomizeChrome();
+         } else if (id == R.id.menu_item_content_filter_help_center_id) {
+@@ -5305,6 +5311,10 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             mCromikoMangaObserver.destroy();
+             mCromikoMangaObserver = null;
+         }
++        if (mCromikoVideoObserver != null) {
++            mCromikoVideoObserver.destroy();
++            mCromikoVideoObserver = null;
++        }
+         if (mNavigationFinishedObserver != null) {
+             mNavigationFinishedObserver.destroy();
+             mNavigationFinishedObserver = null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java
+@@ -0,0 +1,224 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.content.Context;
++
++import org.json.JSONArray;
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.FileUtils;
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.tabmodel.TabModelSelector;
++import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
++import org.chromium.components.embedder_support.util.UrlConstants;
++import org.chromium.content_public.browser.WebContents;
++import org.chromium.ui.widget.Toast;
++import org.chromium.url.GURL;
++
++import java.io.IOException;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++
++/**
++ * CromIKO: the CromIKO video player. Videos on web pages (also in frames of other sites) get a
++ * small CromIKO button that opens them in a full screen player with tap gestures, without the
++ * site's controls, overlays and ads. The page script is res/raw/cromiko_video.js.
++ */
++@NullMarked
++public final class CromikoVideoPlayer {
++    private static final String TAG = "CromikoVideo";
++    private static final String ARGS_PLACEHOLDER = "__CROMIKO_ARGS__";
++
++    private static @Nullable String sScript;
++    private static @Nullable String sTexts;
++
++    private CromikoVideoPlayer() {}
++
++    /** Handles the "CromIKO player" item of the app menu on |tab|. */
++    public static void onMenuItemSelected(@Nullable Tab tab) {
++        WebContents webContents = tab != null ? tab.getWebContents() : null;
++        if (tab == null || webContents == null || !isWebPage(tab.getUrl())) {
++            showNoMediaToast();
++            return;
++        }
++        // Every frame says how good its video is, then only the best frame opens its player.
++        run(
++                webContents,
++                "probe",
++                null,
++                results -> {
++                    String token = bestFrame(results);
++                    if (token == null) {
++                        showNoMediaToast();
++                        return;
++                    }
++                    JSONObject options = new JSONObject();
++                    try {
++                        options.put("token", token);
++                    } catch (JSONException e) {
++                        return;
++                    }
++                    run(webContents, "open", options.toString(), null);
++                });
++    }
++
++    /**
++     * Puts the CromIKO button on the videos of web pages when they load. Frames often load their
++     * player after the page, so this runs again whenever a page stops loading.
++     *
++     * @return The observer, to destroy with the activity.
++     */
++    public static TabModelSelectorTabObserver observeTabs(TabModelSelector tabModelSelector) {
++        return new TabModelSelectorTabObserver(tabModelSelector) {
++            @Override
++            public void onPageLoadFinished(Tab tab, GURL url) {
++                scan(tab);
++            }
++
++            @Override
++            public void onLoadStopped(Tab tab, boolean toDifferentDocument) {
++                scan(tab);
++            }
++        };
++    }
++
++    private static void scan(Tab tab) {
++        WebContents webContents = tab.getWebContents();
++        if (webContents != null && !tab.isNativePage() && isWebPage(tab.getUrl())) {
++            run(webContents, "scan", null, null);
++        }
++    }
++
++    private static void run(
++            WebContents webContents,
++            String command,
++            @Nullable String options,
++            @Nullable Callback<String> callback) {
++        String script = getScript();
++        if (script == null) return;
++        String args =
++                JSONObject.quote(command)
++                        + ", "
++                        + (options != null ? options : "null")
++                        + ", "
++                        + getTexts();
++        CromikoPageScripts.executeInAllFrames(
++                webContents,
++                script.replace(ARGS_PLACEHOLDER, args),
++                callback != null ? callback : result -> {});
++    }
++
++    private static boolean isWebPage(@Nullable GURL url) {
++        if (url == null || !url.isValid()) return false;
++        String scheme = url.getScheme();
++        return UrlConstants.HTTP_SCHEME.equals(scheme) || UrlConstants.HTTPS_SCHEME.equals(scheme);
++    }
++
++    /**
++     * The token of the frame with the best video or audio.
++     *
++     * @param results A JSON array with the result of "probe" in each frame.
++     */
++    private static @Nullable String bestFrame(String results) {
++        String best = null;
++        double bestScore = 0;
++        try {
++            JSONArray frames = new JSONArray(results);
++            for (int i = 0; i < frames.length(); i++) {
++                JSONObject result = new JSONObject(frames.optString(i, "{}"));
++                double score = result.optDouble("score", 0);
++                if (score > bestScore) {
++                    bestScore = score;
++                    best = result.optString("token", null);
++                }
++            }
++        } catch (JSONException e) {
++            // The results of a frame are not valid: use the others.
++        }
++        return best;
++    }
++
++    private static void showNoMediaToast() {
++        Toast.makeText(
++                        ContextUtils.getApplicationContext(),
++                        R.string.cromiko_video_player_no_media,
++                        Toast.LENGTH_SHORT)
++                .show();
++    }
++
++    private static @Nullable String getScript() {
++        if (sScript == null) {
++            Context context = ContextUtils.getApplicationContext();
++            try (InputStream stream = context.getResources().openRawResource(R.raw.cromiko_video)) {
++                sScript = new String(FileUtils.readStream(stream), StandardCharsets.UTF_8);
++            } catch (IOException e) {
++                Log.e(TAG, "Cannot read the video player script", e);
++            }
++        }
++        return sScript;
++    }
++
++    /** The texts of the page script, in the language of the app. */
++    private static String getTexts() {
++        if (sTexts != null) return sTexts;
++        Context context = ContextUtils.getApplicationContext();
++        JSONObject texts = new JSONObject();
++        Object[][] entries = {
++            {"open", R.string.cromiko_video_player_open},
++            {"hiddenOnPage", R.string.cromiko_video_player_hidden_on_page},
++            {"subtitles", R.string.cromiko_video_player_subtitles},
++            {"subtitlesOff", R.string.cromiko_video_player_subtitles_off},
++            {"speed", R.string.cromiko_video_player_speed},
++            {"normal", R.string.cromiko_video_player_normal_speed},
++            {"pip", R.string.cromiko_video_player_pip},
++            {"pipFailed", R.string.cromiko_video_player_pip_failed},
++            {"more", R.string.cromiko_video_player_more},
++            {"close", R.string.cromiko_video_player_close},
++            {"back", R.string.cromiko_video_player_back},
++            {"forward", R.string.cromiko_video_player_forward},
++            {"play", R.string.cromiko_video_player_play},
++            {"pause", R.string.cromiko_video_player_pause},
++            {"seek", R.string.cromiko_video_player_seek},
++            {"live", R.string.cromiko_video_player_live},
++            {"lock", R.string.cromiko_video_player_lock},
++            {"unlock", R.string.cromiko_video_player_unlock},
++            {"locked", R.string.cromiko_video_player_locked},
++            {"unlocked", R.string.cromiko_video_player_unlocked},
++            {"fit", R.string.cromiko_video_player_fit},
++            {"fitScreen", R.string.cromiko_video_player_fit_screen},
++            {"zoom", R.string.cromiko_video_player_zoom},
++            {"stretch", R.string.cromiko_video_player_stretch},
++            {"rotate", R.string.cromiko_video_player_rotate},
++            {"rotateFailed", R.string.cromiko_video_player_rotate_failed},
++            {"on", R.string.cromiko_video_player_on},
++            {"off", R.string.cromiko_video_player_off},
++            {"loop", R.string.cromiko_video_player_loop},
++            {"loopOn", R.string.cromiko_video_player_loop_on},
++            {"loopOff", R.string.cromiko_video_player_loop_off},
++            {"background", R.string.cromiko_video_player_background},
++            {"backgroundOn", R.string.cromiko_video_player_background_on},
++            {"backgroundOff", R.string.cromiko_video_player_background_off},
++            {"sleep", R.string.cromiko_video_player_sleep},
++            {"sleepDone", R.string.cromiko_video_player_sleep_done},
++            {"resume", R.string.cromiko_video_player_resume},
++        };
++        try {
++            for (Object[] entry : entries) {
++                texts.put((String) entry[0], context.getString((Integer) entry[1]));
++            }
++        } catch (JSONException e) {
++            // Not reached: the names and values are never null.
++        }
++        sTexts = texts.toString();
++        return sTexts;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -508,6 +508,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         // Find in page
+         if (shouldShowFindInPageItem(currentTab)) modelList.add(buildFindInPageItem(currentTab));
+         if (shouldShowMangaModeItem(currentTab)) modelList.add(buildMangaModeItem());
++        if (shouldShowMangaModeItem(currentTab)) modelList.add(buildVideoPlayerItem());
+ 
+         // Lens Overlay
+         if (shouldShowLensOverlayItem(currentTab)) modelList.add(buildLensOverlayItem(currentTab));
+@@ -743,6 +744,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+         // Find in page
+         if (shouldShowFindInPageItem(currentTab)) modelList.add(buildFindInPageItem(currentTab));
+         if (shouldShowMangaModeItem(currentTab)) modelList.add(buildMangaModeItem());
++        if (shouldShowMangaModeItem(currentTab)) modelList.add(buildVideoPlayerItem());
+ 
+         // Lens Overlay
+         if (shouldShowLensOverlayItem(currentTab)) modelList.add(buildLensOverlayItem(currentTab));
+@@ -1702,6 +1704,21 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         isMenuIconAtStart()));
+     }
+ 
++    // CromIKO: the CromIKO player, on web pages like manga mode.
++    private ListItem buildVideoPlayerItem() {
++        return new ListItem(
++                AppMenuHandler.AppMenuItemType.STANDARD,
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.cromiko_video_player_menu_id,
++                        R.string.cromiko_video_player_menu,
++                        shouldShowIconBeforeItem()
++                                ? R.drawable.cromiko_ic_player_24dp
++                                : Resources.ID_NULL,
++                        isMenuIconAtStart()));
++    }
++
+     private boolean shouldShowLensOverlayItem(@Nullable Tab currentTab) {
+         return LensOverlayTabHelper.shouldShowLensOverlay(currentTab);
+     }
+diff --git a/chrome/browser/cromiko/android/cromiko_page_scripts.cc b/chrome/browser/cromiko/android/cromiko_page_scripts.cc
+--- a/chrome/browser/cromiko/android/cromiko_page_scripts.cc
++++ b/chrome/browser/cromiko/android/cromiko_page_scripts.cc
+@@ -3,11 +3,13 @@
+ 
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/android/callback_android.h"
+ #include "base/android/jni_android.h"
+ #include "base/android/jni_string.h"
+ #include "base/android/scoped_java_ref.h"
++#include "base/barrier_callback.h"
+ #include "base/functional/bind.h"
+ #include "base/json/json_writer.h"
+ #include "base/values.h"
+@@ -34,6 +36,16 @@ void OnScriptResult(const ScopedJavaGlobalRef<jobject>& callback,
+   base::android::RunStringCallbackAndroid(callback, text);
+ }
+ 
++void OnAllFramesResult(const ScopedJavaGlobalRef<jobject>& callback,
++                       std::vector<base::Value> results) {
++  base::ListValue list;
++  for (base::Value& result : results) {
++    list.Append(std::move(result));
++  }
++  base::android::RunStringCallbackAndroid(
++      callback, base::WriteJson(list).value_or("[]"));
++}
++
+ }  // namespace
+ 
+ static void JNI_CromikoPageScripts_Execute(
+@@ -56,4 +68,34 @@ static void JNI_CromikoPageScripts_Execute(
+       ISOLATED_WORLD_ID_CHROME_INTERNAL);
+ }
+ 
++static void JNI_CromikoPageScripts_ExecuteInAllFrames(
++    JNIEnv* env,
++    const JavaRef<jobject>& j_web_contents,
++    const JavaRef<jstring>& j_script,
++    const JavaRef<jobject>& j_callback) {
++  ScopedJavaGlobalRef<jobject> callback(env, j_callback);
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(j_web_contents);
++  std::vector<content::RenderFrameHost*> frames;
++  if (web_contents) {
++    web_contents->GetPrimaryMainFrame()->ForEachRenderFrameHost(
++        [&frames](content::RenderFrameHost* frame) {
++          if (frame->IsRenderFrameLive()) {
++            frames.push_back(frame);
++          }
++        });
++  }
++  if (frames.empty()) {
++    base::android::RunStringCallbackAndroid(callback, "[]");
++    return;
++  }
++  std::u16string script = base::android::ConvertJavaStringToUTF16(env, j_script);
++  auto on_result = base::BarrierCallback<base::Value>(
++      frames.size(), base::BindOnce(&OnAllFramesResult, std::move(callback)));
++  for (content::RenderFrameHost* frame : frames) {
++    frame->ExecuteJavaScriptInIsolatedWorld(script, on_result,
++                                            ISOLATED_WORLD_ID_CHROME_INTERNAL);
++  }
++}
++
+ DEFINE_JNI(CromikoPageScripts)
+diff --git a/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java
+--- a/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java
++++ b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java
+@@ -29,8 +29,22 @@ public final class CromikoPageScripts {
+         CromikoPageScriptsJni.get().execute(webContents, script, callback);
+     }
+ 
++    /**
++     * Runs a script in every frame of a page, also in frames of other sites.
++     *
++     * @param webContents The page.
++     * @param script The script.
++     * @param callback Called once with a JSON array of the values of the script in the frames.
++     */
++    public static void executeInAllFrames(
++            WebContents webContents, String script, Callback<String> callback) {
++        CromikoPageScriptsJni.get().executeInAllFrames(webContents, script, callback);
++    }
++
+     @NativeMethods
+     interface Natives {
+         void execute(WebContents webContents, String script, Callback<String> callback);
++
++        void executeInAllFrames(WebContents webContents, String script, Callback<String> callback);
+     }
+ }
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Video-Player.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Video-Player.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Video-Player.grdp
+@@ -0,0 +1,120 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_MENU" desc="App menu item that opens the main video or audio of the page in the CromIKO player. [CHAR_LIMIT=27]">
++        CromIKO player
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_NO_MEDIA" desc="Shown when the CromIKO player is chosen on a page without video or audio.">
++        No video or audio on this page
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_OPEN" desc="Accessibility label of the small button on videos that opens them in the CromIKO player.">
++        Open in CromIKO player
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_HIDDEN_ON_PAGE" desc="Shown after a long press on the small player button: the buttons are hidden until the page is loaded again.">
++        Player buttons hidden on this page
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_SUBTITLES" desc="Button of the video player that switches between the subtitles of the video.">
++        Subtitles
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_SUBTITLES_OFF" desc="Shown when the subtitles of the video are turned off.">
++        Subtitles off
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_SPEED" desc="Button and menu of the video player for the playback speed.">
++        Playback speed
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_NORMAL_SPEED" desc="Playback speed 1x in the speed menu of the video player.">
++        Normal
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_PIP" desc="Button of the video player that shows the video in a small window.">
++        Picture in picture
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_PIP_FAILED" desc="Shown when the video cannot be shown in a small window.">
++        Picture in picture is not available
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_MORE" desc="Button of the video player that opens more options.">
++        More options
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_CLOSE" desc="Button that closes the video player.">
++        Close player
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_BACK" desc="Button of the video player that goes 10 seconds back.">
++        Back 10 seconds
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_FORWARD" desc="Button of the video player that goes 10 seconds forward.">
++        Forward 10 seconds
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_PLAY" desc="Button of the video player that plays the video.">
++        Play
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_PAUSE" desc="Button of the video player that pauses the video.">
++        Pause
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_SEEK" desc="Accessibility label of the time bar of the video player.">
++        Seek
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_LIVE" desc="Shown instead of the duration of a live stream in the video player.">
++        Live
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_LOCK" desc="Button of the video player that locks the controls, so taps do nothing.">
++        Lock controls
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_UNLOCK" desc="Button of the video player that unlocks the controls.">
++        Unlock
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_LOCKED" desc="Shown when the controls of the video player are locked.">
++        Controls locked
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_UNLOCKED" desc="Shown when the controls of the video player are unlocked.">
++        Controls unlocked
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_FIT" desc="Button of the video player that changes how the video fills the screen.">
++        Fit to screen
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_FIT_SCREEN" desc="The whole video is shown on the screen.">
++        Fit to screen
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_ZOOM" desc="The video is zoomed to fill the screen.">
++        Zoom to fill
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_STRETCH" desc="The video is stretched to fill the screen.">
++        Stretch
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_ROTATE" desc="Button of the video player that rotates the screen.">
++        Rotate
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_ROTATE_FAILED" desc="Shown when the screen cannot be rotated.">
++        Rotation is available in full screen
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_ON" desc="An option of the video player is on. [CHAR_LIMIT=10]">
++        On
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_OFF" desc="An option of the video player is off. [CHAR_LIMIT=10]">
++        Off
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_LOOP" desc="Option of the video player that plays the video again when it ends.">
++        Loop
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_LOOP_ON" desc="Shown when the loop option is turned on.">
++        Loop on
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_LOOP_OFF" desc="Shown when the loop option is turned off.">
++        Loop off
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_BACKGROUND" desc="Option of the video player that keeps playing when CromIKO is in the background.">
++        Background play
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_BACKGROUND_ON" desc="Shown when background play is turned on.">
++        Background play on
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_BACKGROUND_OFF" desc="Shown when background play is turned off.">
++        Background play off
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_SLEEP" desc="Option of the video player that pauses after some minutes.">
++        Sleep timer
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_SLEEP_DONE" desc="Shown when the sleep timer paused the video.">
++        Sleep timer: paused
++    </message>
++    <message name="IDS_CROMIKO_VIDEO_PLAYER_RESUME" desc="Button of the video player that goes to where the user stopped last time, followed by the time.">
++        Continue at
++    </message>
++</grit-part>
+diff --git a/components/browser_ui/theme/android/BUILD.gn b/components/browser_ui/theme/android/BUILD.gn
+--- a/components/browser_ui/theme/android/BUILD.gn
++++ b/components/browser_ui/theme/android/BUILD.gn
+@@ -14,6 +14,7 @@ android_resources("java_resources") {
+     "java/res/drawable/cromiko_ic_fire_24dp.xml",
+     "java/res/drawable/cromiko_ic_incognito_tile.xml",
+     "java/res/drawable/cromiko_ic_manga_24dp.xml",
++    "java/res/drawable/cromiko_ic_player_24dp.xml",
+     "java/res/drawable/cromiko_splash_icon.xml",
+     "java/res/drawable/cromiko_welcome_mascot.xml",
+     "java/res/values-night/colors.xml",
+diff --git a/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_player_24dp.xml b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_player_24dp.xml
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_player_24dp.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++The CromIKO player icon (Material "play_circle").
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="@macro/default_icon_color">
++  <path
++      android:fillColor="@android:color/white"
++      android:pathData="M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM10,16.5v-9l6,4.5 -6,4.5z"/>
++</vector>
+--
