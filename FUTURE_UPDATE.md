@@ -8,7 +8,7 @@ its own `CromIKO-*.patch`, like the features so far.
 | Video and audio player            | 10     | large  | done    |
 | Download manager with threads     | 9      | medium | done    |
 | Manga mode: continue reading      | 6      | small  | done    |
-| Incognito lock                    | 5      | small  |         |
+| Incognito lock                    | 5      | small  | done    |
 | Dark mode per site                | 4      | small  |         |
 | Built-in DNS                      | 2      | small  |         |
 | Customizable home screen          | 1      | large  |         |
@@ -65,11 +65,18 @@ Done in `CromIKO-Manga-Continue-Reading.patch`.
 - The next chapter and its first images load early (a check box in the manga
   mode dialog turns this off).
 
-## Incognito lock (weight 5)
+## Incognito lock (weight 5) - done
 
-- Require fingerprint, face or PIN to go back to incognito tabs after
-  leaving the app.
-- Hide incognito tab content in the recent apps screen.
+Done in `CromIKO-Incognito-Lock.patch`, building on Chromium's incognito
+lock.
+
+- Fingerprint, face or PIN to go back to incognito tabs after leaving the
+  app: on by default (on devices with a screen lock), with a choice of when
+  to lock (right away, or 1, 5 or 15 minutes after leaving).
+- "Lock Incognito tabs" in the incognito menu locks them right away.
+- The lock screen shows the mascot with a lock.
+- Incognito tabs are hidden in the recent apps screen, also when
+  screenshots in incognito are allowed.
 
 ## Dark mode per site (weight 4)
 
