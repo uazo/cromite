@@ -34,19 +34,19 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../java/res/layout/cromiko_shield_stats.xml  |  11 +
  .../xml/cromiko_shield_report_preferences.xml |  33 +++
  .../browser/cromiko/CromikoShieldReport.java  | 203 ++++++++++++++++
- .../cromiko/CromikoShieldReportChart.java     | 113 +++++++++
+ .../cromiko/CromikoShieldReportChart.java     | 116 +++++++++
  .../cromiko/CromikoShieldReportHeader.java    |  76 ++++++
  .../cromiko/CromikoShieldStatsView.java       |   6 +-
  .../chrome_browsing_data_remover_delegate.cc  |   7 +
  chrome/browser/cromiko/BUILD.gn               |  18 +-
- .../android/cromiko_shield_report_bridge.cc   |  20 ++
+ .../android/cromiko_shield_report_bridge.cc   |  22 ++
  .../cromiko/CromikoShieldReportBridge.java    |  35 +++
  .../CromIKO-Shield-Report.grdp                |  51 ++++
  .../resource_classification_runner_impl.cc    |   5 +-
  ...ent_subresource_filter_throttle_manager.cc |   7 +-
- .../content/browser/cromiko_shield_stats.cc   | 218 ++++++++++++++++--
+ .../content/browser/cromiko_shield_stats.cc   | 223 ++++++++++++++++--
  .../content/browser/cromiko_shield_stats.h    |  40 +++-
- 18 files changed, 897 insertions(+), 32 deletions(-)
+ 18 files changed, 907 insertions(+), 32 deletions(-)
  create mode 100644 chrome/android/java/res/layout/cromiko_shield_report_header.xml
  create mode 100644 chrome/android/java/res/xml/cromiko_shield_report_preferences.xml
  create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReport.java
@@ -443,7 +443,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/Cromiko
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportChart.java
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,116 @@
 +// Copyright 2026 The CromIKO Authors
 +// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 +
@@ -455,6 +455,7 @@ new file mode 100644
 +import android.graphics.RectF;
 +import android.graphics.Typeface;
 +import android.util.AttributeSet;
++import android.util.TypedValue;
 +import android.view.View;
 +
 +import org.chromium.build.annotations.NullMarked;
@@ -492,7 +493,9 @@ new file mode 100644
 +        mDensity = getResources().getDisplayMetrics().density;
 +        mAccentColor = context.getColor(R.color.cromiko_accent_color);
 +        mLabelPaint.setTextAlign(Paint.Align.CENTER);
-+        mLabelPaint.setTextSize(12 * getResources().getDisplayMetrics().scaledDensity);
++        mLabelPaint.setTextSize(
++                TypedValue.applyDimension(
++                        TypedValue.COMPLEX_UNIT_SP, 12, getResources().getDisplayMetrics()));
 +        mLabelPaint.setColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
 +        for (int i = 0; i < DAYS; i++) {
 +            mLabels[i] =
@@ -748,7 +751,7 @@ diff --git a/chrome/browser/cromiko/android/cromiko_shield_report_bridge.cc b/ch
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/cromiko/android/cromiko_shield_report_bridge.cc
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,22 @@
 +// Copyright 2026 The CromIKO Authors
 +// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 +
@@ -769,6 +772,8 @@ new file mode 100644
 +                             profile->GetOriginalProfile()->GetPrefs()))
 +      .value_or("{}");
 +}
++
++DEFINE_JNI(CromikoShieldReportBridge)
 diff --git a/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java
 new file mode 100644
 --- /dev/null
@@ -903,7 +908,7 @@ diff --git a/components/subresource_filter/content/browser/content_subresource_f
 diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.cc b/components/subresource_filter/content/browser/cromiko_shield_stats.cc
 --- a/components/subresource_filter/content/browser/cromiko_shield_stats.cc
 +++ b/components/subresource_filter/content/browser/cromiko_shield_stats.cc
-@@ -3,31 +3,134 @@
+@@ -3,31 +3,140 @@
  
  #include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
  
@@ -937,6 +942,12 @@ diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.
 +constexpr size_t kSitesAfterTrim = 300;
 +// The sites and trackers kept for the week before.
 +constexpr size_t kTopSites = 10;
++
++// Adds counts without overflowing. ClampAdd() converts to any number type, so
++// it can't be passed to the overloads of base::DictValue::Set() as it is.
++int Add(int a, int b) {
++  return base::ClampAdd(a, b);
++}
 +
 +// The day number of today in local time, and the one of the Monday of its week.
 +void GetToday(int* today, int* week) {
@@ -1004,7 +1015,7 @@ diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.
 +    return;
 +  }
 +  ScopedDictPrefUpdate update(prefs, pref);
-+  update->Set(key, base::ClampAdd(update->FindInt(key).value_or(0), count));
++  update->Set(key, Add(update->FindInt(key).value_or(0), count));
 +  if (update->size() > kMaxSites) {
 +    // Forgets the sites with the smallest counts.
 +    update.Get() = Top(*update, kSitesAfterTrim);
@@ -1047,7 +1058,7 @@ diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.
  }
  
  }  // namespace
-@@ -35,19 +138,102 @@ int CurrentWeek() {
+@@ -35,19 +144,101 @@ int CurrentWeek() {
  void RegisterProfilePrefs(PrefRegistrySimple* registry) {
    registry->RegisterIntegerPref(kWeekPref, 0);
    registry->RegisterIntegerPref(kBlockedPref, 0);
@@ -1080,13 +1091,12 @@ diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.
 +  int week;
 +  GetToday(&today, &week);
 +  MaybeStartWeek(prefs, week);
-+  prefs->SetInteger(kBlockedPref,
-+                    base::ClampAdd(prefs->GetInteger(kBlockedPref), count));
++  prefs->SetInteger(kBlockedPref, Add(prefs->GetInteger(kBlockedPref), count));
 +
 +  {
 +    ScopedDictPrefUpdate days(prefs, kDaysPref);
 +    const std::string key = base::NumberToString(today);
-+    days->Set(key, base::ClampAdd(days->FindInt(key).value_or(0), count));
++    days->Set(key, Add(days->FindInt(key).value_or(0), count));
 +    std::vector<std::string> old_days;
 +    for (auto [day_key, value] : *days) {
 +      int day;
