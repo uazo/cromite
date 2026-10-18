@@ -13,6 +13,13 @@ its own `CromIKO-*.patch`, like the features so far.
 | Built-in DNS                      | 2      | small  | done    |
 | Customizable home screen          | 1      | large  | done    |
 
+Second round, picked from the update ideas:
+
+| Feature                           | Effort | Status  |
+|-----------------------------------|:------:|:-------:|
+| Weekly shield report              | medium | done    |
+| Custom accent color picker        | medium | next    |
+
 ## Video and audio player (weight 10) - done
 
 Done in `CromIKO-Video-Player.patch`.
@@ -108,3 +115,22 @@ Done in `CromIKO-Home-Screen.patch`.
   week (small: one download).
 - The layout is kept with the app's settings (CromIKO on Android has one
   browsing profile), and Reset is one tap.
+
+## Weekly shield report - done
+
+Done in `CromIKO-Shield-Report.patch`. The shield card of the new tab page
+opens it ("Weekly report").
+
+- Ads and trackers blocked this week, compared with the same days of last
+  week (Monday to yesterday), and last week's total.
+- A bar for each day from Monday to Sunday, today in the accent color.
+- The 5 sites where CromIKO blocked the most, and the 5 trackers and ad
+  servers it blocked the most; early in the week, last week's lists.
+- Kept on the device only, never for Incognito tabs. Deleting browsing
+  history (also with the Fire button) removes the sites; the counts stay.
+
+## Custom accent color picker - next
+
+- Pick the accent color of CromIKO instead of periwinkle (#5C7CFC), with a
+  few colors that go with the charcoal mascot and a custom one.
+- The color applies to the whole browser, like the periwinkle theme now.
