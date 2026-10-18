@@ -16,8 +16,11 @@ def page(ch, async_images):
         f'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" '
         f'data-src="/img/c{ch}p{i}.svg" alt=""><div class="protect"></div></div>'
         for i in range(1, 13 if ch == 5 else 9))
+    # Chapter 4 has the Open Graph tags of many sites, with the series cover.
+    og = ('<meta property="og:title" content="Read Series Chapter 4 Online - Manga Site">'
+          '<meta property="og:image" content="/cover.svg">') if ch == 4 else ''
     return f'''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Chapter {ch}</title><link rel="stylesheet" href="/site.css"></head>
+<title>Chapter {ch}</title>{og}<link rel="stylesheet" href="/site.css"></head>
 <body data-ch="{ch}"><header class="site-header"><img class="logo" src="/logo.svg" alt="logo"> Manga Site
 <nav class="menu"><a href="/">Home</a> <a href="/list">List</a></nav></header>
 <div class="wrap"><div class="main"><h1>Series - Chapter {ch}</h1>{nav}
@@ -67,7 +70,7 @@ class H(http.server.BaseHTTPRequestHandler):
         if p == '/home.html':
             return self.send('<!doctype html><html><body><h1>Home</h1><img class="logo" src="/logo.svg">'
                              '<div class="reading-content"></div></body></html>', 'text/html')
-        static = {'/logo.svg': svg(120, 40, 'LOGO', '#444'), '/avatar.svg': svg(40, 40, ':)', '#999'),
+        static = {'/cover.svg': svg(300, 420, 'COVER', '#5c7cfc'), '/logo.svg': svg(120, 40, 'LOGO', '#444'), '/avatar.svg': svg(40, 40, ':)', '#999'),
                   '/banner.svg': svg(300, 250, 'BANNER', '#f00'), '/ad.svg': svg(320, 50, 'AD', '#f0f')}
         if p in static:
             return self.send(static[p], 'image/svg+xml')

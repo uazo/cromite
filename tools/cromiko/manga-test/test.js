@@ -1,30 +1,41 @@
-// Tests the manga mode page script (cromiko_manga.js in CromIKO-Manga-Mode.patch)
-// in headless Chromium like CromikoMangaMode.java runs it: in an isolated world,
-// with taps on a mobile viewport, on a fake manga site (server.py) that loads its
-// images lazily or with a script, and has a strict Content Security Policy.
+// Tests the manga mode page script (cromiko_manga.js in CromIKO-Manga-Mode.patch,
+// changed by CromIKO-Manga-Continue-Reading.patch) in headless Chromium like
+// CromikoMangaMode.java runs it: in an isolated world, with taps on a mobile
+// viewport, on a fake manga site (server.py) that loads its images lazily or with
+// a script, and has a strict Content Security Policy.
 //
 // Usage (needs Python 3, Node.js and Playwright with Chromium):
 //   python3 tools/cromiko/manga-test/server.py 8765 &
 //   node tools/cromiko/manga-test/test.js [path/to/cromiko_manga.js]
 // Screenshots are written to tools/cromiko/manga-test/out/.
+const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { chromium } = require('playwright');
 
 const BASE = 'http://127.0.0.1:8765';
-const PATCH = path.join(__dirname, '../../../build/patches/CromIKO-Manga-Mode.patch');
-const SOURCE = process.argv[2] ? fs.readFileSync(process.argv[2], 'utf8') : scriptFromPatch();
+const PATCHES = path.join(__dirname, '../../../build/patches');
+const SCRIPT = 'chrome/android/java/res/raw/cromiko_manga.js';
+const SOURCE = process.argv[2] ? fs.readFileSync(process.argv[2], 'utf8') : scriptFromPatches();
 const OUT = path.join(__dirname, 'out');
 
-// The script as added by the patch.
-function scriptFromPatch() {
-  const lines = fs.readFileSync(PATCH, 'utf8').split('\n');
-  const start = lines.indexOf('+++ b/chrome/android/java/res/raw/cromiko_manga.js');
+// The script as added by CromIKO-Manga-Mode.patch, with the changes of the later
+// patches.
+function scriptFromPatches() {
+  const lines = fs.readFileSync(path.join(PATCHES, 'CromIKO-Manga-Mode.patch'), 'utf8').split('\n');
+  const start = lines.indexOf('+++ b/' + SCRIPT);
   const out = [];
   for (let i = start + 2; i < lines.length && !lines[i].startsWith('diff --git'); i++) {
     if (lines[i].startsWith('+')) out.push(lines[i].slice(1));
   }
-  return out.join('\n') + '\n';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cromiko-manga-'));
+  fs.mkdirSync(path.join(dir, path.dirname(SCRIPT)), { recursive: true });
+  fs.writeFileSync(path.join(dir, SCRIPT), out.join('\n') + '\n');
+  for (const later of ['CromIKO-Manga-Continue-Reading.patch']) {
+    execFileSync('git', ['apply', '--include=' + SCRIPT, path.join(PATCHES, later)], { cwd: dir });
+  }
+  return fs.readFileSync(path.join(dir, SCRIPT), 'utf8');
 }
 const TEXTS = {
   stepNext: 'Tap the NEXT chapter button',
@@ -239,6 +250,97 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   await sleep(1000);
   check('home page stays as it is', (await run('state')).state === 'waiting' &&
         (await display('h1')) !== 'none');
+
+  // --- Continue reading: progress and what the chapter is -------------------
+  const loadAll = async () => {
+    for (let i = 0; i < 14; i++) { await page.mouse.wheel(0, 700); await sleep(200); }
+  };
+  await page.goto(BASE + '/ch-2.html');
+  await page.waitForLoadState('load');
+  await newWorld();
+  check('auto opens on chapter 2 again', (await run('auto', config)).state === 'reading');
+  let prog = await run('progress');
+  check('progress at the top', prog.state === 'reading' && prog.index === 0 && prog.offset === 0 &&
+        prog.progress === 0, prog);
+  check('chapter 2 described', prog.series === 'Series' && prog.chapter === '2' &&
+        prog.key === '127.0.0.1/series' && prog.url === BASE + '/ch-2.html' &&
+        prog.next === BASE + '/ch-3.html', prog);
+  await loadAll();
+  await page.evaluate(() => {
+    const r = document.querySelectorAll('.reading-content img')[3].getBoundingClientRect();
+    window.scrollTo(0, window.scrollY + r.top + r.height / 2);
+  });
+  await sleep(300);
+  prog = await run('progress');
+  check('progress in the middle of page 4 of 8', prog.index === 3 && Math.abs(prog.offset - 0.5) < 0.01 &&
+        Math.abs(prog.progress - 3.5 / 8) < 0.01, prog);
+  check('cover is the first page without og:image', prog.cover === BASE + '/img/c2p1.svg', prog.cover);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  await sleep(300);
+  check('progress 1 at the end of the chapter', (await run('progress')).progress === 1);
+
+  await page.goto(BASE + '/ch-4.html');
+  await page.waitForLoadState('load');
+  await newWorld();
+  check('auto opens on chapter 4 again', (await run('auto', config)).state === 'reading');
+  prog = await run('progress');
+  check('chapter 4 described from og:title and og:image', prog.series === 'Series' && prog.chapter === '4' &&
+        prog.key === '127.0.0.1/series' && prog.cover === BASE + '/cover.svg' &&
+        prog.next === BASE + '/ch-5.html', prog);
+  check('progress is idle without reader', (await run('stop'), (await run('progress')).state === 'idle'));
+
+  // --- Continue reading: resume where the user stopped ----------------------
+  const resumeConfig = Object.assign({}, config, { resume: { url: BASE + '/ch-5.html', index: 6, offset: 0.5 } });
+  await page.goto(BASE + '/ch-5.html');
+  await page.waitForLoadState('load');
+  await newWorld();
+  check('auto with resume opens on chapter 5', (await run('auto', resumeConfig)).state === 'reading');
+  prog = await run('progress');
+  check('progress reports the saved place while going back to it', prog.index === 6 && prog.offset === 0.5, prog);
+  await sleep(3000);
+  const at = await page.evaluate(() => {
+    const img = document.querySelectorAll('.reading-content img')[6];
+    const r = img.getBoundingClientRect();
+    return { top: Math.round(r.top), height: Math.round(r.height), loaded: img.complete && img.naturalWidth > 100 };
+  });
+  check('resumed half way into page 7 of chapter 5', at.loaded && at.height === 1030 && Math.abs(-at.top - 515) < 5, at);
+  await page.screenshot({ path: path.join(OUT, '7-resumed.png') });
+  await page.mouse.wheel(0, 400);
+  await sleep(400);
+  prog = await run('progress');
+  check('scrolling after resuming moves on', prog.index === 6 && prog.offset > 0.8 && prog.offset < 1, prog);
+  check('resume only once on the page', (await run('read', resumeConfig)).state === 'reading');
+
+  await page.goto(BASE + '/ch-4.html');
+  await page.waitForLoadState('load');
+  await newWorld();
+  await run('auto', resumeConfig);
+  await sleep(500);
+  check('resume is only for its chapter', (await page.evaluate(() => window.scrollY)) === 0);
+
+  // --- Continue reading: load the next chapter early -------------------------
+  const requests = [];
+  page.on('request', r => requests.push(r.url().replace(BASE, '')));
+  const early = () => requests.filter(u => u === '/ch-2.html' || u.startsWith('/img/c2p'));
+  for (const preload of [false, true]) {
+    await page.goto(BASE + '/ch-1.html');
+    await page.waitForLoadState('load');
+    await newWorld();
+    requests.length = 0;
+    await run('auto', Object.assign({}, config, { preload }));
+    await sleep(300);
+    for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 700); await sleep(250); }
+    const before = early().length;
+    await loadAll();
+    await sleep(1500);
+    if (preload) {
+      check('nothing loaded early at the start', before === 0, before);
+      check('next chapter and its 8 images loaded early', early().length === 9 &&
+            early().includes('/ch-2.html'), early());
+    } else {
+      check('nothing loaded early when preload is off', early().length === 0, early());
+    }
+  }
 
   check('no console errors or CSP refusals', consoleErrors.length === 0, consoleErrors);
   console.log('CONFIG ' + JSON.stringify(config));

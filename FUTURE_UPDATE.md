@@ -7,7 +7,7 @@ its own `CromIKO-*.patch`, like the features so far.
 |-----------------------------------|:------:|:------:|:-------:|
 | Video and audio player            | 10     | large  | done    |
 | Download manager with threads     | 9      | medium | done    |
-| Manga mode: continue reading      | 6      | small  |         |
+| Manga mode: continue reading      | 6      | small  | done    |
 | Incognito lock                    | 5      | small  |         |
 | Dark mode per site                | 4      | small  |         |
 | Built-in DNS                      | 2      | small  |         |
@@ -53,11 +53,17 @@ CromIKO download manager.
 - Sorting into folders by type (Download/CromIKO/Videos, Music, Pictures,
   Documents, Apps, Archives), off by default.
 
-## Manga mode: continue reading (weight 6)
+## Manga mode: continue reading (weight 6) - done
 
-- Remember the last chapter and scroll position for each series.
-- A "Continue reading" row on the new tab page, with the series cover.
-- Optionally load the next chapter while you read the current one.
+Done in `CromIKO-Manga-Continue-Reading.patch`.
+
+- The last chapter and the place in it are kept for each series (not in
+  incognito; the Fire button forgets them).
+- A "Continue reading" row on the new tab page, with the series covers and
+  progress. A tap goes back to the same place, or to the next chapter once
+  one is finished; a long press removes a series.
+- The next chapter and its first images load early (a check box in the manga
+  mode dialog turns this off).
 
 ## Incognito lock (weight 5)
 
