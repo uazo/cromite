@@ -100,6 +100,9 @@ Done in `CromIKO-Secure-DNS.patch` and `CromIKO-DNS-Shortcut.patch`, as
 - Quad9 is CromIKO's default provider; secure DNS is on by default.
 - One tap away: a "CromIKO DNS" button next to Bookmarks and Downloads on
   the new tab page, and an item in the app menu.
+- Its own animated screen (`CromIKO-DNS-Screen.patch`): an orbit that lights
+  up when it is on, a big switch, "Test connection", and the providers as
+  cards that tell what they filter, in the accent color.
 
 ## Customizable home screen (weight 1) - done
 
