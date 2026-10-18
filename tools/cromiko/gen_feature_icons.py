@@ -9,9 +9,13 @@ color, it still reads, as the star never touches the rest.
 Usage:
 
   python3 gen_feature_icons.py cromiko-logo.svg icons
+  python3 gen_feature_icons.py cromiko-logo.svg --install ~/chromium/src
 
-It writes icons/<name>.svg (two colors), icons/<name>_mono.svg (one color) and
-icons/preview.html (all icons, light and dark, large and at 24 and 48 px).
+The first writes icons/<name>.svg (two colors), icons/<name>_mono.svg (one
+color) and icons/preview.html (all icons, light and dark, large and at 24 and
+48 px). The second writes the VectorDrawables of CromIKO-Feature-Icons.patch
+into a Chromium checkout: one color, the default icon color, which the menu,
+the shortcuts and the lists tint as they need.
 """
 import json
 import os
@@ -209,6 +213,60 @@ def preview(all_icons):
             '<div class="grid">%s</div></body></html>' % ''.join(cells))
 
 
+THEME_RES = 'components/browser_ui/theme/android/java/res/drawable/'
+CHROME_RES = 'chrome/android/java/res/drawable/'
+# The drawable of each icon in Chromium, and the color it has without a tint:
+# the "Edit home screen" button shows it as it is, in the accent color.
+DRAWABLES = {
+    'dns': (THEME_RES + 'cromiko_ic_dns_24dp.xml', None),
+    'adblock': (THEME_RES + 'cromiko_ic_adblock_24dp.xml', None),
+    'fire': (THEME_RES + 'cromiko_ic_fire_24dp.xml', None),
+    'lock': (THEME_RES + 'cromiko_ic_lock_24dp.xml', None),
+    'manga': (THEME_RES + 'cromiko_ic_manga_24dp.xml', None),
+    'player': (THEME_RES + 'cromiko_ic_player_24dp.xml', None),
+    'downloads': (THEME_RES + 'cromiko_ic_downloads_24dp.xml', None),
+    'home_edit': (CHROME_RES + 'cromiko_ic_home_edit_24dp.xml', '?attr/colorPrimary'),
+    'report': (THEME_RES + 'cromiko_ic_report_24dp.xml', None),
+    'accent': (THEME_RES + 'cromiko_ic_accent_24dp.xml', None),
+}
+
+
+def vector_drawable(icon, color):
+    """Returns the icon as a one-color VectorDrawable: white tinted with the
+    default icon color, or |color| without a tint."""
+    title, fills, strokes, star = icon
+    fill = color or '@android:color/white'
+    paths = ''.join(
+        '\n  <path\n      android:fillColor="%s"\n      android:fillType="evenOdd"\n'
+        '      android:pathData="%s"/>' % (fill, d) for d in fills)
+    paths += ''.join(
+        '\n  <path\n      android:strokeColor="%s"\n      android:strokeWidth="2.6"\n'
+        '      android:strokeLineCap="round"\n      android:strokeLineJoin="round"\n'
+        '      android:pathData="%s"/>' % (fill, d) for d in strokes)
+    paths += '\n  <path\n      android:fillColor="%s"\n      android:pathData="%s"/>' % (
+        fill, star)
+    tint = '' if color else '\n    android:tint="@macro/default_icon_color"'
+    return ('<?xml version="1.0" encoding="utf-8"?>\n<!--\n'
+            'Copyright 2026 The CromIKO Authors\n'
+            'License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html\n'
+            'The %s icon, drawn from the CromIKO logo by\n'
+            'tools/cromiko/gen_feature_icons.py.\n-->\n'
+            '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
+            '    android:width="24dp"\n    android:height="24dp"\n'
+            '    android:viewportWidth="24"\n    android:viewportHeight="24"%s>%s\n'
+            '</vector>\n' % (title, tint, paths))
+
+
+def install(svg_path, src_dir):
+    all_icons = icons(Logo(svg_path))
+    for name, (path, color) in DRAWABLES.items():
+        out = os.path.join(src_dir, path)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, 'w') as f:
+            f.write(vector_drawable(all_icons[name], color))
+    print('Wrote %d drawables to %s' % (len(DRAWABLES), src_dir))
+
+
 def main(svg_path, out_dir):
     os.makedirs(out_dir, exist_ok=True)
     all_icons = icons(Logo(svg_path))
@@ -224,4 +282,7 @@ def main(svg_path, out_dir):
 
 
 if __name__ == '__main__':
-    main(*sys.argv[1:3])
+    if len(sys.argv) == 4 and sys.argv[2] == '--install':
+        install(sys.argv[1], sys.argv[3])
+    else:
+        main(*sys.argv[1:3])
