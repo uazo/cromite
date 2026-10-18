@@ -1,0 +1,169 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 12:00:00 +0000
+Subject: CromIKO Manga Image Finder
+
+Find the chapter image of a tap in the manga mode picker more actively.
+A tap now takes:
+- the picture under the finger, also below transparent layers, unless
+  it is a small icon, avatar or button (under 80 px);
+- else the page image nearest to the tap inside the tapped element;
+- else a page image right next to the tap (48 px) inside its parents,
+  for taps on the gaps, page numbers and frames around pages;
+- else an element under the finger that keeps the address of an image
+  file (JPEG, PNG, WebP, GIF, AVIF, SVG...) in data-src or a similar
+  attribute, for sites that add their images later.
+
+Page images are pictures of at least 80 px, or images still waiting to
+load, that show or keep the address of an image file (or are loaded, or
+are a canvas). A page still waiting to load counts with its frame, so
+that it is found even while it is a dot. After picking, the reader also
+waits for chapters whose images are not there yet.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/java/res/raw/cromiko_manga.js | 112 ++++++++++++++++---
+ 1 file changed, 96 insertions(+), 16 deletions(-)
+
+diff --git a/chrome/android/java/res/raw/cromiko_manga.js b/chrome/android/java/res/raw/cromiko_manga.js
+--- a/chrome/android/java/res/raw/cromiko_manga.js
++++ b/chrome/android/java/res/raw/cromiko_manga.js
+@@ -46,6 +46,18 @@
+     const NOT_RENDERED =
+         new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE']);
+     const MEDIA = 'img, canvas';
++    // Addresses of image files: JPEG, PNG, WebP, GIF, AVIF, SVG...
++    const IMAGE_FILE_RE =
++        /^data:image\/|\.(jpe?g|jfif|png|webp|gif|avif|bmp|svg|jxl|heic|heif)(?:[?#&]|$)/i;
++    // Attributes where sites keep the address of an image they load later.
++    const IMAGE_ATTRIBUTES = LAZY_ATTRIBUTES.concat(
++        ['data-srcset', 'data-lazy', 'data-image', 'data-img', 'data-bg',
++         'data-background', 'data-full', 'data-hi-res', 'srcset', 'href']);
++    // Smaller pictures are icons, avatars or buttons, not chapter pages.
++    const MIN_PAGE_SIZE = 80;
++    // How far from a tap on a gap, a page number or the frame of a page the
++    // page can be.
++    const NEAR_PAGE = 48;
+     // How long "read" and "auto" wait for the chapter images to appear.
+     const WAIT_MS = 20000;
+     // How long the reader keeps the place it resumed at, while the images
+@@ -475,27 +487,95 @@
+       return found || target;
+     }
+ 
+-    // The chapter image at a point, also below transparent elements that some
+-    // sites put over their images.
++    // The chapter image that the user tapped: the picture under the finger
++    // (also below transparent elements that some sites put over their
++    // images), else the picture nearest to the tap inside the tapped element,
++    // else a picture right next to the tap inside its parents (for taps on
++    // the gaps, page numbers and frames around pages), else an element that
++    // keeps the address of an image file that the site has not loaded yet.
+     function imageAt(x, y, target) {
+-      for (const el of document.elementsFromPoint(x, y)) {
+-        if (el.matches && el.matches(MEDIA)) {
+-          return el;
++      const stack = document.elementsFromPoint(x, y);
++      for (const el of stack) {
++        const media = el.tagName === 'PICTURE' ? el.querySelector('img') : el;
++        if (media && media.matches(MEDIA) && isPageImage(media)) {
++          return media;
+         }
+-        if (el.tagName === 'PICTURE') {
+-          const img = el.querySelector('img');
+-          if (img) {
+-            return img;
+-          }
++      }
++      let node = target instanceof Element ? target : stack[0];
++      for (let depth = 0; node && depth < 6 && node !== document.body &&
++           node !== document.documentElement;
++           depth++, node = node.parentElement) {
++        const found =
++            nearestImage(node, x, y, depth ? NEAR_PAGE : window.innerHeight / 2);
++        if (found) {
++          return found;
+         }
+       }
+-      if (target instanceof Element) {
+-        const media = target.querySelectorAll(MEDIA);
+-        if (media.length === 1) {
+-          return media[0];
++      return stack.find(el => el !== document.body &&
++                              el !== document.documentElement &&
++                              !el.matches(MEDIA) && !el.querySelector(MEDIA) &&
++                              isBig(el) && imageFileOf(el)) ||
++          null;
++    }
++
++    function isBig(el) {
++      const r = el.getBoundingClientRect();
++      return r.width >= MIN_PAGE_SIZE && r.height >= MIN_PAGE_SIZE;
++    }
++
++    // The address of the image file that an element shows or will load, or
++    // an empty string.
++    function imageFileOf(el) {
++      const values = IMAGE_ATTRIBUTES.map(name => el.getAttribute(name));
++      if (el.tagName === 'IMG') {
++        values.push(el.currentSrc, el.getAttribute('src'));
++      }
++      for (const value of values) {
++        // The first address of a srcset.
++        const url = (value || '').trim().split(/\s+/)[0];
++        if (url && IMAGE_FILE_RE.test(url)) {
++          return url;
+         }
+       }
+-      return null;
++      return '';
++    }
++
++    // Whether an image can be a page of the chapter: big enough, or not
++    // loaded yet, and an image file (or a picture the site draws itself).
++    function isPageImage(el) {
++      const big = isBig(el);
++      if (el.tagName === 'CANVAS') {
++        return big;
++      }
++      const loaded = el.complete && el.naturalWidth >= MIN_PAGE_SIZE;
++      return (big || hasLazyHint(el)) && (loaded || !!imageFileOf(el));
++    }
++
++    // The page image inside |root| that is nearest to the tap, not more than
++    // |maxDistance| away.
++    function nearestImage(root, x, y, maxDistance) {
++      let best = null;
++      let bestDistance = maxDistance ** 2;
++      let bestArea = 0;
++      for (const el of root.querySelectorAll(MEDIA)) {
++        if (!isPageImage(el)) {
++          continue;
++        }
++        // A page that is not loaded yet can be a dot: take its frame.
++        const r = (isBig(el) || !el.parentElement ? el : el.parentElement)
++                      .getBoundingClientRect();
++        const dx = Math.max(r.left - x, 0, x - r.right);
++        const dy = Math.max(r.top - y, 0, y - r.bottom);
++        const distance = dx * dx + dy * dy;
++        const area = r.width * r.height;
++        if (distance < bestDistance ||
++            (distance === bestDistance && area > bestArea)) {
++          best = el;
++          bestDistance = distance;
++          bestArea = area;
++        }
++      }
++      return best;
+     }
+ 
+     function navSpec(el) {
+@@ -553,7 +633,7 @@
+         image: simpleSelector(result.image),
+       };
+       stopPicker('done', cfg);
+-      openReader(Object.assign({}, cfg, {preload: !!pickOptions.preload}));
++      waitAndRead(Object.assign({}, cfg, {preload: !!pickOptions.preload}), false);
+     }
+ 
+     function stopPicker(state, cfg) {
+--

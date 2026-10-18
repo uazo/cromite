@@ -23,8 +23,9 @@ function scriptFromPatches() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cromiko-manga-'));
   fs.mkdirSync(path.join(dir, path.dirname(SCRIPT)), { recursive: true });
   fs.writeFileSync(path.join(dir, SCRIPT), out.join('\n') + '\n');
-  execFileSync('git', ['apply', '--include=' + SCRIPT,
-                       path.join(PATCHES, 'CromIKO-Manga-Continue-Reading.patch')], { cwd: dir });
+  for (const later of ['CromIKO-Manga-Continue-Reading.patch', 'CromIKO-Manga-Image-Finder.patch']) {
+    execFileSync('git', ['apply', '--include=' + SCRIPT, path.join(PATCHES, later)], { cwd: dir });
+  }
   return fs.readFileSync(path.join(dir, SCRIPT), 'utf8');
 }
 

@@ -29,6 +29,16 @@ if (rc && rc.dataset.async === '1') {
     }, 800);
   });
 }
+// Some sites keep only the image address in a wrapper and add the image later
+// (the test calls this).
+window.addImages = () => {
+  for (const d of document.querySelectorAll('.page[data-src]')) {
+    const img = document.createElement('img');
+    img.src = d.dataset.src;
+    d.appendChild(img);
+    d.style.height = 'auto';
+  }
+};
 // Some sites go to the next page when the image is tapped.
 document.addEventListener('click', (e) => {
   if (e.target.closest('.page-break')) { window.imageClicks = (window.imageClicks || 0) + 1; }

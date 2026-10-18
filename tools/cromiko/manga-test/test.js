@@ -1,5 +1,5 @@
 // Tests the manga mode page script (cromiko_manga.js in CromIKO-Manga-Mode.patch,
-// changed by CromIKO-Manga-Continue-Reading.patch) in headless Chromium like
+// changed by the later CromIKO-Manga-*.patch files) in headless Chromium like
 // CromikoMangaMode.java runs it: in an isolated world, with taps on a mobile
 // viewport, on a fake manga site (server.py) that loads its images lazily or with
 // a script, and has a strict Content Security Policy.
@@ -32,7 +32,7 @@ function scriptFromPatches() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cromiko-manga-'));
   fs.mkdirSync(path.join(dir, path.dirname(SCRIPT)), { recursive: true });
   fs.writeFileSync(path.join(dir, SCRIPT), out.join('\n') + '\n');
-  for (const later of ['CromIKO-Manga-Continue-Reading.patch']) {
+  for (const later of ['CromIKO-Manga-Continue-Reading.patch', 'CromIKO-Manga-Image-Finder.patch']) {
     execFileSync('git', ['apply', '--include=' + SCRIPT, path.join(PATCHES, later)], { cwd: dir });
   }
   return fs.readFileSync(path.join(dir, SCRIPT), 'utf8');
@@ -341,6 +341,71 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       check('nothing loaded early when preload is off', early().length === 0, early());
     }
   }
+
+  // --- Picking: the chapter image inside what the user tapped ----------------
+  // Picks the next and previous buttons, then taps |tapImage| for the image.
+  async function pickWith(url, tapImage) {
+    await page.goto(BASE + url);
+    await page.waitForLoadState('load');
+    await newWorld();
+    await run('pick');
+    for (const selector of ['.next_page', '.prev_page']) {
+      const q = await center(selector, 0);
+      await page.touchscreen.tap(q.x, q.y);
+      await sleep(650);
+    }
+    await tapImage();
+    await sleep(400);
+    return poll();
+  }
+  // A tap on the page number under a page picks the page.
+  let picked = await pickWith('/ch-2.html', async () => {
+    await page.locator('.page-num').nth(1).scrollIntoViewIfNeeded();
+    await sleep(300);
+    const box = await page.locator('.page-num').nth(1).boundingBox();
+    await page.touchscreen.tap(box.x + 20, box.y + box.height / 2);
+  });
+  check('a tap on a page number picks the page above it', picked.state === 'done' &&
+        picked.config.image === config.image && picked.config.container === config.container, picked);
+  await sleep(300);
+  check('the reader opens after picking', (await run('state')).state === 'reading');
+
+  // A page whose image address is in a wrapper that has no image yet.
+  picked = await pickWith('/wrap-2.html', async () => {
+    const box = await page.locator('.page').nth(0).boundingBox();
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + 100);
+  });
+  check('a wrapper with the address of an image file is picked', picked.state === 'done' &&
+        /^div\.page/.test(picked.config.image) && picked.config.container === 'div.reading-content', picked);
+  check('the reader opens with the wrappers', (await run('state')).state === 'reading' &&
+        (await display('.site-header')) === 'none');
+  await page.evaluate(() => window.addImages());
+  await sleep(800);
+  const added = await page.$$eval('.page img', els => els.map(e => Math.round(e.getBoundingClientRect().width)));
+  check('the images that the site adds are shown at full width', added.length === 6 &&
+        added.every(w => w === 412), added);
+  await run('stop');
+
+  // Text without a picture nearby is still not a page.
+  await page.goto(BASE + '/ch-2.html');
+  await page.waitForLoadState('load');
+  await newWorld();
+  await run('pick');
+  for (const selector of ['.next_page', '.prev_page']) {
+    const q = await center(selector, 0);
+    await page.touchscreen.tap(q.x, q.y);
+    await sleep(650);
+  }
+  await page.locator('.comments h3').scrollIntoViewIfNeeded();
+  const comment = await center('.comments h3');
+  await page.touchscreen.tap(comment.x, comment.y);
+  await sleep(300);
+  check('a tap on the comments title is not a page', (await poll()).state === 'picking');
+  const avatar = await center('.comments .avatar');
+  await page.touchscreen.tap(avatar.x, avatar.y);
+  await sleep(300);
+  check('a tap on an avatar is not a page', (await poll()).state === 'picking');
+  await run('stop');
 
   check('no console errors or CSP refusals', consoleErrors.length === 0, consoleErrors);
   console.log('CONFIG ' + JSON.stringify(config));

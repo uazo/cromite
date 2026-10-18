@@ -5,7 +5,7 @@ SITE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'site')
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self'; "
        "script-src 'self'; frame-src 'none'")
 
-def page(ch, async_images):
+def page(ch, async_images, wrapped=False):
     prev = f'<a class="btn prev_page" href="ch-{ch - 1}.html">&lsaquo; Prev</a>' if ch > 1 else \
         '<a class="btn prev_page disabled" href="#">&lsaquo; Prev</a>'
     nxt = f'<a class="btn next_page" href="ch-{ch + 1}.html"><span class="ico">&rsaquo;</span> Next</a>' if ch < 5 else \
@@ -14,8 +14,12 @@ def page(ch, async_images):
     imgs = '' if async_images else ''.join(
         f'<div class="page-break"><img class="wp-manga-chapter-img lazy" '
         f'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" '
-        f'data-src="/img/c{ch}p{i}.svg" alt=""><div class="protect"></div></div>'
+        f'data-src="/img/c{ch}p{i}.svg" alt=""><div class="protect"></div>'
+        f'<div class="page-num">{i}</div></div>'
         for i in range(1, 13 if ch == 5 else 9))
+    if wrapped:
+        # Only the address of the image, in a wrapper: the site adds the image later.
+        imgs = ''.join(f'<div class="page" data-src="/img/c{ch}p{i}.svg"></div>' for i in range(1, 7))
     # Chapter 4 has the Open Graph tags of many sites, with the series cover.
     og = ('<meta property="og:title" content="Read Series Chapter 4 Online - Manga Site">'
           '<meta property="og:image" content="/cover.svg">') if ch == 4 else ''
@@ -60,6 +64,9 @@ class H(http.server.BaseHTTPRequestHandler):
         if m:
             ch = int(m.group(1))
             return self.send(page(ch, async_images=(ch == 3)), 'text/html')
+        m = re.match(r'/wrap-(\d+)\.html$', p)
+        if m:
+            return self.send(page(int(m.group(1)), async_images=False, wrapped=True), 'text/html')
         m = re.match(r'/img/c(\d+)p(\d+)\.svg$', p)
         if m:
             ch, pg = int(m.group(1)), int(m.group(2))
