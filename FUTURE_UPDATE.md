@@ -18,7 +18,7 @@ Second round, picked from the update ideas:
 | Feature                           | Effort | Status  |
 |-----------------------------------|:------:|:-------:|
 | Weekly shield report              | medium | done    |
-| Custom accent color picker        | medium | next    |
+| Custom accent color picker        | medium | done    |
 
 ## Video and audio player (weight 10) - done
 
@@ -129,8 +129,15 @@ opens it ("Weekly report").
 - Kept on the device only, never for Incognito tabs. Deleting browsing
   history (also with the Fire button) removes the sites; the counts stay.
 
-## Custom accent color picker - next
+## Custom accent color picker - done
 
-- Pick the accent color of CromIKO instead of periwinkle (#5C7CFC), with a
-  few colors that go with the charcoal mascot and a custom one.
-- The color applies to the whole browser, like the periwinkle theme now.
+Done in `CromIKO-Accent-Color.patch`, in Settings > Appearance > Accent color.
+
+- 11 colors that go with the charcoal mascot (Periwinkle is the default),
+  and Custom: hue and vividness sliders or a hex code.
+- Any color other than periwinkle becomes the seed of a Material palette
+  for the whole browser, and wins over a theme color picked on the new tab
+  page. The CromIKO cards, links and progress bars, the player and manga
+  mode follow it; the mascot and the logo keep their periwinkle star.
+- Needs Android 12 or newer (on older phones only the player and manga mode
+  change). Incognito windows and custom tabs keep their own colors.

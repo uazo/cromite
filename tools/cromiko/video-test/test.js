@@ -10,24 +10,32 @@
 //   python3 tools/cromiko/video-test/server.py 8775 8776 &
 //   node tools/cromiko/video-test/test.js [path/to/cromiko_video.js]
 // Screenshots are written to tools/cromiko/video-test/out/.
+const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { chromium } = require('playwright');
 
 const PORT = Number(process.env.PORT || 8775);
 const BASE = 'http://127.0.0.1:' + PORT;
-const PATCH = path.join(__dirname, '../../../build/patches/CromIKO-Video-Player.patch');
+const PATCHES = path.join(__dirname, '../../../build/patches');
+const SCRIPT = 'chrome/android/java/res/raw/cromiko_video.js';
 const SOURCE = process.argv[2] ? fs.readFileSync(process.argv[2], 'utf8') : scriptFromPatch();
 
-// The script as added by the patch.
+// The script as added by CromIKO-Video-Player.patch, with the changes of the later patches.
 function scriptFromPatch() {
-  const lines = fs.readFileSync(PATCH, 'utf8').split('\n');
-  const start = lines.indexOf('+++ b/chrome/android/java/res/raw/cromiko_video.js');
+  const lines = fs.readFileSync(path.join(PATCHES, 'CromIKO-Video-Player.patch'), 'utf8').split('\n');
+  const start = lines.indexOf('+++ b/' + SCRIPT);
   const out = [];
   for (let i = start + 2; i < lines.length && !lines[i].startsWith('diff --git'); i++) {
     if (lines[i].startsWith('+')) out.push(lines[i].slice(1));
   }
-  return out.join('\n') + '\n';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cromiko-video-'));
+  fs.mkdirSync(path.join(dir, path.dirname(SCRIPT)), { recursive: true });
+  fs.writeFileSync(path.join(dir, SCRIPT), out.join('\n') + '\n');
+  execFileSync('git', ['apply', '--include=' + SCRIPT, path.join(PATCHES, 'CromIKO-Accent-Color.patch')],
+               { cwd: dir });
+  return fs.readFileSync(path.join(dir, SCRIPT), 'utf8');
 }
 const OUT = path.join(__dirname, 'out');
 const W = 412;
