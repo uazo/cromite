@@ -9,8 +9,8 @@ its own `CromIKO-*.patch`, like the features so far.
 | Download manager with threads     | 9      | medium | done    |
 | Manga mode: continue reading      | 6      | small  | done    |
 | Incognito lock                    | 5      | small  | done    |
-| Dark mode per site                | 4      | small  |         |
-| Built-in DNS                      | 2      | small  |         |
+| Dark mode per site                | 4      | small  | skipped |
+| Built-in DNS                      | 2      | small  | done    |
 | Customizable home screen          | 1      | large  |         |
 
 ## Video and audio player (weight 10) - done
@@ -78,18 +78,18 @@ lock.
 - Incognito tabs are hidden in the recent apps screen, also when
   screenshots in incognito are allowed.
 
-## Dark mode per site (weight 4)
+## Dark mode per site (weight 4) - skipped
 
-- Use Chromium's built-in forced dark mode, but switch it on or off per
-  site from the menu, remembered for each site.
+Skipped at the user's request.
 
-## Built-in DNS (weight 2)
+## Built-in DNS (weight 2) - done
 
-- Add providers to Chromium's secure DNS (DNS-over-HTTPS) list in
-  Settings → Privacy:
-  - at least dnsforge.de, Cloudflare (1.1.1.1) and Google (8.8.8.8);
-  - also Quad9, Mullvad and AdGuard.
-- Make CromIKO's own default choice one of them, instead of the system DNS.
+Done in `CromIKO-Secure-DNS.patch`, in Settings > Privacy > Use secure DNS.
+
+- New providers: AdGuard, dnsforge.de and Mullvad, each with and without
+  ad blocking (AdGuard and dnsforge.de also with a family filter). Quad9 is
+  listed again; Cloudflare (1.1.1.1) and Google stay.
+- Quad9 is CromIKO's default provider; secure DNS is on by default.
 
 ## Customizable home screen (weight 1)
 
