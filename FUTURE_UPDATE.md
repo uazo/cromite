@@ -11,7 +11,7 @@ its own `CromIKO-*.patch`, like the features so far.
 | Incognito lock                    | 5      | small  | done    |
 | Dark mode per site                | 4      | small  | skipped |
 | Built-in DNS                      | 2      | small  | done    |
-| Customizable home screen          | 1      | large  |         |
+| Customizable home screen          | 1      | large  | done    |
 
 ## Video and audio player (weight 10) - done
 
@@ -84,16 +84,27 @@ Skipped at the user's request.
 
 ## Built-in DNS (weight 2) - done
 
-Done in `CromIKO-Secure-DNS.patch`, in Settings > Privacy > Use secure DNS.
+Done in `CromIKO-Secure-DNS.patch` and `CromIKO-DNS-Shortcut.patch`, as
+"CromIKO DNS" in Settings > Privacy.
 
 - New providers: AdGuard, dnsforge.de and Mullvad, each with and without
   ad blocking (AdGuard and dnsforge.de also with a family filter). Quad9 is
   listed again; Cloudflare (1.1.1.1) and Google stay.
 - Quad9 is CromIKO's default provider; secure DNS is on by default.
+- One tap away: a "CromIKO DNS" button next to Bookmarks and Downloads on
+  the new tab page, and an item in the app menu.
 
-## Customizable home screen (weight 1)
+## Customizable home screen (weight 1) - done
 
-- An edit mode on the new tab page to move, resize and hide widgets.
-- Widgets: shield stats, shortcuts, most visited sites, continue reading,
-  downloads.
-- The layout is saved per profile, and reset is one tap.
+Done in `CromIKO-Home-Screen.patch`.
+
+- "Edit home screen", under the widgets of the new tab page, opens a dialog
+  with the mascot: drag the widgets to move them, pick small or large, turn
+  them off. The new tab page changes behind the dialog right away.
+- Widgets: shortcuts (small: icons only), ads and trackers blocked (small:
+  one line), continue reading (small: smaller covers), most visited sites
+  (same switch as "Customize Chrome"), and the new recent downloads, with
+  the progress and speed of running downloads, then the ones finished this
+  week (small: one download).
+- The layout is kept with the app's settings (CromIKO on Android has one
+  browsing profile), and Reset is one tap.
