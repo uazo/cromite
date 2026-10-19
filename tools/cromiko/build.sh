@@ -135,15 +135,42 @@ prepare_windows_sdk() {
     python3 "$WORKDIR/msvc-wine/vsdownload.py" --accept-license --major 18 \
       --msvc-version 18.0 --sdk-version 10.0.28000 --architecture x86 x64 \
       --with-asan=no --with-msbuild=no --cache "$WORKDIR/msvc-cache" --dest "$sdk"
-    # The SetEnv files that Chromium reads the paths of the toolchain from.
-    python3 "$REPO_DIR/tools/images/win-sdk/gen-setenv.py" "$sdk"
-    [ -f "$sdk/Windows Kits/10/bin/SetEnv.x64.json" ] \
-      || fail "The Windows SDK download is not complete: no SetEnv.x64.json."
     [ -d "$sdk/Windows Kits/10/Include/10.0.28000.0" ] \
       || fail "The Windows SDK download has no SDK 10.0.28000.0."
     rm -rf "$WORKDIR/msvc-cache"
     touch "$sdk/.cromiko-ready"
   fi
+  # Visual Studio also installs a servicing file of its newest MSVC next to the one of
+  # --msvc-version: VC/Tools/MSVC/14.51.* with only an Auxiliary folder. gen-setenv.py
+  # takes the first MSVC folder it finds, so only the one with the compiler may stay.
+  local msvc
+  for msvc in "$sdk"/VC/Tools/MSVC/*/; do
+    if [ -d "$msvc" ] && [ ! -d "$msvc/include" ]; then
+      echo "Removing ${msvc%/}: it has no compiler, only a servicing file"
+      rm -rf "$msvc"
+    fi
+  done
+  [ "$(find "$sdk/VC/Tools/MSVC" -mindepth 1 -maxdepth 1 -type d | wc -l)" = 1 ] \
+    || fail "Not exactly one MSVC in $sdk/VC/Tools/MSVC. Delete $sdk/.cromiko-ready to download it again."
+  # The SetEnv files that Chromium reads the paths of the toolchain from. They are made on
+  # every build, so a download made before a fix here is repaired without downloading it
+  # again. Chromium stops when a folder of INCLUDE or LIB is missing; check that here, with
+  # a clearer message.
+  python3 "$REPO_DIR/tools/images/win-sdk/gen-setenv.py" "$sdk"
+  python3 - "$sdk" <<'EOF' || fail "The Windows SDK in $sdk is not complete. Delete $sdk/.cromiko-ready to download it again."
+import json, os, sys
+sdk = sys.argv[1]
+missing = []
+for cpu in ('x86', 'x64'):
+    with open(os.path.join(sdk, 'Windows Kits', '10', 'bin', 'SetEnv.%s.json' % cpu)) as f:
+        env = json.load(f)['env']
+    for var in ('INCLUDE', 'LIB'):
+        missing += [os.path.join(*parts) for parts in env[var]
+                    if not os.path.isdir(os.path.join(sdk, *parts))]
+for path in sorted(set(missing)):
+    print('Missing in the Windows SDK: ' + path)
+sys.exit(1 if missing else 0)
+EOF
   export DEPOT_TOOLS_WIN_TOOLCHAIN_BASE_URL="$sdk/"
   export WINDOWSSDKDIR="$sdk/Windows Kits/10/"
   export GYP_MSVS_OVERRIDE_PATH="$sdk/"
