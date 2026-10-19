@@ -6,12 +6,21 @@
 #   curl -fsSLO https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh
 #   bash server-build.sh            # or: bash server-build.sh arm   (arm64, arm, x64)
 #
+# First it asks which version to build: the GitHub version (the APK of the
+# GitHub releases, as always) or the Google Play version (an App Bundle to
+# upload to the Play Console, without the update check and without background
+# play on YouTube; see build/cromiko_play_patches_list.txt).
+#
 # It installs the basic tools, creates a "builder" user, clones the CromIKO
 # repository, and starts tools/cromiko/build-android.sh in a tmux session, so
 # the build keeps running if your SSH connection drops. Running it again
 # updates the checkout and builds again, reusing the Chromium download.
 #
 # Environment, all optional:
+#   CROMIKO_FLAVOR   github or play: the version to build, without asking
+#   CROMIKO_PLAY_RELEASE
+#                    for play: the number of the upload for this Chromium
+#                    version, 0 to 9, without asking (see build-android.sh)
 #   CROMIKO_REPO     repository to build (default: https://github.com/PupJune2/cromIKO)
 #   CROMIKO_BRANCH   branch to build (default: master)
 #   CROMIKO_KEYSTORE_PATH, CROMIKO_KEYSTORE_ALIAS, CROMIKO_KEYSTORE_PASSWORD
@@ -31,6 +40,8 @@ CHECKOUT=$BUILD_HOME/cromIKO
 ENV_FILE=$BUILD_HOME/.cromiko-build.env
 RUNNER=$BUILD_HOME/run-cromiko-build.sh
 SESSION=cromiko
+FLAVOR=${CROMIKO_FLAVOR:-}
+PLAY_RELEASE=${CROMIKO_PLAY_RELEASE:-}
 
 say() { echo -e "\n==== $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
@@ -54,6 +65,67 @@ case "$TARGET_CPU" in
   *) fail "Unknown CPU '$TARGET_CPU' (use arm64, arm or x64)." ;;
 esac
 [ "$(uname -m)" = x86_64 ] || fail "Chromium for Android can only be built on x86-64 machines."
+
+# Which version to build. The GitHub version is the one of the GitHub releases, unchanged;
+# the Google Play version gets the patches of build/cromiko_play_patches_list.txt.
+if [ -z "$FLAVOR" ]; then
+  if [ -t 0 ]; then
+    cat <<'EOF'
+
+Which version of CromIKO do you want to build?
+
+  1) GitHub version        the APK for the GitHub releases, as always
+  2) Google Play version   an App Bundle (.aab) to upload to the Play Console:
+                           no update check (Google Play updates the app) and
+                           no background play on YouTube
+
+EOF
+    read -r -p "Your choice [1]: " choice || true
+    case "${choice:-1}" in
+      1|github|GitHub) FLAVOR=github ;;
+      2|play|Play) FLAVOR=play ;;
+      *) fail "Please answer 1 (GitHub) or 2 (Google Play)." ;;
+    esac
+  else
+    FLAVOR=github
+    echo "Building the GitHub version (set CROMIKO_FLAVOR=play for the Google Play version)."
+  fi
+fi
+case "$FLAVOR" in
+  github|play) ;;
+  *) fail "Unknown CROMIKO_FLAVOR '$FLAVOR' (use github or play)." ;;
+esac
+if [ "$FLAVOR" = play ]; then
+  if [ -z "$PLAY_RELEASE" ]; then
+    if [ -t 0 ]; then
+      cat <<'EOF'
+
+Google Play needs a higher version code for every upload. Which upload is this
+for the current Chromium version? 0 for the first one; add 1 for every CromIKO
+update that keeps the Chromium version (up to 9).
+
+EOF
+      read -r -p "Upload number [0]: " PLAY_RELEASE || true
+    fi
+    PLAY_RELEASE=${PLAY_RELEASE:-0}
+  fi
+  case "$PLAY_RELEASE" in
+    [0-9]) ;;
+    *) fail "The upload number must be a number from 0 to 9, not '$PLAY_RELEASE'." ;;
+  esac
+  if [ -z "${CROMIKO_KEYSTORE_PATH:-}" ]; then
+    echo
+    echo "Note: without CROMIKO_KEYSTORE_PATH, the App Bundle is signed with Chromium's public"
+    echo "debug key, and Google Play does not accept it (see docs/BUILD_CROMIKO.md)."
+    if [ -t 0 ]; then
+      read -r -p "Build it anyway, for testing only? [y/N]: " answer || true
+      case "${answer:-n}" in
+        y|Y|yes|Yes) ;;
+        *) fail "Set CROMIKO_KEYSTORE_PATH, CROMIKO_KEYSTORE_ALIAS and CROMIKO_KEYSTORE_PASSWORD, then run this again." ;;
+      esac
+    fi
+  fi
+fi
 # shellcheck disable=SC1091
 . /etc/os-release
 case "${ID:-}" in
@@ -109,6 +181,13 @@ fi
 
 say "Preparing the build settings"
 (umask 077 && : > "$ENV_FILE")
+printf 'CROMIKO_FLAVOR=%q\n' "$FLAVOR" >> "$ENV_FILE"
+if [ "$FLAVOR" = play ]; then
+  printf 'CROMIKO_PLAY_RELEASE=%q\n' "$PLAY_RELEASE" >> "$ENV_FILE"
+  echo "Google Play version, upload $PLAY_RELEASE"
+else
+  echo "GitHub version"
+fi
 if [ -n "${CROMIKO_KEYSTORE_PATH:-}" ]; then
   [ -f "$CROMIKO_KEYSTORE_PATH" ] || fail "Keystore not found: $CROMIKO_KEYSTORE_PATH"
   install -o "$BUILD_USER" -g "$BUILD_USER" -m 600 "$CROMIKO_KEYSTORE_PATH" "$BUILD_HOME/cromiko.keystore"
@@ -119,12 +198,22 @@ if [ -n "${CROMIKO_KEYSTORE_PATH:-}" ]; then
   } >> "$ENV_FILE"
   echo "Signing with $CROMIKO_KEYSTORE_PATH"
 else
-  echo "No CROMIKO_KEYSTORE_PATH: the APK is signed with Chromium's public debug key (fine for testing)."
+  echo "No CROMIKO_KEYSTORE_PATH: the build is signed with Chromium's public debug key (fine for testing)."
 fi
 if [ -n "${CROMITE_PREF_HASH_SEED_BIN:-}" ]; then
   printf 'CROMITE_PREF_HASH_SEED_BIN=%q\n' "$CROMITE_PREF_HASH_SEED_BIN" >> "$ENV_FILE"
 fi
 chown "$BUILD_USER:" "$ENV_FILE"
+
+if [ "$FLAVOR" = play ]; then
+  RESULT="App Bundle"
+  RESULT_FILES="*-play.aab"
+  NEXT_STEP="Then upload it in the Play Console: your app > Test and release > Create new release."
+else
+  RESULT="APK"
+  RESULT_FILES="*.apk"
+  NEXT_STEP="Then open it on your phone to install or update CromIKO."
+fi
 
 cat > "$RUNNER" <<EOF
 #!/bin/bash
@@ -142,8 +231,9 @@ if tools/cromiko/build-android.sh $TARGET_CPU 2>&1 | tee "$BUILD_HOME/cromiko-bu
   echo "==== Build finished in \$(( (\$(date +%s) - start) / 60 )) minutes"
   ls -l "$BUILD_HOME/cromiko-build/dist/"
   echo
-  echo "Copy the APK to your computer (run this on your computer, not here):"
-  echo "  scp 'root@\$ip:$BUILD_HOME/cromiko-build/dist/*.apk' ."
+  echo "Copy the $RESULT to your computer (run this on your computer, not here):"
+  echo "  scp 'root@\$ip:$BUILD_HOME/cromiko-build/dist/$RESULT_FILES' ."
+  echo "$NEXT_STEP"
   echo
   echo "Then delete the server in the Hetzner console: it is billed for as long as it exists."
 else
@@ -173,7 +263,7 @@ A first build takes several hours.
   Watch it:          sudo -u $BUILD_USER tmux attach -t $SESSION
   Leave it running:  press Ctrl+b, then d
   Log file:          $BUILD_HOME/cromiko-build.log
-  APK when done:     $BUILD_HOME/cromiko-build/dist/
+  $RESULT when done: $BUILD_HOME/cromiko-build/dist/
 
 EOF
 

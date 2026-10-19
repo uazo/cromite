@@ -1,9 +1,12 @@
 #!/bin/bash
-# Builds the CromIKO Android APK.
+# Builds CromIKO for Android: the APK of the GitHub releases, or the App
+# Bundle for Google Play.
 #
 # Fetches Chromium at the version in build/RELEASE, applies every patch in
 # build/cromite_patches_list.txt (Cromite's and CromIKO's), and builds
-# chrome_public_apk with build/cromite.gn_args + build/cromiko.gn_args.
+# chrome_public_apk with build/cromite.gn_args + build/cromiko.gn_args. The
+# Google Play version also gets the patches of
+# build/cromiko_play_patches_list.txt and is built as chrome_public_bundle.
 # The steps follow Cromite's own build images (tools/images/chr-source and
 # tools/images/cromite-source).
 #
@@ -15,6 +18,13 @@
 #                          later runs, which then skip the download.
 #   CROMIKO_DIST           where the finished APK is copied
 #                          (default: $CROMIKO_WORKDIR/dist)
+#   CROMIKO_FLAVOR         github (default): the APK of the GitHub releases.
+#                          play: the App Bundle (.aab) to upload to Google Play.
+#   CROMIKO_PLAY_RELEASE   for play: the number of this upload for the Chromium
+#                          version in build/RELEASE, 0 to 9 (default 0). Google
+#                          Play needs a higher version code for every upload:
+#                          raise it by one for each CromIKO update that keeps the
+#                          Chromium version, and start at 0 again with a new one.
 #   CROMIKO_INSTALL_DEPS=1 install Chromium's build dependencies (needs sudo)
 #   CROMIKO_KEYSTORE_PATH, CROMIKO_KEYSTORE_ALIAS, CROMIKO_KEYSTORE_PASSWORD
 #                          release signing key; see docs/BUILD_CROMIKO.md
@@ -29,6 +39,17 @@ TARGET_CPU=${1:-arm64}
 case "$TARGET_CPU" in
   arm64|arm|x64) ;;
   *) echo "Unknown target CPU '$TARGET_CPU' (use arm64, arm or x64)" >&2; exit 2 ;;
+esac
+
+FLAVOR=${CROMIKO_FLAVOR:-github}
+case "$FLAVOR" in
+  github|play) ;;
+  *) echo "Unknown CROMIKO_FLAVOR '$FLAVOR' (use github or play)" >&2; exit 2 ;;
+esac
+PLAY_RELEASE=${CROMIKO_PLAY_RELEASE:-0}
+case "$PLAY_RELEASE" in
+  [0-9]) ;;
+  *) echo "CROMIKO_PLAY_RELEASE must be a number from 0 to 9, not '$PLAY_RELEASE'" >&2; exit 2 ;;
 esac
 
 REPO_DIR=$(cd "$(dirname "$0")/../.." && pwd)
@@ -59,7 +80,11 @@ mkdir -p "$WORKDIR" "$DIST"
 cd "$WORKDIR"
 
 step "Checking the machine"
-echo "CromIKO for Chromium $VERSION, target $TARGET_CPU"
+if [ "$FLAVOR" = play ]; then
+  echo "CromIKO for Google Play, Chromium $VERSION, target $TARGET_CPU"
+else
+  echo "CromIKO for GitHub, Chromium $VERSION, target $TARGET_CPU"
+fi
 echo "CPU cores: $(nproc), memory: $(free -g | awk '/^Mem:/ {print $2}') GB"
 free_gb=$(df -BG --output=avail "$WORKDIR" | tail -1 | tr -dc '0-9')
 echo "Free disk in $WORKDIR: ${free_gb} GB"
@@ -163,6 +188,12 @@ git config user.email "cromiko-build@users.noreply.github.com"
 git config user.name "CromIKO build"
 git am --abort > /dev/null 2>&1 || true
 mapfile -t patches < <(grep -v '^#' "$REPO_DIR/build/cromite_patches_list.txt" | grep '\.patch$')
+if [ "$FLAVOR" = play ]; then
+  # The Google Play version gets its own patches on top. Switching versions on the same
+  # machine works like any other change of the list: the patches that differ are redone.
+  mapfile -t -O "${#patches[@]}" patches \
+    < <(grep -v '^#' "$REPO_DIR/build/cromiko_play_patches_list.txt" | grep '\.patch$')
+fi
 # Patches that are already applied unchanged (same name, same changes) stay in place, so that
 # their files keep their timestamps and the build only recompiles what the other patches touch.
 base=cromiko-base
@@ -198,20 +229,53 @@ while read -r placeholder; do
 done < <(git ls-files '*/placeholder.txt')
 
 step "Configuring the build"
-gn gen "$OUT" --args="target_os=\"android\" $(cat "$REPO_DIR/build/cromite.gn_args") target_cpu=\"$TARGET_CPU\" $(cat "$REPO_DIR/build/cromiko.gn_args")"
+GN_ARGS="target_os=\"android\" $(cat "$REPO_DIR/build/cromite.gn_args") target_cpu=\"$TARGET_CPU\" $(cat "$REPO_DIR/build/cromiko.gn_args")"
+gn gen "$OUT" --args="$GN_ARGS"
+if [ "$FLAVOR" = play ]; then
+  # Google Play needs a higher version code for every upload. Chromium's is
+  # {build}{3 digits: patch}{1 digit: package}{1 digit: ABIs}, with package 0 for this
+  # app: the Google Play version puts the number of the upload there instead.
+  chromium_code=$(sed -n 's/^Chrome: //p' "$OUT/android_chrome_versions.txt")
+  [ -n "$chromium_code" ] || fail "No version code of Chromium in $OUT/android_chrome_versions.txt"
+  play_code=$(( chromium_code / 100 * 100 + PLAY_RELEASE * 10 + chromium_code % 10 ))
+  echo "Version code for Google Play: $play_code (upload $PLAY_RELEASE of Chromium $VERSION)"
+  gn gen "$OUT" --args="$GN_ARGS android_override_version_code=\"$play_code\""
+  if [ -z "${CROMIKO_KEYSTORE_PATH:-}" ]; then
+    echo "WARNING: no CROMIKO_KEYSTORE_PATH, so the App Bundle is signed with Chromium's public"
+    echo "debug key. Google Play does not accept that: sign it with your own key to upload it."
+  fi
+fi
 gn args "$OUT" --list --short
 
 step "Building (several hours on a first build)"
-python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome_public_apk --offline
-
-step "Collecting the APK"
-APK=$DIST/CromIKO-$VERSION-$TARGET_CPU.apk
-cp "$OUT/apks/ChromePublic.apk" "$APK"
-if [ -f "$OUT/apks/ChromePublic.apk.mapping" ]; then
-  cp "$OUT/apks/ChromePublic.apk.mapping" "$APK.mapping"
+if [ "$FLAVOR" = play ]; then
+  python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome_public_bundle --offline
+else
+  python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome_public_apk --offline
 fi
-echo "APK: $APK"
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-  echo "apk=$APK" >> "$GITHUB_OUTPUT"
-  echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+if [ "$FLAVOR" = play ]; then
+  step "Collecting the App Bundle"
+  AAB=$DIST/CromIKO-$VERSION-$TARGET_CPU-play.aab
+  cp "$OUT/apks/ChromePublic.aab" "$AAB"
+  if [ -f "$OUT/apks/ChromePublic.aab.mapping" ]; then
+    cp "$OUT/apks/ChromePublic.aab.mapping" "$AAB.mapping"
+  fi
+  echo "App Bundle for Google Play: $AAB"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "aab=$AAB" >> "$GITHUB_OUTPUT"
+    echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+  fi
+else
+  step "Collecting the APK"
+  APK=$DIST/CromIKO-$VERSION-$TARGET_CPU.apk
+  cp "$OUT/apks/ChromePublic.apk" "$APK"
+  if [ -f "$OUT/apks/ChromePublic.apk.mapping" ]; then
+    cp "$OUT/apks/ChromePublic.apk.mapping" "$APK.mapping"
+  fi
+  echo "APK: $APK"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "apk=$APK" >> "$GITHUB_OUTPUT"
+    echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+  fi
 fi

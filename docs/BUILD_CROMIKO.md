@@ -126,6 +126,40 @@ read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTO
 bash server-build.sh
 ```
 
+## GitHub version or Google Play version
+
+When `server-build.sh` starts, it asks which version to build:
+
+1. **GitHub version**: the APK of the GitHub releases, exactly as before.
+2. **Google Play version**: an App Bundle, `CromIKO-<version>-arm64-play.aab`,
+   to upload to the Play Console. It is the same browser with the patches of
+   `build/cromiko_play_patches_list.txt` on top (`CromIKO-Play-Store.patch`):
+   no update check, because Google Play updates the app and Play apps may
+   not update themselves another way, and no background play in the CromIKO
+   player on YouTube, whose terms do not allow it. Other sites keep it.
+
+For the Google Play version it also asks for the number of the upload.
+Google Play only accepts an upload with a higher version code than the one
+before. The version code comes from the Chromium version; the upload number
+(0 to 9) is added to it, so start at 0 with every new Chromium version and
+add 1 for every CromIKO update that keeps the Chromium version.
+
+Sign the Google Play version with your own key (`CROMIKO_KEYSTORE_PATH`, as
+above): Google Play does not accept Chromium's public debug key. With Play
+App Signing, the key you sign the first upload with becomes your upload key
+and Google signs the app for the phones; keep using it for every upload.
+
+To skip the questions, set them beforehand:
+
+```sh
+CROMIKO_FLAVOR=play CROMIKO_PLAY_RELEASE=0 bash server-build.sh
+```
+
+The same server can build both versions one after the other: switching only
+redoes the Google Play patch and rebuilds what it changes. Without the
+server script, `CROMIKO_FLAVOR=play tools/cromiko/build-android.sh arm64`
+does the same. The GitHub Actions workflow always builds the GitHub version.
+
 ## Building again after changes
 
 A server that has built CromIKO once keeps the Chromium download and the
