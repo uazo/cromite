@@ -155,9 +155,10 @@ When `server-build.sh` starts, it asks which version to build:
    runs next to Cromite and Chromium. It has the CromIKO name, icons and
    periwinkle color, secure DNS on with Quad9 and the CromIKO providers
    (Settings > Privacy and security > Security > Use secure DNS), every
-   pop-up held until you allow it (the icon in the address bar), and
-   Cromite's ad blocking. The other CromIKO features are made for the Android app and are
-   not in the Windows version yet.
+   pop-up held until you allow it (the icon in the address bar),
+   Cromite's ad blocking, and the Fire button ("Burn tabs and data" in the
+   menu). The other CromIKO features are made for the Android app and come
+   to the Windows version step by step (see `FUTURE_UPDATE.md`).
 
    It is cross-compiled on the Linux server, like Cromite's Windows version:
    the build downloads Microsoft's Visual Studio Build Tools and Windows SDK

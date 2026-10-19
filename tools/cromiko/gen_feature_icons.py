@@ -16,7 +16,9 @@ color) and icons/preview.html (all icons, light and dark, large and at 24 and
 48 px). The second writes the VectorDrawables of the CromIKO patches into a
 Chromium checkout (as CromIKO-Settings.patch leaves them): two colors, the
 default icon color and the star in the accent color, as the settings show
-them. The menu, the shortcuts and the buttons tint them in one color.
+them. The menu, the shortcuts and the buttons tint them in one color. It
+also writes the icons of the Windows version, in the .icon format of
+Chromium's desktop UI (chrome/app/vector_icons), which are in one color.
 """
 import json
 import os
@@ -293,6 +295,56 @@ def vector_drawable(icon, color):
             '</vector>\n' % (title, paths))
 
 
+# The icons of the Windows version (chrome/app/vector_icons/<name>.icon
+# becomes k<Name>Icon in C++).
+VECTOR_ICONS = {
+    'chrome/app/vector_icons/cromiko_fire.icon': 'fire',
+}
+ICON_COMMANDS = {'M': ('MOVE_TO', 2), 'L': ('LINE_TO', 2), 'H': ('H_LINE_TO', 1),
+                 'V': ('V_LINE_TO', 1), 'C': ('CUBIC_TO', 6), 'A': ('ARC_TO', 7),
+                 'Z': ('CLOSE', 0)}
+
+
+def icon_number(v):
+    v = round(v, 2)
+    return '%d' % v if v == int(v) else '%gf' % v
+
+
+def icon_path(d):
+    """Returns the lines of an SVG path of absolute commands in .icon form."""
+    tokens = re.findall(r'[MLHVCAZ]|-?\d*\.?\d+', d)
+    lines, i = [], 0
+    while i < len(tokens):
+        cmd = tokens[i]
+        i += 1
+        name, n = ICON_COMMANDS[cmd]
+        while True:
+            args = [icon_number(float(t)) for t in tokens[i:i + n]]
+            lines.append(', '.join([name] + args) + ',')
+            i += n
+            if n == 0 or i >= len(tokens) or tokens[i] in ICON_COMMANDS:
+                break
+    return lines
+
+
+def vector_icon(icon):
+    """Returns the icon in the .icon format of Chromium's desktop UI: in one
+    color, which the menu or dialog sets. As in the SVGs, the main paths are
+    filled even-odd (the default of .icon files), the stroked ones are round
+    lines 2.6 wide."""
+    title, fills, strokes, star = icon
+    lines = ['// Copyright 2026 The CromIKO Authors',
+             '// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html',
+             '// The %s icon, drawn from the CromIKO logo by' % title,
+             '// tools/cromiko/gen_feature_icons.py.', '', 'CANVAS_DIMENSIONS, 24,']
+    paths = [icon_path(d) for d in fills]
+    paths += [['STROKE, 2.6f,'] + icon_path(d) for d in strokes]
+    paths += [icon_path(star)]
+    for k, path in enumerate(paths):
+        lines += (['NEW_PATH,'] if k else []) + path
+    return '\n'.join(lines) + '\n'
+
+
 def install(svg_path, src_dir):
     all_icons = icons(Logo(svg_path))
     for path, (name, color) in DRAWABLES.items():
@@ -300,7 +352,11 @@ def install(svg_path, src_dir):
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, 'w') as f:
             f.write(vector_drawable(all_icons[name], color))
-    print('Wrote %d drawables to %s' % (len(DRAWABLES), src_dir))
+    for path, name in VECTOR_ICONS.items():
+        with open(os.path.join(src_dir, path), 'w') as f:
+            f.write(vector_icon(all_icons[name]))
+    print('Wrote %d drawables and %d vector icons to %s' % (
+        len(DRAWABLES), len(VECTOR_ICONS), src_dir))
 
 
 def main(svg_path, out_dir):

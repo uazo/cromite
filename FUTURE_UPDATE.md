@@ -22,7 +22,7 @@ Second round, picked from the update ideas:
 | Pop-up guard with trust score     | large  | done    |
 | Pop-up guard settings             | small  | done    |
 | One CromIKO settings page         | medium | done    |
-| CromIKO for Windows: first step   | medium | done    |
+| CromIKO for Windows               | large  | started |
 
 ## Video and audio player (weight 10) - done
 
@@ -206,21 +206,64 @@ the mascot.
 - The tops of the CromIKO pages keep their tinted card in the rounded
   style of the settings of Chromium 153.
 
-## CromIKO for Windows - first step done
+## CromIKO for Windows
 
-Done in `CromIKO-Windows.patch` and the Windows version of
-`tools/cromiko/build.sh` (option 3 of `server-build.sh`): a zip with CromIKO
-for Windows 10 and 11, cross-compiled on the Linux build server like
-Cromite's Windows version.
+The Windows version is built by `tools/cromiko/build.sh` (option 3 of
+`server-build.sh`), cross-compiled on the Linux build server like Cromite's.
+Each step below is its own `CromIKO-Windows-*.patch` (or a change of the
+build scripts), built and tried before the next one.
 
-- The CromIKO name, icons (app, incognito, web pages, PDF, Start menu) and
-  logo, and periwinkle as the color of the browser.
-- Its own profile folder and Windows names, so it runs next to Cromite.
-- From the shared code: secure DNS with Quad9 and the CromIKO providers,
-  every pop-up held (the icon in the address bar), Cromite's ad blocking.
+The Android features are Android screens (Java), so on Windows each needs a
+desktop version: C++ with Chromium's desktop UI (views) for menus, dialogs
+and bubbles, and WebUI pages (TypeScript) for the new tab page and settings.
+What is already in shared C++ works on Windows as it is: the shield counts,
+the secure DNS providers, pop-ups held by default, the download queue code.
 
-The other features are Android screens, and need a desktop version each:
-the home screen widgets and the shield card on the new tab page, the weekly
-shield report, the CromIKO settings page, the Fire button, the pop-up guard
-toast and trust score, the CromIKO player, manga mode and the download
-manager settings.
+### Step 1: CromIKO on Windows - done
+
+`CromIKO-Windows.patch`: the name, the icons (app, incognito, web pages,
+PDF, Start menu), the logos, periwinkle as the browser color, its own
+profile folder and Windows names so it runs next to Cromite. With the shared
+code: secure DNS with Quad9 and the CromIKO providers, every pop-up held
+(the icon in the address bar), Cromite's ad blocking.
+
+### Step 2: the CromIKO features that are small on Windows
+
+| # | Feature | On Windows | Effort | Status |
+|---|---------|------------|:------:|:------:|
+| 2.1 | Fire button | "Burn tabs and data" in the app menu, with the CromIKO fire icon: after a confirmation it closes all tabs and windows, also incognito ones, without keeping them in Recent tabs, deletes history, cookies, site data and cache of all time, and leaves one window with a new tab and "All clean!" (`CromIKO-Windows-Fire-Button.patch`) | small | done, to try |
+| 2.2 | CromIKO DNS | The secure DNS setting is named CromIKO DNS, and says what each provider filters (ads, family, malware, nothing), like the Android screen | small | |
+| 2.3 | Download manager | The CromIKO queue on Windows too: connections per file (faster big files), downloads at the same time, a queue that waits; its settings in Settings > Downloads | small | |
+| 2.4 | Accent colors | The CromIKO colors (Periwinkle, Lavender, Mint, ...) first in Customize Chrome | small | |
+
+### Step 3: the CromIKO pages
+
+| # | Feature | On Windows | Effort | Status |
+|---|---------|------------|:------:|:------:|
+| 3.1 | New tab page | The mascot instead of the Chromium logo, the shield card (ads and trackers blocked this week, opens the report) and the CromIKO shortcuts (bookmarks, downloads, DNS) | medium | |
+| 3.2 | Weekly shield report | A CromIKO page (chrome://cromiko/report) with the count of the week, the bars of the days, last week, the sites and trackers blocked the most and the pop-ups held, from the same counts as Android | medium | |
+| 3.3 | CromIKO settings | A CromIKO section at the top of Settings with all CromIKO features and their icons, like the Android page: DNS, pop-up guard, ad blocking, report, Fire button, download manager, colors, player, manga mode | medium | |
+| 3.4 | Edit the new tab page | The widgets of 3.1 moved, made small or turned off, like Edit home screen on Android | medium | |
+
+### Step 4: the big features
+
+| # | Feature | On Windows | Effort | Status |
+|---|---------|------------|:------:|:------:|
+| 4.1 | CromIKO player | The same page script (cromiko_video.js) in every frame: the mascot button on videos, the full window player without the site's overlays, "Open in CromIKO player" in the right-click menu and the app menu, and keyboard keys (space, arrows, F, M) | large | |
+| 4.2 | Pop-up guard | Redirects to other sites held too (the Android throttle made for all platforms), and instead of Chromium's small bubble a CromIKO bubble with the address, who runs the site and the trust score, Open, Block and Always allow. The trust score and the provider list move to shared C++, so Android and Windows use one copy | large | |
+| 4.3 | Manga mode | The reader of cromiko_manga.js: the setup taps, the settings of each site in the profile, the next chapter loaded early, and Continue reading on the new tab page | large | |
+| 4.4 | Incognito lock | Incognito windows lock when CromIKO goes to the background and open again with Windows Hello (face, fingerprint or PIN), with the same delay choice as Android | medium | |
+
+### Step 5: a real Windows app
+
+| # | Feature | On Windows | Effort | Status |
+|---|---------|------------|:------:|:------:|
+| 5.1 | Installer | A setup.exe (Chromium's installer) next to the zip: Start menu and desktop shortcuts, "Make CromIKO your default browser", uninstall in Windows settings, the CromIKO icons for web pages and PDFs | medium | |
+| 5.2 | Update check | Like Android's: CromIKO looks at the GitHub releases and shows "Update CromIKO" in the app menu when there is a newer version | small | |
+| 5.3 | Welcome | The first start with the mascot, like the Android onboarding: CromIKO DNS, pop-up guard and ad blocking explained, and the default browser question | small | |
+| 5.4 | Releases | The Windows zip and setup.exe in the GitHub releases next to the APK | small | |
+
+The order follows what you notice first: step 2 makes the menu and settings
+CromIKO, step 3 the pages you see all the time, step 4 brings the big Android
+features, step 5 turns the zip into an app that installs and updates like
+others. 5.1 can move earlier if the zip is in the way.
