@@ -20,6 +20,8 @@ Second round, picked from the update ideas:
 | Weekly shield report              | medium | done    |
 | Custom accent color picker        | medium | done    |
 | Pop-up guard with trust score     | large  | done    |
+| Pop-up guard settings             | small  | done    |
+| One CromIKO settings page         | medium | done    |
 
 ## Video and audio player (weight 10) - done
 
@@ -170,3 +172,35 @@ Done in `CromIKO-Popup-Guard.patch`.
   domain endings, hidden addresses, short links, app downloads, tracking
   codes, forwarding and opening without a tap lower it; the same site as
   the page raises it.
+
+## Pop-up guard settings - done
+
+Done in `CromIKO-Popup-Guard-Settings.patch`, in Settings > CromIKO >
+Pop-up guard and from the weekly shield report.
+
+- How many pop-ups and redirects the guard held this week, and last week.
+  A page that tries the same one again counts once; Incognito tabs don't
+  count.
+- "Hold all pop-ups and redirects": on by default; off leaves only what
+  Chromium blocks itself (pop-ups without a tap, its redirect blocking).
+- "Always allowed": the sites allowed with "Always allow" in the menu, each
+  with a button that removes it again.
+- The weekly shield report shows "Pop-ups held this week" with last week's
+  number, which opens these settings.
+
+## One CromIKO settings page - done
+
+Done in `CromIKO-Settings.patch`: "CromIKO" at the top of Settings, with
+the mascot.
+
+- All CromIKO features in one place, with the icons of the logo (the
+  star in the accent color): CromIKO DNS (with its status), pop-up guard,
+  ad blocking, weekly shield report (with this week's counts), the
+  incognito lock and when it locks, the Fire button, the incognito tab
+  tile (a tap adds it to Quick Settings on Android 13 and newer), accent
+  color, Edit home screen (opens its dialog), manga mode, the CromIKO
+  player and the download manager.
+- The settings stay where Chromium has them too (Privacy, Appearance,
+  Downloads), so they are found in both places.
+- The tops of the CromIKO pages keep their tinted card in the rounded
+  style of the settings of Chromium 153.

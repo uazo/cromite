@@ -13,9 +13,10 @@ Usage:
 
 The first writes icons/<name>.svg (two colors), icons/<name>_mono.svg (one
 color) and icons/preview.html (all icons, light and dark, large and at 24 and
-48 px). The second writes the VectorDrawables of CromIKO-Feature-Icons.patch
-into a Chromium checkout: one color, the default icon color, which the menu,
-the shortcuts and the lists tint as they need.
+48 px). The second writes the VectorDrawables of the CromIKO patches into a
+Chromium checkout (as CromIKO-Settings.patch leaves them): two colors, the
+default icon color and the star in the accent color, as the settings show
+them. The menu, the shortcuts and the buttons tint them in one color.
 """
 import json
 import os
@@ -29,6 +30,11 @@ INK = '#1E212A'   # charcoal of the logo
 STAR = 'Pfad 18'
 VISOR = 'Pfad 2'
 EYES = ['Pfad 3', 'Pfad 4']
+# The mascot in one color, like the themed app icon of gen_icons.py: the
+# first paths filled even-odd, so that the face, the gap of the ring and the
+# highlight are holes and the eyes are filled again, the others solid.
+MASCOT_EVEN_ODD = ['Pfad 1', 'Pfad 2', 'Pfad 3', 'Pfad 4', 'Pfad 5', 'Pfad 6']
+MASCOT_SOLID = ['Pfad 7', 'Pfad 8']
 
 
 # --- Paths of the logo -----------------------------------------------------
@@ -79,6 +85,8 @@ class Logo:
         self.star = parse(paths[STAR])
         self.visor = parse(paths[VISOR])
         self.eyes = [parse(paths[e]) for e in EYES]
+        self.mascot_even_odd = [parse(paths[p]) for p in MASCOT_EVEN_ODD]
+        self.mascot_solid = [parse(paths[p]) for p in MASCOT_SOLID]
 
     def star_in(self, box):
         return place(self.star, fit(bbox(self.star), box))
@@ -88,6 +96,14 @@ class Logo:
         in the shape under it, the eyes are filled again."""
         t = fit(bbox(self.visor), box)
         return place(self.visor, t) + ''.join(place(e, t) for e in self.eyes)
+
+    def mascot_in(self, box):
+        """The whole mascot with its star: (fills, star)."""
+        parts = self.mascot_even_odd + self.mascot_solid + [self.star]
+        t = fit(bbox([c for part in parts for c in part]), box)
+        fills = [''.join(place(p, t) for p in self.mascot_even_odd)]
+        fills += [place(p, t) for p in self.mascot_solid]
+        return fills, place(self.star, t)
 
 
 # --- Shapes ----------------------------------------------------------------
@@ -107,7 +123,20 @@ def circle(cx, cy, r):
 def icons(logo):
     """Returns {name: (title, main paths, stroked paths, star)}: the main
     paths are filled even-odd, the stroked ones are round lines 2.6 wide."""
+    mascot, mascot_star = logo.mascot_in((0.8, 1.2, 23.2, 22.8))
     return {
+        'cromiko': ('CromIKO', mascot, [], mascot_star),
+        'incognito_tile': ('Incognito tab tile', [
+            # A Quick Settings tile: the face of the mascot and two lines of text.
+            rect(1.4, 7.8, 19.6, 12, 6) + logo.face_in((3.6, 10.6, 10.8, 17.2))
+            + rect(12.4, 11, 5.6, 1.9, 0.95) + rect(12.4, 14.8, 3.8, 1.9, 0.95)], [],
+            logo.star_in((16.9, 0.8, 23.3, 7.6))),
+        'popup_guard': ('Pop-up guard', [
+            # A pop-up in front of the page, with the face of the mascot,
+            # which holds it.
+            rect(6.8, 8.4, 15, 13.2, 3.2) + logo.face_in((9.2, 11, 19.4, 19))],
+            ['M3.3,15.2 V7 A2.6,2.6 0 0 1 5.9,4.4 H14.4'],
+            logo.star_in((16.9, 0.8, 23.3, 7.6))),
         'dns': ('CromIKO DNS', [
             rect(2.5, 4, 13.5, 7, 2.6) + rect(2.5, 13, 19, 7.5, 2.6)
             + circle(6.2, 7.5, 1.3) + circle(6.2, 16.75, 1.3)
@@ -215,27 +244,35 @@ def preview(all_icons):
 
 THEME_RES = 'components/browser_ui/theme/android/java/res/drawable/'
 CHROME_RES = 'chrome/android/java/res/drawable/'
-# The drawable of each icon in Chromium, and the color it has without a tint:
-# the "Edit home screen" button shows it as it is, in the accent color.
+# The drawables in Chromium: the icon of each, and the color of all of it
+# when it has one color: the "Edit home screen" button shows its icon as it
+# is, in the accent color. The others have two colors.
 DRAWABLES = {
-    'dns': (THEME_RES + 'cromiko_ic_dns_24dp.xml', None),
-    'adblock': (THEME_RES + 'cromiko_ic_adblock_24dp.xml', None),
-    'fire': (THEME_RES + 'cromiko_ic_fire_24dp.xml', None),
-    'lock': (THEME_RES + 'cromiko_ic_lock_24dp.xml', None),
-    'manga': (THEME_RES + 'cromiko_ic_manga_24dp.xml', None),
-    'player': (THEME_RES + 'cromiko_ic_player_24dp.xml', None),
-    'downloads': (THEME_RES + 'cromiko_ic_downloads_24dp.xml', None),
-    'home_edit': (CHROME_RES + 'cromiko_ic_home_edit_24dp.xml', '?attr/colorPrimary'),
-    'report': (THEME_RES + 'cromiko_ic_report_24dp.xml', None),
-    'accent': (THEME_RES + 'cromiko_ic_accent_24dp.xml', None),
+    THEME_RES + 'cromiko_ic_dns_24dp.xml': ('dns', None),
+    THEME_RES + 'cromiko_ic_adblock_24dp.xml': ('adblock', None),
+    THEME_RES + 'cromiko_ic_fire_24dp.xml': ('fire', None),
+    THEME_RES + 'cromiko_ic_lock_24dp.xml': ('lock', None),
+    THEME_RES + 'cromiko_ic_manga_24dp.xml': ('manga', None),
+    THEME_RES + 'cromiko_ic_player_24dp.xml': ('player', None),
+    THEME_RES + 'cromiko_ic_downloads_24dp.xml': ('downloads', None),
+    CHROME_RES + 'cromiko_ic_home_edit_24dp.xml': ('home_edit', '?attr/colorPrimary'),
+    CHROME_RES + 'cromiko_ic_home_screen_24dp.xml': ('home_edit', None),
+    THEME_RES + 'cromiko_ic_report_24dp.xml': ('report', None),
+    THEME_RES + 'cromiko_ic_accent_24dp.xml': ('accent', None),
+    CHROME_RES + 'cromiko_ic_popup_guard_24dp.xml': ('popup_guard', None),
+    CHROME_RES + 'cromiko_ic_incognito_tile_24dp.xml': ('incognito_tile', None),
+    CHROME_RES + 'cromiko_ic_cromiko_24dp.xml': ('cromiko', None),
 }
+# The two colors: the default icon color, and the accent color for the star.
+MAIN_COLOR = '@macro/default_icon_color'
+STAR_COLOR = '?attr/colorPrimary'
 
 
 def vector_drawable(icon, color):
-    """Returns the icon as a one-color VectorDrawable: white tinted with the
-    default icon color, or |color| without a tint."""
+    """Returns the icon as a VectorDrawable: in the default icon color with
+    the star in the accent color, or all in |color|."""
     title, fills, strokes, star = icon
-    fill = color or '@android:color/white'
+    fill = color or MAIN_COLOR
     paths = ''.join(
         '\n  <path\n      android:fillColor="%s"\n      android:fillType="evenOdd"\n'
         '      android:pathData="%s"/>' % (fill, d) for d in fills)
@@ -244,8 +281,7 @@ def vector_drawable(icon, color):
         '      android:strokeLineCap="round"\n      android:strokeLineJoin="round"\n'
         '      android:pathData="%s"/>' % (fill, d) for d in strokes)
     paths += '\n  <path\n      android:fillColor="%s"\n      android:pathData="%s"/>' % (
-        fill, star)
-    tint = '' if color else '\n    android:tint="@macro/default_icon_color"'
+        color or STAR_COLOR, star)
     return ('<?xml version="1.0" encoding="utf-8"?>\n<!--\n'
             'Copyright 2026 The CromIKO Authors\n'
             'License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html\n'
@@ -253,13 +289,13 @@ def vector_drawable(icon, color):
             'tools/cromiko/gen_feature_icons.py.\n-->\n'
             '<vector xmlns:android="http://schemas.android.com/apk/res/android"\n'
             '    android:width="24dp"\n    android:height="24dp"\n'
-            '    android:viewportWidth="24"\n    android:viewportHeight="24"%s>%s\n'
-            '</vector>\n' % (title, tint, paths))
+            '    android:viewportWidth="24"\n    android:viewportHeight="24">%s\n'
+            '</vector>\n' % (title, paths))
 
 
 def install(svg_path, src_dir):
     all_icons = icons(Logo(svg_path))
-    for name, (path, color) in DRAWABLES.items():
+    for path, (name, color) in DRAWABLES.items():
         out = os.path.join(src_dir, path)
         os.makedirs(os.path.dirname(out), exist_ok=True)
         with open(out, 'w') as f:
