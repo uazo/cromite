@@ -1,0 +1,195 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 16:00:00 +0000
+Subject: CromIKO Secure DNS
+
+Add providers to the secure DNS (DNS-over-HTTPS) list in Settings >
+Privacy > Use secure DNS, and make Quad9 the default:
+
+- AdGuard: ad blocking, family protection and unfiltered.
+- dnsforge.de: ad blocking, family filter and unfiltered.
+- Mullvad: unfiltered and ad blocking.
+- Quad9 (9.9.9.9) is listed again (Chromium turned it off).
+- Cloudflare (1.1.1.1), Google (Public DNS) and the others stay.
+
+Quad9 (a Swiss non-profit that blocks malware domains) is now the
+default provider, instead of OpenDNS when no provider is chosen. Like
+in Cromite, secure DNS is on by default.
+
+The addresses and DoH templates are from the providers' own pages, and
+each template answers DNS queries.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ .../default_dns_over_https_config_source.cc   |   4 +-
+ .../net/stub_resolver_config_reader.cc        |   4 +-
+ net/dns/public/doh_provider_entry.cc          | 106 +++++++++++++++++-
+ 3 files changed, 111 insertions(+), 3 deletions(-)
+
+diff --git a/chrome/browser/net/default_dns_over_https_config_source.cc b/chrome/browser/net/default_dns_over_https_config_source.cc
+--- a/chrome/browser/net/default_dns_over_https_config_source.cc
++++ b/chrome/browser/net/default_dns_over_https_config_source.cc
+@@ -39,7 +39,9 @@ DefaultDnsOverHttpsConfigSource::~DefaultDnsOverHttpsConfigSource() = default;
+ void DefaultDnsOverHttpsConfigSource::RegisterPrefs(
+     PrefRegistrySimple* registry) {
+   registry->RegisterStringPref(prefs::kDnsOverHttpsMode, std::string());
+-  registry->RegisterStringPref(prefs::kDnsOverHttpsTemplates, std::string());
++  // CromIKO: Quad9 is the default secure DNS provider.
++  registry->RegisterStringPref(prefs::kDnsOverHttpsTemplates,
++                               "https://dns.quad9.net/dns-query");
+   registry->RegisterBooleanPref(prefs::kDnsOverHttpsAutomaticModeFallbackToDoh,
+                                 false);
+ #if BUILDFLAG(IS_CHROMEOS)
+diff --git a/chrome/browser/net/stub_resolver_config_reader.cc b/chrome/browser/net/stub_resolver_config_reader.cc
+--- a/chrome/browser/net/stub_resolver_config_reader.cc
++++ b/chrome/browser/net/stub_resolver_config_reader.cc
+@@ -433,7 +433,9 @@ SecureDnsConfig StubResolverConfigReader::GetAndUpdateConfiguration(
+         GetDnsOverHttpsConfigSource()->GetDnsOverHttpsTemplates());
+     if (secure_dns_mode == net::SecureDnsMode::kSecure &&
+           GetDnsOverHttpsConfigSource()->GetDnsOverHttpsTemplates().empty()) {
+-      doh_config = net::DnsOverHttpsConfig::FromStringLax("https://doh.opendns.com/dns-query{?dns}");
++      // CromIKO: Quad9, the default provider.
++      doh_config = net::DnsOverHttpsConfig::FromStringLax(
++          "https://dns.quad9.net/dns-query");
+     }
+     if (ShouldUseDohFallback(secure_dns_mode,
+                              *GetDnsOverHttpsConfigSource())) {
+diff --git a/net/dns/public/doh_provider_entry.cc b/net/dns/public/doh_provider_entry.cc
+--- a/net/dns/public/doh_provider_entry.cc
++++ b/net/dns/public/doh_provider_entry.cc
+@@ -74,8 +74,48 @@ const DohProviderEntry::List& DohProviderEntry::GetList() {
+   // tools/metrics/histograms/metadata/net/histograms.xml.
+   //
+   // LINT.IfChange(DohProviderId)
++  // CromIKO: adds AdGuard, dnsforge.de and Mullvad, and shows Quad9.
+   static const auto entries(base::NoDestructor(std::to_array<DohProviderEntry>(
+       {{
++           "AdGuard",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderAdGuard,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"94.140.14.14", "94.140.15.15", "2a10:50c0::ad1:ff",
++            "2a10:50c0::ad2:ff"},
++           /*dns_over_tls_hostnames=*/{"dns.adguard-dns.com"},
++           "https://dns.adguard-dns.com/dns-query{?dns}",
++           /*ui_name=*/"AdGuard (Ad Blocking)",
++           /*privacy_policy=*/"https://adguard-dns.io/en/privacy.html",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
++       {
++           "AdGuardFamily",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderAdGuardFamily,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"94.140.14.15", "94.140.15.16", "2a10:50c0::bad1:ff",
++            "2a10:50c0::bad2:ff"},
++           /*dns_over_tls_hostnames=*/{"family.adguard-dns.com"},
++           "https://family.adguard-dns.com/dns-query{?dns}",
++           /*ui_name=*/"AdGuard (Family Protection)",
++           /*privacy_policy=*/"https://adguard-dns.io/en/privacy.html",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
++       {
++           "AdGuardUnfiltered",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderAdGuardUnfiltered,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"94.140.14.140", "94.140.14.141", "2a10:50c0::1:ff",
++            "2a10:50c0::2:ff"},
++           /*dns_over_tls_hostnames=*/{"unfiltered.adguard-dns.com"},
++           "https://unfiltered.adguard-dns.com/dns-query{?dns}",
++           /*ui_name=*/"AdGuard (Unfiltered)",
++           /*privacy_policy=*/"https://adguard-dns.io/en/privacy.html",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
++       {
+            "CleanBrowsingAdult",
+            MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderCleanBrowsingAdult,
+                                             base::FEATURE_ENABLED_BY_DEFAULT),
+@@ -211,6 +251,46 @@ const DohProviderEntry::List& DohProviderEntry::GetList() {
+         /*dns_over_https_server_ip_strs=*/
+         {"86.54.11.1", "86.54.11.201", "2a13:1001::86:54:11:1",
+          "2a13:1001::86:54:11:201"}},
++       {
++           "DnsForge",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderDnsForge,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"49.12.67.122", "91.99.154.175", "176.9.93.198", "176.9.1.117",
++            "2a01:4f8:c013:29d::122", "2a01:4f8:c010:8c35::175",
++            "2a01:4f8:151:34aa::198", "2a01:4f8:141:316d::117"},
++           /*dns_over_tls_hostnames=*/{"dnsforge.de"},
++           "https://dnsforge.de/dns-query{?dns}",
++           /*ui_name=*/"dnsforge.de (Ad Blocking)",
++           /*privacy_policy=*/"https://adminforge.de/datenschutz/",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
++       {
++           "DnsForgeBlank",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderDnsForgeBlank,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"138.199.149.249", "78.47.71.194", "2a01:4f8:c17:7aa5::249",
++            "2a01:4f8:c013:aae9::194"},
++           /*dns_over_tls_hostnames=*/{"blank.dnsforge.de"},
++           "https://blank.dnsforge.de/dns-query{?dns}",
++           /*ui_name=*/"dnsforge.de (Unfiltered)",
++           /*privacy_policy=*/"https://adminforge.de/datenschutz/",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
++       {
++           "DnsForgeClean",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderDnsForgeClean,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"49.12.223.2", "49.12.43.208", "2a01:4f8:c17:4fbc::2",
++            "2a01:4f8:c012:ed89::208"},
++           /*dns_over_tls_hostnames=*/{"clean.dnsforge.de"},
++           "https://clean.dnsforge.de/dns-query{?dns}",
++           /*ui_name=*/"dnsforge.de (Family Filter)",
++           /*privacy_policy=*/"https://adminforge.de/datenschutz/",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
+        {
+            "Dnssb",
+            MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderDnssb,
+@@ -275,6 +355,30 @@ const DohProviderEntry::List& DohProviderEntry::GetList() {
+         /*display_countries=*/{},
+         {"109.236.119.2", "109.236.120.2", "2a02:6ca3:0:1::2",
+          "2a02:6ca3:0:2::2"}},
++       {
++           "Mullvad",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderMullvad,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"194.242.2.2", "2a07:e340::2"},
++           /*dns_over_tls_hostnames=*/{"dns.mullvad.net"},
++           "https://dns.mullvad.net/dns-query{?dns}",
++           /*ui_name=*/"Mullvad (Unfiltered)",
++           /*privacy_policy=*/"https://mullvad.net/en/help/privacy-policy",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
++       {
++           "MullvadAdblock",
++           MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderMullvadAdblock,
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
++           {"194.242.2.3", "2a07:e340::3"},
++           /*dns_over_tls_hostnames=*/{"adblock.dns.mullvad.net"},
++           "https://adblock.dns.mullvad.net/dns-query{?dns}",
++           /*ui_name=*/"Mullvad (Ad Blocking)",
++           /*privacy_policy=*/"https://mullvad.net/en/help/privacy-policy",
++           /*display_globally=*/true,
++           /*display_countries=*/{},
++       },
+        {
+            "NextDns",
+            MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderNextDns,
+@@ -341,7 +445,7 @@ const DohProviderEntry::List& DohProviderEntry::GetList() {
+        {
+            "Quad9Secure",
+            MAKE_STATIC_STORAGE_BASE_FEATURE(kDohProviderQuad9Secure,
+-                                            base::FEATURE_DISABLED_BY_DEFAULT),
++                                            base::FEATURE_ENABLED_BY_DEFAULT),
+            {"9.9.9.9", "149.112.112.112", "2620:fe::fe", "2620:fe::9"},
+            /*dns_over_tls_hostnames=*/{"dns.quad9.net", "dns9.quad9.net"},
+            "https://dns.quad9.net/dns-query",
+--

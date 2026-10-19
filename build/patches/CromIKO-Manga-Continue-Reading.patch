@@ -1,0 +1,1400 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 10:00:00 +0000
+Subject: CromIKO Manga Continue Reading
+
+Add "Continue reading" to manga mode. While the reader is open, the
+browser asks the page script every 2 seconds where the user is (the
+image at the top of the screen and how far into it) and keeps, for each
+series, the last chapter read, the place in it and a cover. The series
+and chapter number come from the page title (og:title, the title or the
+heading, like "Series - Chapter 12 | Site") or from the address (like
+/manga/series/chapter-12/); the cover is the series cover of the page
+(og:image) or the first page of the chapter, downloaded through the
+page so that sites that check the referrer still send it.
+
+The new tab page gets a "Continue reading" row with the covers of the
+last 12 series, a progress bar and the chapter. A tap opens the chapter
+and the reader scrolls back to the same place, keeping it while the
+images above load; a chapter read to the end opens the next one. A long
+press removes a series. Opening a chapter that the user read part of in
+any other way also goes back to the place.
+
+While the user reads, the next chapter and its first 10 images load in
+the background once 60% of the chapter is read, so that it opens
+faster. A check box in the manga mode dialog turns this off.
+
+Nothing is kept for incognito tabs, and the Fire button forgets the
+series along with the history.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/chrome_java_resources.gni      |   3 +
+ chrome/android/chrome_java_sources.gni        |   2 +
+ ...miko_continue_reading_cover_background.xml |  12 +
+ .../res/layout/cromiko_continue_reading.xml   |  40 ++
+ .../layout/cromiko_continue_reading_item.xml  |  59 +++
+ .../java/res/layout/new_tab_page_layout.xml   |   3 +
+ chrome/android/java/res/raw/cromiko_manga.js  | 321 +++++++++++++-
+ .../cromiko/CromikoContinueReadingView.java   | 165 +++++++
+ .../browser/cromiko/CromikoFireButton.java    |   2 +
+ .../browser/cromiko/CromikoMangaMode.java     |  68 ++-
+ .../browser/cromiko/CromikoMangaReading.java  | 406 ++++++++++++++++++
+ .../chrome/browser/ntp/NewTabPage.java        |   7 +
+ .../CromIKO-Manga-Continue-Reading.grdp       |  18 +
+ 13 files changed, 1099 insertions(+), 7 deletions(-)
+ create mode 100644 chrome/android/java/res/drawable/cromiko_continue_reading_cover_background.xml
+ create mode 100644 chrome/android/java/res/layout/cromiko_continue_reading.xml
+ create mode 100644 chrome/android/java/res/layout/cromiko_continue_reading_item.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoContinueReadingView.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaReading.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Continue-Reading.grdp
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -278,6 +278,7 @@ chrome_java_resources = [
+   "java/res/drawable/chrome_logo_on_circular_background.xml",
+   "java/res/drawable/clear_text.xml",
+   "java/res/drawable/computer_black_24dp.xml",
++  "java/res/drawable/cromiko_continue_reading_cover_background.xml",
+   "java/res/drawable/cromiko_shield_stats_background.xml",
+   "java/res/drawable/custom_tabs_handle_view_shape.xml",
+   "java/res/drawable/custom_tabs_url_bar_omnibox_bg.xml",
+@@ -505,6 +506,8 @@ chrome_java_resources = [
+   "java/res/layout/contextual_search_quick_action_icon_view.xml",
+   "java/res/layout/contextual_search_related_searches_view.xml",
+   "java/res/layout/contextual_search_term_view.xml",
++  "java/res/layout/cromiko_continue_reading.xml",
++  "java/res/layout/cromiko_continue_reading_item.xml",
+   "java/res/layout/cromiko_download_settings_header.xml",
+   "java/res/layout/cromiko_shield_stats.xml",
+   "java/res/layout/custom_tab_close_button.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -477,10 +477,12 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/crash/CrashUploadCountStore.java",
+   "java/src/org/chromium/chrome/browser/crash/LogcatExtractionRunnable.java",
+   "java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoContinueReadingView.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoDownloadSettings.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaReading.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabColorProvider.java",
+diff --git a/chrome/android/java/res/drawable/cromiko_continue_reading_cover_background.xml b/chrome/android/java/res/drawable/cromiko_continue_reading_cover_background.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/drawable/cromiko_continue_reading_cover_background.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The cover of a series in "Continue reading": the CromIKO accent color at 12% opacity. -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:shape="rectangle">
++    <solid android:color="#1F5C7CFC" />
++    <corners android:radius="12dp" />
++</shape>
+diff --git a/chrome/android/java/res/layout/cromiko_continue_reading.xml b/chrome/android/java/res/layout/cromiko_continue_reading.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/layout/cromiko_continue_reading.xml
+@@ -0,0 +1,40 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- "Continue reading" of manga mode on the new tab page, see CromikoContinueReadingView. -->
++<org.chromium.chrome.browser.cromiko.CromikoContinueReadingView
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:id="@+id/cromiko_continue_reading"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:layout_marginTop="@dimen/ntp_section_top_margin"
++    android:orientation="vertical"
++    android:visibility="gone">
++
++    <TextView
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginStart="@dimen/mvt_container_lateral_margin"
++        android:layout_marginEnd="@dimen/mvt_container_lateral_margin"
++        android:layout_marginBottom="8dp"
++        android:text="@string/cromiko_continue_reading_title"
++        android:textAppearance="@style/TextAppearance.TextMediumThick.Primary" />
++
++    <HorizontalScrollView
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:clipToPadding="false"
++        android:paddingStart="@dimen/mvt_container_lateral_margin"
++        android:paddingEnd="@dimen/mvt_container_lateral_margin"
++        android:scrollbars="none">
++
++        <LinearLayout
++            android:id="@+id/cromiko_continue_reading_items"
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:orientation="horizontal" />
++    </HorizontalScrollView>
++</org.chromium.chrome.browser.cromiko.CromikoContinueReadingView>
+diff --git a/chrome/android/java/res/layout/cromiko_continue_reading_item.xml b/chrome/android/java/res/layout/cromiko_continue_reading_item.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/layout/cromiko_continue_reading_item.xml
+@@ -0,0 +1,59 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- A series in "Continue reading": its cover with the progress, its name and chapter. -->
++<LinearLayout
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="96dp"
++    android:layout_height="wrap_content"
++    android:layout_marginEnd="12dp"
++    android:background="?attr/selectableItemBackground"
++    android:orientation="vertical">
++
++    <FrameLayout
++        android:id="@+id/cromiko_continue_reading_cover_frame"
++        android:layout_width="96dp"
++        android:layout_height="134dp"
++        android:background="@drawable/cromiko_continue_reading_cover_background">
++
++        <ImageView
++            android:id="@+id/cromiko_continue_reading_cover"
++            android:layout_width="match_parent"
++            android:layout_height="match_parent"
++            android:importantForAccessibility="no"
++            android:padding="16dp"
++            android:scaleType="fitCenter"
++            android:src="@drawable/cromiko_welcome_mascot" />
++
++        <ProgressBar
++            android:id="@+id/cromiko_continue_reading_progress"
++            style="?android:attr/progressBarStyleHorizontal"
++            android:layout_width="match_parent"
++            android:layout_height="4dp"
++            android:layout_gravity="bottom"
++            android:importantForAccessibility="no"
++            android:max="100"
++            android:progressBackgroundTint="@android:color/white"
++            android:progressTint="@color/cromiko_accent_color" />
++    </FrameLayout>
++
++    <TextView
++        android:id="@+id/cromiko_continue_reading_series"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:layout_marginTop="6dp"
++        android:ellipsize="end"
++        android:maxLines="2"
++        android:textAppearance="@style/TextAppearance.TextSmall.Primary" />
++
++    <TextView
++        android:id="@+id/cromiko_continue_reading_chapter"
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:ellipsize="end"
++        android:maxLines="1"
++        android:textAppearance="@style/TextAppearance.TextSmall.Secondary" />
++</LinearLayout>
+diff --git a/chrome/android/java/res/layout/new_tab_page_layout.xml b/chrome/android/java/res/layout/new_tab_page_layout.xml
+--- a/chrome/android/java/res/layout/new_tab_page_layout.xml
++++ b/chrome/android/java/res/layout/new_tab_page_layout.xml
+@@ -52,6 +52,9 @@ found in the LICENSE file.
+     <!-- CromIKO: blocked ads and trackers -->
+     <include layout="@layout/cromiko_shield_stats" />
+ 
++    <!-- CromIKO: continue reading the series of manga mode -->
++    <include layout="@layout/cromiko_continue_reading" />
++
+     <ViewStub
+         android:id="@+id/mv_tiles_layout_stub"
+         android:inflatedId="@+id/mv_tiles_container"
+diff --git a/chrome/android/java/res/raw/cromiko_manga.js b/chrome/android/java/res/raw/cromiko_manga.js
+--- a/chrome/android/java/res/raw/cromiko_manga.js
++++ b/chrome/android/java/res/raw/cromiko_manga.js
+@@ -8,7 +8,8 @@
+ // Commands:
+ //   "pick"  Ask the user to tap the next chapter button, the previous chapter
+ //           button and a page of the chapter. Then save the result (read by
+-//           "poll") and open the reader.
++//           "poll") and open the reader (with the "preload" option of the
++//           config, if any).
+ //   "poll"  Return the state of "pick": picking, done (with the config),
+ //           cancelled or idle.
+ //   "read"  Open the reader now, waiting for the chapter images if needed.
+@@ -16,6 +17,15 @@
+ //           again on a page where the user closed the reader.
+ //   "stop"  Close the picker or the reader.
+ //   "state" Return what is running.
++//   "progress"
++//           Return where the user is in the chapter, and what the chapter is
++//           (series, chapter number, cover, next chapter), for "Continue
++//           reading" on the new tab page.
++//
++// The config of "read" and "auto" can also have:
++//   resume  {url, index, offset}: on that chapter, scroll back to that image
++//           (index) and place in it (offset, 0 to 1).
++//   preload true to load the next chapter and its first images early.
+ //
+ // The reader keeps the page itself and hides everything except the chapter
+ // images, which are shown at full width on black. The page keeps scrolling
+@@ -38,6 +48,21 @@
+     const MEDIA = 'img, canvas';
+     // How long "read" and "auto" wait for the chapter images to appear.
+     const WAIT_MS = 20000;
++    // How long the reader keeps the place it resumed at, while the images
++    // above it load, unless the user scrolls.
++    const RESTORE_MS = 10000;
++    // How far into the chapter the next one starts loading, and how many of
++    // its images.
++    const PRELOAD_AT = 0.6;
++    const PRELOAD_IMAGES = 10;
++    // "Chapter 12", "Ch. 12", "Episode 12", "#12"... in a title.
++    const CHAPTER_RE = new RegExp(
++        '(^|[\\s\\-\u2013\u2014|:,(\\[])(chapter|chap|ch|episode|ep|kapitel|' +
++            'chapitre|cap\u00edtulo|capitulo|cap|ch\u01b0\u01a1ng|bab|' +
++            '\u0433\u043b\u0430\u0432\u0430|#)\\.?\\s*#?\\s*(\\d+(?:[.,]\\d+)?)',
++        'i');
++    // Separators between the parts of a title: "Series - Chapter 1 | Site".
++    const TITLE_SEPARATOR = /\s+[-|\u2013\u2014\u00b7]\s+|\s*\|\s*/;
+ 
+     let t = {};
+     let picker = null;
+@@ -45,6 +70,8 @@
+     let waiter = null;
+     let pickState = 'idle';
+     let pickResult = null;
++    // The options of "pick" for the reader it opens: {preload}.
++    let pickOptions = {};
+     // The user closed the reader on this page: "auto" leaves it closed.
+     let dismissed = false;
+ 
+@@ -55,6 +82,7 @@
+       switch (cmd) {
+         case 'pick':
+           stopAll();
++          pickOptions = cfg || {};
+           startPicker();
+           return {state: 'picking'};
+         case 'poll': {
+@@ -85,6 +113,12 @@
+                                                  waiter ? 'waiting' : 'idle',
+             buttonsHidden: !!reader && reader.wrap.classList.contains('hidden'),
+           };
++        case 'progress':
++          if (!reader) {
++            return {state: picker ? 'picking' : waiter ? 'waiting' : 'idle'};
++          }
++          return Object.assign({state: 'reading'}, progressOf(),
++                               describeChapter());
+       }
+       return {state: 'unknown'};
+     }
+@@ -519,7 +553,7 @@
+         image: simpleSelector(result.image),
+       };
+       stopPicker('done', cfg);
+-      openReader(cfg);
++      openReader(Object.assign({}, cfg, {preload: !!pickOptions.preload}));
+     }
+ 
+     function stopPicker(state, cfg) {
+@@ -743,7 +777,10 @@
+         }
+       };
+       document.addEventListener('load', reader.onLoad, true);
+-      reader.onScroll = throttle(loadNearbyImages, 250);
++      reader.onScroll = throttle(() => {
++        loadNearbyImages();
++        maybePreload();
++      }, 250);
+       window.addEventListener('scroll', reader.onScroll, {passive: true});
+ 
+       // Keep the page isolated while the site adds or replaces elements.
+@@ -758,6 +795,9 @@
+       isolate();
+       updateNavButtons();
+       window.scrollTo(0, 0);
++      if (cfg.resume && sameChapter(cfg.resume.url)) {
++        startRestore(cfg.resume);
++      }
+       loadNearbyImages();
+       return true;
+     }
+@@ -766,6 +806,7 @@
+       if (!reader) {
+         return;
+       }
++      stopRestore();
+       reader.observer.disconnect();
+       window.removeEventListener('click', reader.onClick, true);
+       document.removeEventListener('load', reader.onLoad, true);
+@@ -925,6 +966,280 @@
+       window.scrollTo(0, 0);
+     }
+ 
++    function chapterMedia() {
++      return [...reader.container.querySelectorAll(MEDIA)];
++    }
++
++    function sameChapter(url) {
++      return typeof url === 'string' &&
++          url.split('#')[0] === location.href.split('#')[0];
++    }
++
++    // ---------------------------------------------------------------------
++    // Continue reading
++
++    // Scrolls to where the user stopped reading this chapter. The images
++    // above may still be loading and change size: keep the place until the
++    // user scrolls, or for RESTORE_MS.
++    function startRestore(position) {
++      const restore = {
++        index: Math.max(0, Math.floor(Number(position.index) || 0)),
++        offset: Math.min(1, Math.max(0, Number(position.offset) || 0)),
++        until: Date.now() + RESTORE_MS,
++        stop: () => stopRestore(),
++      };
++      reader.restore = restore;
++      for (const type of ['touchstart', 'wheel', 'keydown', 'mousedown']) {
++        window.addEventListener(type, restore.stop, {capture: true, passive: true});
++      }
++      restore.timer = setInterval(applyRestore, 200);
++      applyRestore();
++    }
++
++    function applyRestore() {
++      const restore = reader && reader.restore;
++      if (!restore) {
++        return;
++      }
++      if (Date.now() > restore.until) {
++        stopRestore();
++        return;
++      }
++      const target = chapterMedia()[restore.index];
++      if (!target) {
++        // Not there yet.
++        return;
++      }
++      const rect = target.getBoundingClientRect();
++      const y = Math.round(window.scrollY + rect.top + restore.offset * rect.height);
++      if (Math.abs(window.scrollY - y) > 2) {
++        window.scrollTo(0, y);
++      }
++    }
++
++    function stopRestore() {
++      const restore = reader && reader.restore;
++      if (!restore) {
++        return;
++      }
++      clearInterval(restore.timer);
++      for (const type of ['touchstart', 'wheel', 'keydown', 'mousedown']) {
++        window.removeEventListener(type, restore.stop, {capture: true});
++      }
++      reader.restore = null;
++      // Not again when the reader opens again on this page.
++      reader.cfg.resume = null;
++    }
++
++    // Where the user is: the image at the top of the screen (index), how far
++    // into it (offset), and how much of the chapter that is (progress).
++    function progressOf() {
++      const media = chapterMedia();
++      if (reader.restore) {
++        // Still going back to the saved place.
++        const {index, offset} = reader.restore;
++        return {
++          index,
++          offset,
++          progress: media.length ?
++              Math.round(Math.min(1, (index + offset) / media.length) * 1000) / 1000 :
++              0,
++        };
++      }
++      let index = 0;
++      let offset = 0;
++      for (let i = 0; i < media.length; i++) {
++        const rect = media[i].getBoundingClientRect();
++        index = i;
++        if (rect.bottom > 1) {
++          offset = rect.height > 0 ? Math.min(1, Math.max(0, -rect.top / rect.height)) : 0;
++          break;
++        }
++        offset = 1;
++      }
++      let progress = media.length ? (index + offset) / media.length : 0;
++      const last = media[media.length - 1];
++      if (last && !isPlaceholder(last) &&
++          last.getBoundingClientRect().bottom <= window.innerHeight + 2) {
++        // The end of the chapter is on the screen.
++        progress = 1;
++      }
++      return {
++        index,
++        offset: Math.round(offset * 1000) / 1000,
++        progress: Math.round(Math.min(1, progress) * 1000) / 1000,
++      };
++    }
++
++    function metaContent(property) {
++      const meta = document.querySelector(
++          'meta[property="' + property + '"], meta[name="' + property + '"]');
++      return meta ? (meta.getAttribute('content') || '').trim() : '';
++    }
++
++    function absoluteUrl(url, base) {
++      if (!url) {
++        return '';
++      }
++      try {
++        const parsed = new URL(url, base || location.href);
++        return /^https?:$/.test(parsed.protocol) ? parsed.href : '';
++      } catch (e) {
++        return '';
++      }
++    }
++
++    function nextChapterUrl() {
++      const el = findNav(reader.cfg.next);
++      const href = el && el.tagName === 'A' ? el.getAttribute('href') || '' : '';
++      if (!href || href.startsWith('#') || /^javascript:/i.test(href)) {
++        return '';
++      }
++      return absoluteUrl(el.href);
++    }
++
++    function titleCase(slug) {
++      return slug.replace(/[-_+]+/g, ' ').trim()
++          .replace(/\b\p{L}/gu, letter => letter.toUpperCase());
++    }
++
++    // The series and chapter number from a title like "Series - Chapter 12 |
++    // Site" or "Chapter 12 - Series", or null.
++    function parseTitle(text) {
++      text = (text || '').replace(/\s+/g, ' ').trim();
++      const match = CHAPTER_RE.exec(text);
++      if (!match) {
++        return null;
++      }
++      const start = match.index + match[1].length;
++      const before = text.slice(0, start).split(TITLE_SEPARATOR)
++                         .map(part => part.replace(/^read\s+/i, '')
++                                          .replace(/[\s\-:,(\[|]+$/, '').trim())
++                         .filter(Boolean);
++      const after = text.slice(match.index + match[0].length).split(TITLE_SEPARATOR)
++                        .map(part => part.replace(/^[\s\-:,)\]|]+/, '').trim())
++                        .filter(Boolean);
++      // The series comes right before the chapter, or after it when the title
++      // starts with the chapter.
++      const series = before.length ? before[before.length - 1] : after[0] || '';
++      return {series: series.slice(0, 80), chapter: match[3].replace(',', '.')};
++    }
++
++    // The series and chapter from the address, like
++    // /manga/one-piece/chapter-12/ or /read/one-piece-chapter-12.
++    function parseUrl() {
++      const segments = location.pathname.split('/').filter(Boolean)
++                           .map(segment => {
++                             try {
++                               return decodeURIComponent(segment);
++                             } catch (e) {
++                               return segment;
++                             }
++                           });
++      for (let i = segments.length - 1; i >= 0; i--) {
++        const match = /^(.*?)[-_]*(?:chapter|chap|ch|episode|ep|c)?[-_]*(\d+(?:[.-]\d+)?)(?:\.html?)?$/i
++                          .exec(segments[i]);
++        if (!match) {
++          continue;
++        }
++        const slug = match[1] || segments[i - 1] || '';
++        return {series: titleCase(slug), chapter: match[2].replace('-', '.')};
++      }
++      return null;
++    }
++
++    // What the chapter is: its series (and a key for it that is the same on
++    // all chapters), chapter number, cover and next chapter.
++    function describeChapter() {
++      let found = null;
++      for (const text of [metaContent('og:title'), document.title,
++                          (document.querySelector('h1') || {}).textContent]) {
++        const parsed = parseTitle(text);
++        if (parsed && (!found || !found.series)) {
++          found = {series: parsed.series || (found && found.series) || '',
++                   chapter: (found && found.chapter) || parsed.chapter};
++        }
++        if (found && found.series) {
++          break;
++        }
++      }
++      const fromUrl = parseUrl();
++      const series = (found && found.series) || (fromUrl && fromUrl.series) ||
++          location.hostname;
++      const chapter = (found && found.chapter) || (fromUrl && fromUrl.chapter) || '';
++      let cover = absoluteUrl(metaContent('og:image'));
++      if (!cover) {
++        const page = chapterMedia().find(
++            el => el.tagName === 'IMG' && !isPlaceholder(el));
++        cover = page ? absoluteUrl(page.currentSrc || page.src) : '';
++      }
++      return {
++        key: location.hostname + '/' +
++            series.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, ''),
++        series,
++        chapter,
++        title: (document.title || '').trim().slice(0, 120),
++        url: location.href.split('#')[0],
++        next: nextChapterUrl(),
++        cover,
++      };
++    }
++
++    // Loads the next chapter and its first images early, once the user has
++    // read PRELOAD_AT of this one.
++    function maybePreload() {
++      if (!reader || !reader.cfg.preload || reader.preloaded || reader.restore ||
++          progressOf().progress < PRELOAD_AT) {
++        return;
++      }
++      reader.preloaded = true;
++      const url = nextChapterUrl();
++      if (!url || new URL(url).origin !== location.origin) {
++        return;
++      }
++      const cfg = reader.cfg;
++      fetch(url, {credentials: 'include'})
++          .then(response => response.ok ? response.text() : '')
++          .then(html => {
++            if (!html || !reader || reader.cfg !== cfg) {
++              return;
++            }
++            const doc = new DOMParser().parseFromString(html, 'text/html');
++            reader.preloads = imageSources(doc, cfg, url)
++                                  .slice(0, PRELOAD_IMAGES)
++                                  .map(source => {
++                                    const img = new Image();
++                                    img.src = source;
++                                    return img;
++                                  });
++          })
++          .catch(() => {});
++    }
++
++    // The addresses of the chapter images in another chapter's page.
++    function imageSources(doc, cfg, base) {
++      const query = (selector) => {
++        try {
++          return selector ? [...doc.querySelectorAll(selector)] : [];
++        } catch (e) {
++          return [];
++        }
++      };
++      const container = query(cfg.container).find(el => el.querySelector('img'));
++      const images = container ? [...container.querySelectorAll('img')] :
++                                 query(cfg.image);
++      const sources = [];
++      for (const img of images) {
++        const name = LAZY_ATTRIBUTES.find(n => img.getAttribute(n));
++        const source = name ? img.getAttribute(name).trim() : img.getAttribute('src');
++        const url = source && !source.startsWith('data:') && absoluteUrl(source, base);
++        if (url && !sources.includes(url)) {
++          sources.push(url);
++        }
++      }
++      return sources;
++    }
++
+     function showToast(text) {
+       reader.toast.textContent = text;
+       clearTimeout(reader.toastTimer);
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoContinueReadingView.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoContinueReadingView.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoContinueReadingView.java
+@@ -0,0 +1,165 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.util.AttributeSet;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.ImageView;
++import android.widget.LinearLayout;
++import android.widget.PopupMenu;
++import android.widget.ProgressBar;
++import android.widget.TextView;
++
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.cromiko.CromikoMangaReading.Entry;
++import org.chromium.chrome.browser.ui.native_page.NativePageHost;
++import org.chromium.content_public.browser.LoadUrlParams;
++import org.chromium.ui.base.PageTransition;
++import org.chromium.url.GURL;
++
++import java.util.Collections;
++import java.util.List;
++
++/**
++ * CromIKO: the "Continue reading" row on the new tab page, with the series that the user read in
++ * manga mode (CromikoMangaReading). A tap opens the chapter where the user stopped, or the next one
++ * if they finished it; a long press offers to remove the series.
++ */
++@NullMarked
++public class CromikoContinueReadingView extends LinearLayout {
++    private @Nullable NativePageHost mHost;
++    private @Nullable LinearLayout mItems;
++    // The entries shown, to rebuild the row only when they change.
++    private String mShown = "";
++
++    /** Constructor for inflating from XML. */
++    public CromikoContinueReadingView(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++    }
++
++    /** Sets the new tab page that opens the chapters, or null to hide the row. */
++    public void setNativePageHost(@Nullable NativePageHost host) {
++        mHost = host;
++        update();
++    }
++
++    @Override
++    protected void onFinishInflate() {
++        super.onFinishInflate();
++        mItems = findViewById(R.id.cromiko_continue_reading_items);
++    }
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        update();
++    }
++
++    @Override
++    protected void onWindowVisibilityChanged(int visibility) {
++        super.onWindowVisibilityChanged(visibility);
++        if (visibility == VISIBLE) update();
++    }
++
++    private void update() {
++        List<Entry> entries =
++                mHost != null ? CromikoMangaReading.getEntries() : Collections.emptyList();
++        StringBuilder shown = new StringBuilder();
++        for (Entry entry : entries) {
++            shown.append(entry.key)
++                    .append(' ')
++                    .append(entry.url)
++                    .append(' ')
++                    .append(entry.progress)
++                    .append(' ')
++                    .append(entry.hasCover())
++                    .append('\n');
++        }
++        setVisibility(entries.isEmpty() ? GONE : VISIBLE);
++        if (mItems == null || shown.toString().equals(mShown)) return;
++        mShown = shown.toString();
++        mItems.removeAllViews();
++        LayoutInflater inflater = LayoutInflater.from(getContext());
++        for (Entry entry : entries) {
++            View item = inflater.inflate(R.layout.cromiko_continue_reading_item, mItems, false);
++            bind(item, entry);
++            mItems.addView(item);
++        }
++    }
++
++    private void bind(View item, Entry entry) {
++        Context context = getContext();
++        TextView series = item.findViewById(R.id.cromiko_continue_reading_series);
++        series.setText(entry.series.isEmpty() ? hostOf(entry.url) : entry.series);
++        TextView chapter = item.findViewById(R.id.cromiko_continue_reading_chapter);
++        boolean showNext = entry.isRead() && !entry.next.isEmpty();
++        String chapterText;
++        if (showNext) {
++            chapterText = context.getString(R.string.cromiko_continue_reading_next);
++        } else if (!entry.chapter.isEmpty()) {
++            chapterText =
++                    context.getString(R.string.cromiko_continue_reading_chapter, entry.chapter);
++        } else {
++            chapterText = hostOf(entry.url);
++        }
++        chapter.setText(chapterText);
++        ProgressBar progress = item.findViewById(R.id.cromiko_continue_reading_progress);
++        progress.setProgress(showNext ? 0 : (int) Math.round(entry.progress * 100));
++        item.setContentDescription(series.getText() + ", " + chapterText);
++
++        item.setOnClickListener(
++                view -> {
++                    if (mHost == null) return;
++                    mHost.loadUrl(
++                            new LoadUrlParams(entry.getContinueUrl(), PageTransition.AUTO_BOOKMARK),
++                            /* incognito= */ false);
++                });
++        item.setOnLongClickListener(
++                view -> {
++                    PopupMenu menu = new PopupMenu(context, view);
++                    menu.getMenu().add(R.string.cromiko_continue_reading_remove);
++                    menu.setOnMenuItemClickListener(
++                            menuItem -> {
++                                CromikoMangaReading.remove(entry.key);
++                                update();
++                                return true;
++                            });
++                    menu.show();
++                    return true;
++                });
++
++        ViewGroup frame = item.findViewById(R.id.cromiko_continue_reading_cover_frame);
++        frame.setClipToOutline(true);
++        ImageView cover = item.findViewById(R.id.cromiko_continue_reading_cover);
++        cover.setTag(entry.key);
++        if (!entry.hasCover()) return;
++        PostTask.postTask(
++                TaskTraits.USER_VISIBLE_MAY_BLOCK,
++                () -> {
++                    Bitmap bitmap = CromikoMangaReading.loadCover(entry);
++                    if (bitmap == null) return;
++                    PostTask.postTask(
++                            TaskTraits.UI_USER_VISIBLE,
++                            () -> {
++                                if (!entry.key.equals(cover.getTag())) return;
++                                cover.setPadding(0, 0, 0, 0);
++                                cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
++                                cover.setImageBitmap(bitmap);
++                            });
++                });
++    }
++
++    private static String hostOf(String url) {
++        GURL gurl = new GURL(url);
++        return gurl.isValid() ? gurl.getHost() : url;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java
+@@ -203,6 +203,8 @@ public final class CromikoFireButton {
+                     new int[] {
+                         BrowsingDataType.HISTORY, BrowsingDataType.SITE_DATA, BrowsingDataType.CACHE
+                     };
++            // "Continue reading" of manga mode is part of the history.
++            CromikoMangaReading.clear();
+         } else {
+             dataTypes = new int[] {BrowsingDataType.SITE_DATA, BrowsingDataType.CACHE};
+         }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java
+@@ -7,6 +7,8 @@ import android.app.Activity;
+ import android.content.Context;
+ import android.content.SharedPreferences;
+ import android.os.SystemClock;
++import android.widget.CheckBox;
++import android.widget.FrameLayout;
+ 
+ import androidx.appcompat.app.AlertDialog;
+ 
+@@ -38,7 +40,8 @@ import java.nio.charset.StandardCharsets;
+  * CromIKO: manga mode. On the sites where the user turned it on, chapters open in a full screen
+  * reader with buttons for the next and the previous chapter. To turn it on, the user taps the
+  * next chapter button, the previous chapter button and a page of a chapter; the page script
+- * (res/raw/cromiko_manga.js) finds them again on the other chapters.
++ * (res/raw/cromiko_manga.js) finds them again on the other chapters. While the reader is open,
++ * CromikoMangaReading keeps where the user is, for "Continue reading" on the new tab page.
+  */
+ @NullMarked
+ public final class CromikoMangaMode {
+@@ -52,6 +55,8 @@ public final class CromikoMangaMode {
+     private static final long POLL_INTERVAL_MS = 500;
+     // The user may need a while to find the buttons on the page.
+     private static final long POLL_TIMEOUT_MS = 10 * 60 * 1000;
++    // App preference: whether the reader loads the next chapter early.
++    private static final String PRELOAD_PREF = "cromiko_manga_preload";
+ 
+     private static @Nullable String sScript;
+ 
+@@ -72,12 +77,31 @@ public final class CromikoMangaMode {
+             startPicker(tab, webContents, site);
+             return;
+         }
++        CheckBox preload = new CheckBox(activity);
++        preload.setText(R.string.cromiko_manga_mode_preload);
++        preload.setChecked(isPreloadOn());
++        preload.setOnCheckedChangeListener(
++                (view, checked) ->
++                        ContextUtils.getAppSharedPreferences()
++                                .edit()
++                                .putBoolean(PRELOAD_PREF, checked)
++                                .apply());
++        FrameLayout preloadView = new FrameLayout(activity);
++        int padding = Math.round(20 * activity.getResources().getDisplayMetrics().density);
++        preloadView.setPadding(padding, padding / 2, padding, 0);
++        preloadView.addView(preload);
+         new AlertDialog.Builder(activity, R.style.ThemeOverlay_BrowserUI_AlertDialog)
+                 .setTitle(R.string.cromiko_manga_mode_menu)
+                 .setMessage(activity.getString(R.string.cromiko_manga_mode_on_for_site, site))
++                .setView(preloadView)
+                 .setPositiveButton(
+                         R.string.cromiko_manga_mode_read,
+-                        (dialog, which) -> run(webContents, "read", config, null))
++                        (dialog, which) ->
++                                run(
++                                        webContents,
++                                        "read",
++                                        withReading(tab, config),
++                                        result -> CromikoMangaReading.track(tab, webContents)))
+                 .setNeutralButton(
+                         R.string.cromiko_manga_mode_set_up_again,
+                         (dialog, which) -> startPicker(tab, webContents, site))
+@@ -103,7 +127,17 @@ public final class CromikoMangaMode {
+                 String config = site != null ? getConfig(site) : null;
+                 WebContents webContents = tab.getWebContents();
+                 if (config != null && webContents != null) {
+-                    run(webContents, "auto", config, null);
++                    run(
++                            webContents,
++                            "auto",
++                            withReading(tab, config),
++                            result -> {
++                                JSONObject state = parse(result);
++                                String name = state != null ? state.optString("state") : "";
++                                if ("reading".equals(name) || "waiting".equals(name)) {
++                                    CromikoMangaReading.track(tab, webContents);
++                                }
++                            });
+                 }
+             }
+         };
+@@ -111,7 +145,8 @@ public final class CromikoMangaMode {
+ 
+     private static void startPicker(Tab tab, WebContents webContents, String site) {
+         long startTime = SystemClock.elapsedRealtime();
+-        run(webContents, "pick", null, result -> poll(tab, webContents, site, startTime));
++        String options = "{\"preload\": " + isPreloadOn() + "}";
++        run(webContents, "pick", options, result -> poll(tab, webContents, site, startTime));
+     }
+ 
+     // The page script cannot call back: ask it until the user has tapped the three elements.
+@@ -136,6 +171,8 @@ public final class CromikoMangaMode {
+                         JSONObject config = state.optJSONObject("config");
+                         if (config != null) {
+                             prefs().edit().putString(site, config.toString()).apply();
++                            // The reader is open now.
++                            CromikoMangaReading.track(tab, webContents);
+                             Context context = ContextUtils.getApplicationContext();
+                             Toast.makeText(
+                                             context,
+@@ -168,6 +205,29 @@ public final class CromikoMangaMode {
+                 callback != null ? callback : result -> {});
+     }
+ 
++    /**
++     * The config of a site with the options of "Continue reading": where to resume the chapter of
++     * |tab| if the user read part of it, and whether to load the next chapter early.
++     */
++    private static String withReading(Tab tab, String config) {
++        JSONObject json = parse(config);
++        if (json == null) return config;
++        try {
++            json.put("preload", isPreloadOn());
++            String url = tab.getUrl().getSpec().split("#", 2)[0];
++            JSONObject resume =
++                    tab.isOffTheRecord() ? null : CromikoMangaReading.getResumePosition(url);
++            if (resume != null) json.put("resume", resume);
++        } catch (JSONException e) {
++            return config;
++        }
++        return json.toString();
++    }
++
++    private static boolean isPreloadOn() {
++        return ContextUtils.getAppSharedPreferences().getBoolean(PRELOAD_PREF, true);
++    }
++
+     /** The site of |url| (its host name) if manga mode can work there. */
+     private static @Nullable String siteOf(@Nullable GURL url) {
+         if (url == null || !url.isValid()) return null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaReading.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaReading.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaReading.java
+@@ -0,0 +1,406 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.Rect;
++
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.ContextUtils;
++import org.chromium.base.FileUtils;
++import org.chromium.base.Log;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.content_public.browser.WebContents;
++import org.chromium.url.GURL;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.io.OutputStream;
++import java.nio.charset.StandardCharsets;
++import java.security.MessageDigest;
++import java.security.NoSuchAlgorithmException;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import java.util.WeakHashMap;
++
++/**
++ * CromIKO: "Continue reading" of manga mode. While the manga reader is open, this asks the page
++ * script (the "progress" command of res/raw/cromiko_manga.js) where the user is, and keeps the last
++ * chapter of each series with the place in it and a cover, for the "Continue reading" row of the
++ * new tab page (CromikoContinueReadingView). Opening that chapter again goes back to the place.
++ * Nothing is kept for incognito tabs.
++ */
++@NullMarked
++public final class CromikoMangaReading {
++    private static final String TAG = "CromikoReading";
++    // One entry per series, by the key from the page script: the last chapter read, as JSON.
++    private static final String PREFS_NAME = "cromiko_manga_reading";
++    private static final String COVERS_DIR = "cromiko_manga_covers";
++    private static final String PROGRESS_SCRIPT =
++            "JSON.stringify(window.__cromikoManga ? window.__cromikoManga.run('progress')"
++                    + " : {state: 'none'})";
++    private static final long POLL_INTERVAL_MS = 2000;
++    // The page script waits up to 20 seconds for the chapter images to appear.
++    private static final int MAX_WAITING_POLLS = 12;
++    private static final int MAX_ENTRIES = 12;
++    // A chapter read up to here is read: "Continue reading" goes on with the next one.
++    private static final double READ_PROGRESS = 0.98;
++    private static final int COVER_WIDTH = 240;
++    private static final int COVER_HEIGHT = 336;
++    // The longest side of the downloaded cover image.
++    private static final int COVER_DOWNLOAD_SIZE = 720;
++
++    /** The last chapter read of a series. */
++    public static final class Entry {
++        /** The key of the series, the same on all its chapters. */
++        public final String key;
++
++        public final String series;
++
++        /** The chapter number, or an empty string. */
++        public final String chapter;
++
++        public final String url;
++
++        /** The address of the next chapter, or an empty string. */
++        public final String next;
++
++        /** How much of the chapter the user read, 0 to 1. */
++        public final double progress;
++
++        // Where the user is: the image at the top of the screen and how far into it.
++        final int mIndex;
++        final double mOffset;
++        // The address of the cover image.
++        final String mCover;
++        final long mTime;
++
++        Entry(JSONObject json, String key) {
++            this.key = key;
++            series = json.optString("series");
++            chapter = json.optString("chapter");
++            url = json.optString("url");
++            next = json.optString("next");
++            progress = Math.max(0, Math.min(1, json.optDouble("progress", 0)));
++            mIndex = Math.max(0, json.optInt("index", 0));
++            mOffset = Math.max(0, Math.min(1, json.optDouble("offset", 0)));
++            mCover = json.optString("cover");
++            mTime = json.optLong("time", 0);
++        }
++
++        /** Whether the cover of the series is there. */
++        public boolean hasCover() {
++            return !mCover.isEmpty();
++        }
++
++        /** Whether the user read the whole chapter. */
++        public boolean isRead() {
++            return progress >= READ_PROGRESS;
++        }
++
++        /** The page that continues the series: the next chapter once this one is read. */
++        public String getContinueUrl() {
++            return isRead() && !next.isEmpty() ? next : url;
++        }
++
++        JSONObject toJson() throws JSONException {
++            return new JSONObject()
++                    .put("series", series)
++                    .put("chapter", chapter)
++                    .put("url", url)
++                    .put("next", next)
++                    .put("progress", progress)
++                    .put("index", mIndex)
++                    .put("offset", mOffset)
++                    .put("cover", mCover)
++                    .put("time", mTime);
++        }
++    }
++
++    // The reader that each tab tracks, so that a new page stops tracking the old one.
++    private static final Map<Tab, Integer> sTracking = new WeakHashMap<>();
++    private static int sLastTrackingId;
++    // The series whose cover is downloading.
++    private static final Set<String> sCoverDownloads = new HashSet<>();
++
++    private CromikoMangaReading() {}
++
++    /** Keeps where the user is in the manga reader of |tab| while it is open. */
++    public static void track(Tab tab, WebContents webContents) {
++        if (tab.isOffTheRecord()) return;
++        int id = ++sLastTrackingId;
++        sTracking.put(tab, id);
++        poll(tab, webContents, id, 0);
++    }
++
++    private static void poll(Tab tab, WebContents webContents, int id, int waitingPolls) {
++        Integer current = sTracking.get(tab);
++        if (current == null || current != id) return;
++        if (tab.isDestroyed() || tab.getWebContents() != webContents) {
++            sTracking.remove(tab);
++            return;
++        }
++        CromikoPageScripts.execute(
++                webContents,
++                PROGRESS_SCRIPT,
++                result -> {
++                    JSONObject state = parse(result);
++                    String name = state != null ? state.optString("state") : "";
++                    int waits = waitingPolls;
++                    if ("reading".equals(name)) {
++                        save(webContents, state);
++                        waits = 0;
++                    } else if (!"waiting".equals(name) || ++waits > MAX_WAITING_POLLS) {
++                        // The reader is closed.
++                        Integer tracking = sTracking.get(tab);
++                        if (tracking != null && tracking == id) sTracking.remove(tab);
++                        return;
++                    }
++                    int nextWaits = waits;
++                    PostTask.postDelayedTask(
++                            TaskTraits.UI_DEFAULT,
++                            () -> poll(tab, webContents, id, nextWaits),
++                            POLL_INTERVAL_MS);
++                });
++    }
++
++    private static void save(WebContents webContents, JSONObject state) {
++        String key = state.optString("key");
++        String url = state.optString("url");
++        if (key.isEmpty() || url.isEmpty()) return;
++        Entry old = get(key);
++        JSONObject json;
++        try {
++            json =
++                    new JSONObject()
++                            .put("series", state.optString("series"))
++                            .put("chapter", state.optString("chapter"))
++                            .put("url", url)
++                            .put("next", state.optString("next"))
++                            .put("progress", state.optDouble("progress", 0))
++                            .put("index", state.optInt("index", 0))
++                            .put("offset", state.optDouble("offset", 0))
++                            .put("cover", old != null ? old.mCover : "")
++                            .put("time", System.currentTimeMillis());
++        } catch (JSONException e) {
++            return;
++        }
++        Entry entry = new Entry(json, key);
++        boolean moved =
++                old == null
++                        || !old.url.equals(entry.url)
++                        || !old.next.equals(entry.next)
++                        || old.mIndex != entry.mIndex
++                        || Math.abs(old.mOffset - entry.mOffset) >= 0.01
++                        || Math.abs(old.progress - entry.progress) >= 0.01;
++        if (moved) {
++            prefs().edit().putString(key, json.toString()).apply();
++            prune();
++        }
++
++        // The cover of a series is the one found the first time: the series cover of sites that
++        // have one in their page (og:image), else the first page of the chapter.
++        String cover = state.optString("cover");
++        if (!cover.isEmpty() && entry.mCover.isEmpty() && sCoverDownloads.add(key)) {
++            downloadCover(webContents, key, cover);
++        }
++    }
++
++    // Keeps the MAX_ENTRIES series read last.
++    private static void prune() {
++        List<Entry> entries = getEntries();
++        if (entries.size() <= MAX_ENTRIES) return;
++        for (Entry entry : entries.subList(MAX_ENTRIES, entries.size())) {
++            remove(entry.key);
++        }
++    }
++
++    // Downloads the cover through the page, which sends the cookies and referrer that sites may
++    // need for their images, and usually has it in its cache already.
++    private static void downloadCover(WebContents webContents, String key, String cover) {
++        GURL url = new GURL(cover);
++        if (!url.isValid()) return;
++        webContents.downloadImage(
++                url,
++                /* isFavicon= */ false,
++                COVER_DOWNLOAD_SIZE,
++                /* bypassCache= */ false,
++                (id, httpStatusCode, imageUrl, bitmaps, originalImageSizes) -> {
++                    Bitmap largest = null;
++                    for (Bitmap bitmap : bitmaps) {
++                        if (largest == null || bitmap.getWidth() > largest.getWidth()) {
++                            largest = bitmap;
++                        }
++                    }
++                    if (largest == null || get(key) == null) {
++                        sCoverDownloads.remove(key);
++                        return;
++                    }
++                    Bitmap image = largest;
++                    PostTask.postTask(
++                            TaskTraits.BEST_EFFORT_MAY_BLOCK,
++                            () -> setCover(key, writeCover(key, image) ? cover : null));
++                });
++    }
++
++    // Crops the image to the shape of a book cover (the top of a tall page, the middle of a wide
++    // picture) and writes it.
++    private static boolean writeCover(String key, Bitmap image) {
++        int width = image.getWidth();
++        int height = image.getHeight();
++        if (width <= 0 || height <= 0) return false;
++        Rect source;
++        if (width * COVER_HEIGHT > height * COVER_WIDTH) {
++            int cropWidth = height * COVER_WIDTH / COVER_HEIGHT;
++            source = new Rect((width - cropWidth) / 2, 0, (width + cropWidth) / 2, height);
++        } else {
++            source = new Rect(0, 0, width, width * COVER_HEIGHT / COVER_WIDTH);
++        }
++        Bitmap cover = Bitmap.createBitmap(COVER_WIDTH, COVER_HEIGHT, Bitmap.Config.ARGB_8888);
++        new Canvas(cover)
++                .drawBitmap(
++                        image,
++                        source,
++                        new Rect(0, 0, COVER_WIDTH, COVER_HEIGHT),
++                        new Paint(Paint.FILTER_BITMAP_FLAG));
++        File file = coverFile(key);
++        File parent = file.getParentFile();
++        if (parent != null) parent.mkdirs();
++        try (OutputStream stream = new FileOutputStream(file)) {
++            return cover.compress(Bitmap.CompressFormat.JPEG, 85, stream);
++        } catch (IOException e) {
++            Log.w(TAG, "Cannot write the cover", e);
++            return false;
++        } finally {
++            cover.recycle();
++        }
++    }
++
++    private static void setCover(String key, @Nullable String cover) {
++        PostTask.postTask(
++                TaskTraits.UI_DEFAULT,
++                () -> {
++                    sCoverDownloads.remove(key);
++                    JSONObject entry = parse(prefs().getString(key, null));
++                    if (entry == null) {
++                        // The series was removed while its cover was downloading.
++                        if (cover != null) remove(key);
++                        return;
++                    }
++                    if (cover == null) return;
++                    try {
++                        entry.put("cover", cover);
++                    } catch (JSONException e) {
++                        return;
++                    }
++                    prefs().edit().putString(key, entry.toString()).apply();
++                });
++    }
++
++    /** The series the user read, the last one first. */
++    public static List<Entry> getEntries() {
++        List<Entry> entries = new ArrayList<>();
++        for (Map.Entry<String, ?> pref : prefs().getAll().entrySet()) {
++            Object value = pref.getValue();
++            JSONObject json = value instanceof String ? parse((String) value) : null;
++            if (json != null) entries.add(new Entry(json, pref.getKey()));
++        }
++        entries.sort((a, b) -> Long.compare(b.mTime, a.mTime));
++        return entries;
++    }
++
++    private static @Nullable Entry get(String key) {
++        JSONObject json = parse(prefs().getString(key, null));
++        return json != null ? new Entry(json, key) : null;
++    }
++
++    /**
++     * Where to resume reading the chapter at |url|, as the "resume" option of the page script, or
++     * null if the user has not read it.
++     */
++    public static @Nullable JSONObject getResumePosition(String url) {
++        for (Entry entry : getEntries()) {
++            if (!entry.url.equals(url) || entry.isRead()) continue;
++            try {
++                return new JSONObject()
++                        .put("url", entry.url)
++                        .put("index", entry.mIndex)
++                        .put("offset", entry.mOffset);
++            } catch (JSONException e) {
++                return null;
++            }
++        }
++        return null;
++    }
++
++    /** Loads the cover of |entry|, or returns null if there is none. Call off the UI thread. */
++    public static @Nullable Bitmap loadCover(Entry entry) {
++        File file = coverFile(entry.key);
++        return file.exists() ? BitmapFactory.decodeFile(file.getPath()) : null;
++    }
++
++    /** Removes a series from "Continue reading". */
++    public static void remove(String key) {
++        prefs().edit().remove(key).apply();
++        File file = coverFile(key);
++        PostTask.postTask(TaskTraits.BEST_EFFORT_MAY_BLOCK, () -> file.delete());
++    }
++
++    /** Forgets all series, for the Fire button. */
++    public static void clear() {
++        sTracking.clear();
++        prefs().edit().clear().apply();
++        File dir = coversDir();
++        PostTask.postTask(
++                TaskTraits.BEST_EFFORT_MAY_BLOCK,
++                () -> FileUtils.recursivelyDeleteFile(dir, name -> true));
++    }
++
++    private static SharedPreferences prefs() {
++        return ContextUtils.getApplicationContext()
++                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
++    }
++
++    private static File coversDir() {
++        return new File(ContextUtils.getApplicationContext().getFilesDir(), COVERS_DIR);
++    }
++
++    private static File coverFile(String key) {
++        String name;
++        try {
++            byte[] hash =
++                    MessageDigest.getInstance("SHA-1").digest(key.getBytes(StandardCharsets.UTF_8));
++            StringBuilder hex = new StringBuilder();
++            for (byte b : hash) hex.append(String.format("%02x", b));
++            name = hex.toString();
++        } catch (NoSuchAlgorithmException e) {
++            name = Integer.toHexString(key.hashCode());
++        }
++        return new File(coversDir(), name + ".jpg");
++    }
++
++    private static @Nullable JSONObject parse(@Nullable String json) {
++        if (json == null || json.isEmpty()) return null;
++        try {
++            return new JSONObject(json);
++        } catch (JSONException e) {
++            return null;
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ntp/NewTabPage.java
+@@ -46,6 +46,7 @@ import org.chromium.chrome.browser.bookmarks.BookmarkManagerOpener;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsStateProvider;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsUtils;
+ import org.chromium.chrome.browser.browser_controls.BrowserControlsVisibilityManager;
++import org.chromium.chrome.browser.cromiko.CromikoContinueReadingView;
+ import org.chromium.chrome.browser.device_lock.DeviceLockActivityLauncherImpl;
+ import org.chromium.chrome.browser.feature_engagement.TrackerFactory;
+ import org.chromium.chrome.browser.feed.FeedActionDelegate;
+@@ -530,6 +531,12 @@ public class NewTabPage
+         // TODO(crbug.com/347509698): Remove the log statements after fixing the bug.
+         Log.d(TAG, "NewTabPageLayout inflate");
+         mNewTabPageLayout = (NewTabPageLayout) inflater.inflate(R.layout.new_tab_page_layout, null);
++        // CromIKO: "Continue reading" of manga mode opens its chapters in this tab.
++        CromikoContinueReadingView continueReading =
++                mNewTabPageLayout.findViewById(R.id.cromiko_continue_reading);
++        if (continueReading != null && !mTab.isOffTheRecord()) {
++            continueReading.setNativePageHost(nativePageHost);
++        }
+         mNewTabPageCoordinator =
+                 new NewTabPageCoordinator(
+                         mNewTabPageManager,
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Continue-Reading.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Continue-Reading.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Continue-Reading.grdp
+@@ -0,0 +1,18 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_CONTINUE_READING_TITLE" desc="Title of the row on the new tab page with the manga series that the user read in manga mode.">
++        Continue reading
++    </message>
++    <message name="IDS_CROMIKO_CONTINUE_READING_CHAPTER" desc="Under a series in Continue reading on the new tab page: the chapter where the user stopped.">
++        Chapter <ph name="NUMBER">%1$s<ex>12</ex></ph>
++    </message>
++    <message name="IDS_CROMIKO_CONTINUE_READING_NEXT" desc="Under a series in Continue reading on the new tab page, when the user finished the last chapter they read: a tap opens the next one.">
++        Next chapter
++    </message>
++    <message name="IDS_CROMIKO_CONTINUE_READING_REMOVE" desc="Menu item on a long press on a series in Continue reading on the new tab page.">
++        Remove from Continue reading
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_PRELOAD" desc="Check box in the manga mode dialog: while the user reads a chapter, the next chapter and its first pages are downloaded early, so that it opens faster.">
++        Load the next chapter early
++    </message>
++</grit-part>
+--

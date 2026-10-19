@@ -1,12 +1,12 @@
 # Building CromIKO
 
-CromIKO is Cromite plus a few extra patches (theme, app icon, app name and
-update check, listed at the end of `build/cromite_patches_list.txt`). It is
+CromIKO is Cromite plus its own patches (look, name and new features, the
+`CromIKO-*` entries at the end of `build/cromite_patches_list.txt`). It is
 built the same way as Cromite: download Chromium at the version in
 `build/RELEASE`, apply all the patches, compile.
 
-Everything is done by one script, `tools/cromiko/build-android.sh`. The
-**Build CromIKO** GitHub Actions workflow
+Everything is done by one script, `tools/cromiko/build.sh` (for Android and
+for Windows). The **Build CromIKO** GitHub Actions workflow
 (`.github/workflows/build_cromiko.yaml`) runs that script and gives you the
 APK to download.
 
@@ -101,13 +101,17 @@ id after your first release: Android treats a new id as a different app.
 
 You can also rent a server by the hour (for example a Hetzner Cloud CCX53:
 32 cores, 128 GB memory, 600 GB disk) and build there, without GitHub
-Actions. Create the server with Debian 12 or Ubuntu 24.04, log in as root and
-run:
+Actions. Create the server with Debian 12 or Ubuntu 24.04, log in and run:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh
-bash server-build.sh
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo bash
 ```
+
+This always runs the newest script and saves no copy of it, so an old copy
+can't be run by mistake. It builds the `master` branch (or the branch of the
+last build on the server, see below). To build another branch, take the script
+of that branch (its name instead of `master` in the address) and run it with
+`sudo CROMIKO_BRANCH=<branch> bash` at the end.
 
 `tools/cromiko/server-build.sh` installs the basic tools, creates a `builder`
 user, clones this repository and starts the build in a tmux session, so it
@@ -123,8 +127,98 @@ For a signed build, copy your keystore to the server first
 ```sh
 export CROMIKO_KEYSTORE_PATH=/root/cromiko.keystore
 read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTORE_PASSWORD
-bash server-build.sh
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo -E bash
 ```
+
+## GitHub, Google Play or Windows version
+
+When `server-build.sh` starts, it asks which version to build:
+
+1. **GitHub version**: the APK of the GitHub releases, exactly as before.
+2. **Google Play version**: an App Bundle, `CromIKO-<version>-arm64-play.aab`,
+   to upload to the Play Console. It is the same browser with the patches of
+   `build/cromiko_play_patches_list.txt` on top (`CromIKO-Play-Store.patch`):
+   no update check, because Google Play updates the app and Play apps may
+   not update themselves another way, and no background play in the CromIKO
+   player on YouTube, whose terms do not allow it. Other sites keep it.
+
+   Next to the App Bundle it makes `CromIKO-<version>-arm64-play-test.apk`:
+   the same Google Play version in one APK, signed the same way, to try it
+   on your phone before you upload it. Phones can't install an `.aab`. In
+   the bundle, the browser and all of CromIKO are in a split of their own,
+   so apps that "convert" an `.aab` or install only its base give a broken
+   browser. Google Play itself installs all of it.
+
+3. **Windows version**: `CromIKO-<version>-win64.zip`, CromIKO for Windows 10
+   and 11 (64-bit). Unpack it anywhere and start `chrome.exe` in the
+   `CromIKO` folder; it keeps its profile in `%LOCALAPPDATA%\CromIKO`, so it
+   runs next to Cromite and Chromium. It has the CromIKO name, icons and
+   periwinkle color, secure DNS on with Quad9 and the CromIKO providers
+   (Settings > Privacy and security > Security > Use secure DNS), every
+   pop-up held until you allow it (the icon in the address bar),
+   Cromite's ad blocking, and the Fire button ("Burn tabs and data" in the
+   menu). The other CromIKO features are made for the Android app and come
+   to the Windows version step by step (see `FUTURE_UPDATE.md`).
+
+   It is cross-compiled on the Linux server, like Cromite's Windows version:
+   the build downloads Microsoft's Visual Studio Build Tools and Windows SDK
+   (about 1 GB, with [msvc-wine](https://github.com/mstorsjo/msvc-wine)), so
+   it asks you to accept Microsoft's license terms for them first
+   (`CROMIKO_ACCEPT_MSVC_LICENSE=1` skips the question). They go into a 40 GB
+   image file with a folder without case (Windows file names are not
+   case-sensitive), which needs a kernel with ext4 casefold support, as
+   Debian 12 and Ubuntu have. Plan for about 300 GB of disk for the Android
+   and the Windows version together. A server whose Chromium download was
+   made for Android only downloads Chromium again once, with the Windows
+   files.
+
+For the Google Play version it also asks for the number of the upload.
+Google Play only accepts an upload with a higher version code than the one
+before. The version code comes from the Chromium version; the upload number
+(0 to 9) is added to it, so start at 0 with every new Chromium version and
+add 1 for every CromIKO update that keeps the Chromium version.
+
+Sign the Google Play version with your own key (`CROMIKO_KEYSTORE_PATH`, as
+above): Google Play does not accept Chromium's public debug key. With Play
+App Signing, the key you sign the first upload with becomes your upload key
+and Google signs the app for the phones; keep using it for every upload.
+
+To skip the questions, set the answers at the end of the command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 bash
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=play CROMIKO_PLAY_RELEASE=0 bash
+```
+
+The same server can build both versions one after the other: switching only
+redoes the Google Play patch and rebuilds what it changes. Without
+`CROMIKO_BRANCH`, a build uses the branch of the last build on the server, so
+both versions are of the same CromIKO. A branch without the Google Play
+version (an older one) stops with an error instead of building the GitHub
+APK of an older CromIKO. Without the
+server script, `CROMIKO_FLAVOR=play tools/cromiko/build.sh arm64` and
+`CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 tools/cromiko/build.sh`
+do the same. The GitHub Actions workflow always builds the GitHub version.
+
+## Building again after changes
+
+A server that has built CromIKO once keeps the Chromium download and the
+compiled files. Later builds only apply the patches that changed (and those
+after them) and only recompile what they touch, so they are much faster than
+the first one.
+
+1. Merge the changes into `master` on GitHub.
+2. Log in to the server and run the same command as above. A window left
+   open by the previous build is closed automatically.
+3. Copy the new APK to your computer with the `scp` command it prints.
+
+To update the app, open the new APK on the phone and choose **Update**.
+Bookmarks, tabs and settings are kept. This works as long as both builds are
+signed with the same key: builds without your own keystore all use
+Chromium's public debug key, so they update each other. When you switch to
+your own keystore, Android refuses the update; uninstall the old CromIKO once
+(this deletes its data) and install the new one. Keep using that keystore
+from then on.
 
 ## Building without GitHub Actions
 
@@ -133,7 +227,7 @@ The build script itself works on any machine from the table above:
 ```sh
 git clone https://github.com/PupJune2/cromIKO
 cd cromIKO
-CROMIKO_INSTALL_DEPS=1 tools/cromiko/build-android.sh arm64
+CROMIKO_INSTALL_DEPS=1 tools/cromiko/build.sh arm64
 ```
 
 The finished APK is copied to `~/cromiko-build/dist/`. For a signed build,
@@ -153,5 +247,6 @@ unchanged keeps merging future Cromite updates simple.
 
 Merge the new Cromite version into this repository. If a CromIKO patch no
 longer applies, the build stops at "Applying patches" and names the patch.
-The colors and icons can be regenerated with `tools/cromiko/gen_palette.py`
-and `tools/cromiko/gen_icons.py`; each script explains its usage at the top.
+The colors, icons and animated drawables can be regenerated with
+`tools/cromiko/gen_palette.py`, `tools/cromiko/gen_icons.py` and
+`tools/cromiko/gen_drawables.py`; each script explains its usage at the top.
