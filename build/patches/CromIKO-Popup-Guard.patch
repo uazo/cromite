@@ -80,22 +80,22 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
  .../chrome/browser/app/ChromeActivity.java    |   4 +
  .../browser/cromiko/CromikoHeldLink.java      | 114 +++++
  .../browser/cromiko/CromikoPopupGuard.java    |  68 +++
- .../cromiko/CromikoPopupGuardMenu.java        | 455 ++++++++++++++++++
- .../cromiko/CromikoPopupGuardToast.java       | 371 ++++++++++++++
+ .../cromiko/CromikoPopupGuardMenu.java        | 447 ++++++++++++++++++
+ .../cromiko/CromikoPopupGuardToast.java       | 371 +++++++++++++++
  .../browser/cromiko/CromikoTrustRing.java     | 118 +++++
  .../browser/cromiko/CromikoTrustScore.java    | 309 ++++++++++++
  .../browser/cromiko/CromikoUrlProviders.java  | 221 +++++++++
  .../tab_web_contents_delegate_android.cc      |  28 +-
  ...ent_browser_client_navigation_throttles.cc |   6 +
  chrome/browser/cromiko/BUILD.gn               |  12 +
- .../cromiko/android/cromiko_popup_guard.cc    | 399 +++++++++++++++
+ .../cromiko/android/cromiko_popup_guard.cc    | 399 ++++++++++++++++
  .../cromiko/android/cromiko_popup_guard.h     |  94 ++++
  .../cromiko/CromikoPopupGuardBridge.java      |  82 ++++
- .../CromIKO-Popup-Guard.grdp                  | 135 ++++++
+ .../CromIKO-Popup-Guard.grdp                  | 129 +++++
  .../chrome_popup_navigation_delegate.cc       |  33 +-
  .../tab_under_navigation_throttle.cc          |  15 +-
  .../core/browser/content_settings_registry.cc |   3 +-
- 47 files changed, 3173 insertions(+), 65 deletions(-)
+ 47 files changed, 3159 insertions(+), 65 deletions(-)
  create mode 100644 chrome/android/java/res/anim/cromiko_popup_guard_menu_enter.xml
  create mode 100644 chrome/android/java/res/anim/cromiko_popup_guard_menu_exit.xml
  create mode 100644 chrome/android/java/res/color/cromiko_popup_guard_field.xml
@@ -1323,7 +1323,7 @@ diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/Cromiko
 new file mode 100644
 --- /dev/null
 +++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPopupGuardMenu.java
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,447 @@
 +// Copyright 2026 The CromIKO Authors
 +// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 +
@@ -1547,19 +1547,11 @@ new file mode 100644
 +        CromikoHeldLink link = current();
 +        CromikoTrustScore.Result trust = CromikoTrustScore.evaluate(link, mPage);
 +
-+        if (mPage.isEmpty()) {
-+            mKind.setText(
-+                    link.redirect
-+                            ? R.string.cromiko_popup_guard_redirect_held
-+                            : R.string.cromiko_popup_guard_popup_held);
-+        } else {
-+            mKind.setText(
-+                    mActivity.getString(
-+                            link.redirect
-+                                    ? R.string.cromiko_popup_guard_redirect_from
-+                                    : R.string.cromiko_popup_guard_popup_from,
-+                            mPage));
-+        }
++        // The site of the page is on the button that allows it, so this stays short.
++        mKind.setText(
++                link.redirect
++                        ? R.string.cromiko_popup_guard_redirect_held
++                        : R.string.cromiko_popup_guard_popup_held);
 +        int count = mLinks.size();
 +        int pagerVisibility = count > 1 ? View.VISIBLE : View.GONE;
 +        mPrevious.setVisibility(pagerVisibility);
@@ -3531,13 +3523,13 @@ diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_gr
 new file mode 100644
 --- /dev/null
 +++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Popup-Guard.grdp
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,129 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<grit-part>
-+    <message name="IDS_CROMIKO_POPUP_GUARD_POPUP_HELD" desc="Title of the toast of the CromIKO pop-up guard when it held a pop-up (a new tab or window that a website tried to open) instead of letting it open.">
++    <message name="IDS_CROMIKO_POPUP_GUARD_POPUP_HELD" desc="Title of the toast and of the menu of the CromIKO pop-up guard when it held a pop-up (a new tab or window that a website tried to open) instead of letting it open.">
 +        Pop-up held
 +    </message>
-+    <message name="IDS_CROMIKO_POPUP_GUARD_REDIRECT_HELD" desc="Title of the toast of the CromIKO pop-up guard when it held a redirect (a website tried to send the tab to another website) instead of letting it happen.">
++    <message name="IDS_CROMIKO_POPUP_GUARD_REDIRECT_HELD" desc="Title of the toast and of the menu of the CromIKO pop-up guard when it held a redirect (a website tried to send the tab to another website) instead of letting it happen.">
 +        Redirect held
 +    </message>
 +    <message name="IDS_CROMIKO_POPUP_GUARD_OPEN" desc="Button on the right of the toast of the CromIKO pop-up guard. Opens a small menu where the user decides whether to open the held pop-up or redirect. Also the button of that menu that opens it. [CHAR_LIMIT=12]">
@@ -3554,12 +3546,6 @@ new file mode 100644
 +    </message>
 +    <message name="IDS_CROMIKO_POPUP_GUARD_TOAST_DESCRIPTION" desc="Accessibility description of the toast of the CromIKO pop-up guard, read by screen readers.">
 +        <ph name="TITLE">%1$s<ex>Pop-up held</ex></ph>: <ph name="ADDRESS">%2$s<ex>example.com/page</ex></ph>. <ph name="COUNT">%3$d<ex>2</ex></ph> held in total.
-+    </message>
-+    <message name="IDS_CROMIKO_POPUP_GUARD_POPUP_FROM" desc="Small label at the top of the menu of the CromIKO pop-up guard for a pop-up, with the website that tried to open it.">
-+        Pop-up from <ph name="SITE">%1$s<ex>example.com</ex></ph>
-+    </message>
-+    <message name="IDS_CROMIKO_POPUP_GUARD_REDIRECT_FROM" desc="Small label at the top of the menu of the CromIKO pop-up guard for a redirect, with the website that tried to send the tab elsewhere.">
-+        Redirect from <ph name="SITE">%1$s<ex>example.com</ex></ph>
 +    </message>
 +    <message name="IDS_CROMIKO_POPUP_GUARD_PAGER" desc="In the menu of the CromIKO pop-up guard when it holds several pop-ups and redirects: which one is shown. [CHAR_LIMIT=10]">
 +        <ph name="INDEX">%1$d<ex>1</ex></ph>/<ph name="COUNT">%2$d<ex>3</ex></ph>
