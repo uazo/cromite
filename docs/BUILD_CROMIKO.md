@@ -101,17 +101,17 @@ id after your first release: Android treats a new id as a different app.
 
 You can also rent a server by the hour (for example a Hetzner Cloud CCX53:
 32 cores, 128 GB memory, 600 GB disk) and build there, without GitHub
-Actions. Create the server with Debian 12 or Ubuntu 24.04, log in as root and
-run:
+Actions. Create the server with Debian 12 or Ubuntu 24.04, log in and run:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh
-bash server-build.sh
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo bash
 ```
 
-This builds the `master` branch. To build another branch, take the script of
-that branch (its name instead of `master` in the address) and run it with
-`CROMIKO_BRANCH=<branch> bash server-build.sh`.
+This always runs the newest script and saves no copy of it, so an old copy
+can't be run by mistake. It builds the `master` branch (or the branch of the
+last build on the server, see below). To build another branch, take the script
+of that branch (its name instead of `master` in the address) and run it with
+`sudo CROMIKO_BRANCH=<branch> bash` at the end.
 
 `tools/cromiko/server-build.sh` installs the basic tools, creates a `builder`
 user, clones this repository and starts the build in a tmux session, so it
@@ -127,7 +127,7 @@ For a signed build, copy your keystore to the server first
 ```sh
 export CROMIKO_KEYSTORE_PATH=/root/cromiko.keystore
 read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTORE_PASSWORD
-bash server-build.sh
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo -E bash
 ```
 
 ## GitHub, Google Play or Windows version
@@ -183,10 +183,11 @@ above): Google Play does not accept Chromium's public debug key. With Play
 App Signing, the key you sign the first upload with becomes your upload key
 and Google signs the app for the phones; keep using it for every upload.
 
-To skip the questions, set them beforehand:
+To skip the questions, set the answers at the end of the command:
 
 ```sh
-CROMIKO_FLAVOR=play CROMIKO_PLAY_RELEASE=0 bash server-build.sh
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 bash
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=play CROMIKO_PLAY_RELEASE=0 bash
 ```
 
 The same server can build both versions one after the other: switching only
@@ -207,8 +208,8 @@ after them) and only recompile what they touch, so they are much faster than
 the first one.
 
 1. Merge the changes into `master` on GitHub.
-2. Log in to the server as root and run the same two commands as above. A
-   window left open by the previous build is closed automatically.
+2. Log in to the server and run the same command as above. A window left
+   open by the previous build is closed automatically.
 3. Copy the new APK to your computer with the `scp` command it prints.
 
 To update the app, open the new APK on the phone and choose **Update**.

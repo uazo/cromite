@@ -211,11 +211,18 @@ fi
 
 if [ "${CROMIKO_INSTALL_DEPS:-0}" = 1 ]; then
   step "Installing build dependencies"
-  for f in install-build-deps.sh install-build-deps.py; do
-    curl -fsSL "$CHR_SOURCE/+/refs/tags/$VERSION/build/$f?format=TEXT" | base64 -d > "$WORKDIR/$f"
-    chmod +x "$WORKDIR/$f"
-  done
-  sudo DEBIAN_FRONTEND=noninteractive "$WORKDIR/install-build-deps.sh" \
+  # Chromium's own script: from the Chromium download when it is there, else from
+  # Chromium's server, which sometimes answers "503" for a while.
+  deps_dir=$WORKDIR/chromium/src/build
+  if [ "$(cat "$STAMP" 2>/dev/null)" != "$VERSION" ] || [ ! -x "$deps_dir/install-build-deps.sh" ]; then
+    deps_dir=$WORKDIR
+    for f in install-build-deps.sh install-build-deps.py; do
+      curl -fsSL --retry 6 --retry-delay 20 \
+        "$CHR_SOURCE/+/refs/tags/$VERSION/build/$f?format=TEXT" | base64 -d > "$WORKDIR/$f"
+      chmod +x "$WORKDIR/$f"
+    done
+  fi
+  sudo DEBIAN_FRONTEND=noninteractive "$deps_dir/install-build-deps.sh" \
     --android --lib32 --no-prompt --no-chromeos-fonts
 fi
 
