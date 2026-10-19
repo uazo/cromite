@@ -62,11 +62,13 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 # (curl ... | bash), where its input is the script itself.
 can_ask() { [ -t 0 ] || ( : < /dev/tty ) 2> /dev/null; }
 ask() {
-  if [ -t 0 ]; then
-    read -r -p "$1" "$2" || true
-  else
-    read -r -p "$1" "$2" < /dev/tty || true
-  fi
+  local input=/dev/tty
+  if [ -t 0 ]; then input=/dev/stdin; fi
+  # Only what is typed after the question answers it. Some terminals (phone apps among
+  # them) send two line ends for Enter or a pasted line, and the second one would answer
+  # the question at once, with its default.
+  while read -r -t 0.3 _ < "$input"; do :; done
+  read -r -p "$1" "$2" < "$input" || true
 }
 as_builder() { sudo -u "$BUILD_USER" -H "$@"; }
 # Whether this script runs inside a tmux window (for example the one of the previous
@@ -104,13 +106,16 @@ Which version of CromIKO do you want to build?
   3) Windows version       CromIKO for Windows 10 and 11 (64-bit), as a zip
 
 EOF
-    ask "Your choice [1]: " choice
-    case "${choice:-1}" in
-      1|github|GitHub) FLAVOR=github ;;
-      2|play|Play) FLAVOR=play ;;
-      3|windows|Windows) FLAVOR=windows ;;
-      *) fail "Please answer 1 (GitHub), 2 (Google Play) or 3 (Windows)." ;;
-    esac
+    while [ -z "$FLAVOR" ]; do
+      ask "Your choice (1, 2 or 3): " choice
+      case "$choice" in
+        1|github|GitHub) FLAVOR=github label=GitHub ;;
+        2|play|Play) FLAVOR=play label="Google Play" ;;
+        3|windows|Windows) FLAVOR=windows label=Windows ;;
+        *) echo "Please type 1 (GitHub), 2 (Google Play) or 3 (Windows), then Enter." ;;
+      esac
+    done
+    echo "Building the $label version."
   else
     FLAVOR=github
     echo "Building the GitHub version (set CROMIKO_FLAVOR=play or windows for the others)."
@@ -132,8 +137,11 @@ come with Microsoft's license terms:
   https://visualstudio.microsoft.com/license-terms/
 
 EOF
-    ask "Do you accept them? [y/N]: " answer
-    case "${answer:-n}" in
+    answer=
+    while [ -z "$answer" ]; do
+      ask "Do you accept them? (y or n): " answer
+    done
+    case "$answer" in
       y|Y|yes|Yes) CROMIKO_ACCEPT_MSVC_LICENSE=1 ;;
       *) fail "The Windows version can't be built without them." ;;
     esac
