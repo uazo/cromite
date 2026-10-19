@@ -22,7 +22,8 @@
 #                    for play: the number of the upload for this Chromium
 #                    version, 0 to 9, without asking (see build-android.sh)
 #   CROMIKO_REPO     repository to build (default: https://github.com/PupJune2/cromIKO)
-#   CROMIKO_BRANCH   branch to build (default: master)
+#   CROMIKO_BRANCH   branch to build (default: the branch of the last build on
+#                    this server, or master for the first one)
 #   CROMIKO_KEYSTORE_PATH, CROMIKO_KEYSTORE_ALIAS, CROMIKO_KEYSTORE_PASSWORD
 #                    release signing key: path of a keystore file on this
 #                    server, its alias and password (see docs/BUILD_CROMIKO.md)
@@ -33,10 +34,16 @@ set -euo pipefail
 
 TARGET_CPU=${1:-arm64}
 REPO=${CROMIKO_REPO:-https://github.com/PupJune2/cromIKO}
-BRANCH=${CROMIKO_BRANCH:-master}
 BUILD_USER=builder
 BUILD_HOME=/home/$BUILD_USER
 CHECKOUT=$BUILD_HOME/cromIKO
+# Without CROMIKO_BRANCH, a build uses the branch of the last one on this server, so that
+# building the other version (GitHub or Google Play) builds the same CromIKO.
+BRANCH=${CROMIKO_BRANCH:-}
+if [ -z "$BRANCH" ] && [ -f "$CHECKOUT/.git/HEAD" ]; then
+  BRANCH=$(sed -n 's|^ref: refs/heads/||p' "$CHECKOUT/.git/HEAD")
+fi
+BRANCH=${BRANCH:-master}
 ENV_FILE=$BUILD_HOME/.cromiko-build.env
 RUNNER=$BUILD_HOME/run-cromiko-build.sh
 SESSION=cromiko
@@ -178,6 +185,14 @@ else
 fi
 [ -f "$CHECKOUT/tools/cromiko/build-android.sh" ] \
   || fail "tools/cromiko/build-android.sh is not on branch $BRANCH of $REPO."
+# Older branches build only the GitHub version: building one of them as the Google Play
+# version would make the GitHub APK of that older CromIKO.
+if [ "$FLAVOR" = play ] && ! grep -q CROMIKO_FLAVOR "$CHECKOUT/tools/cromiko/build-android.sh"; then
+  fail "Branch $BRANCH of $REPO has no Google Play version yet. Build the branch with the newest
+CromIKO, for example: sudo CROMIKO_BRANCH=<branch> bash server-build.sh"
+fi
+echo "Building $(as_builder git -C "$CHECKOUT" log -1 --format='%h (%cs) %s')"
+echo "with $(grep -c '^CromIKO-.*\.patch$' "$CHECKOUT/build/cromite_patches_list.txt") CromIKO patches"
 
 say "Preparing the build settings"
 (umask 077 && : > "$ENV_FILE")
@@ -208,10 +223,14 @@ chown "$BUILD_USER:" "$ENV_FILE"
 if [ "$FLAVOR" = play ]; then
   RESULT="App Bundle"
   RESULT_FILES="*-play.aab"
-  NEXT_STEP="Then upload it in the Play Console: your app > Test and release > Create new release."
+  TEST_FILES="*-play-test.apk"
+  NEXT_STEP="The .aab is for the Play Console (your app > Test and release > Create new release);
+phones can't install it. To try the Google Play version on your phone first, install the
+-play-test.apk: it is the same app in one file."
 else
   RESULT="APK"
-  RESULT_FILES="*.apk"
+  RESULT_FILES="*-$TARGET_CPU.apk"
+  TEST_FILES=""
   NEXT_STEP="Then open it on your phone to install or update CromIKO."
 fi
 
@@ -233,6 +252,7 @@ if tools/cromiko/build-android.sh $TARGET_CPU 2>&1 | tee "$BUILD_HOME/cromiko-bu
   echo
   echo "Copy the $RESULT to your computer (run this on your computer, not here):"
   echo "  scp 'root@\$ip:$BUILD_HOME/cromiko-build/dist/$RESULT_FILES' ."
+  [ -z "$TEST_FILES" ] || echo "  scp 'root@\$ip:$BUILD_HOME/cromiko-build/dist/$TEST_FILES' ."
   echo "$NEXT_STEP"
   echo
   echo "Then delete the server in the Hetzner console: it is billed for as long as it exists."

@@ -138,6 +138,13 @@ When `server-build.sh` starts, it asks which version to build:
    not update themselves another way, and no background play in the CromIKO
    player on YouTube, whose terms do not allow it. Other sites keep it.
 
+   Next to the App Bundle it makes `CromIKO-<version>-arm64-play-test.apk`:
+   the same Google Play version in one APK, signed the same way, to try it
+   on your phone before you upload it. Phones can't install an `.aab`. In
+   the bundle, the browser and all of CromIKO are in a split of their own,
+   so apps that "convert" an `.aab` or install only its base give a broken
+   browser. Google Play itself installs all of it.
+
 For the Google Play version it also asks for the number of the upload.
 Google Play only accepts an upload with a higher version code than the one
 before. The version code comes from the Chromium version; the upload number
@@ -156,7 +163,11 @@ CROMIKO_FLAVOR=play CROMIKO_PLAY_RELEASE=0 bash server-build.sh
 ```
 
 The same server can build both versions one after the other: switching only
-redoes the Google Play patch and rebuilds what it changes. Without the
+redoes the Google Play patch and rebuilds what it changes. Without
+`CROMIKO_BRANCH`, a build uses the branch of the last build on the server, so
+both versions are of the same CromIKO. A branch without the Google Play
+version (an older one) stops with an error instead of building the GitHub
+APK of an older CromIKO. Without the
 server script, `CROMIKO_FLAVOR=play tools/cromiko/build-android.sh arm64`
 does the same. The GitHub Actions workflow always builds the GitHub version.
 

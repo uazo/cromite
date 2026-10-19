@@ -6,7 +6,8 @@
 # build/cromite_patches_list.txt (Cromite's and CromIKO's), and builds
 # chrome_public_apk with build/cromite.gn_args + build/cromiko.gn_args. The
 # Google Play version also gets the patches of
-# build/cromiko_play_patches_list.txt and is built as chrome_public_bundle.
+# build/cromiko_play_patches_list.txt and is built as chrome_public_bundle,
+# with an APK of that bundle to try it on a phone (an .aab can't be installed).
 # The steps follow Cromite's own build images (tools/images/chr-source and
 # tools/images/cromite-source).
 #
@@ -16,7 +17,7 @@
 #   CROMIKO_WORKDIR        Chromium checkout and build output
 #                          (default: $HOME/cromiko-build). It is reused by
 #                          later runs, which then skip the download.
-#   CROMIKO_DIST           where the finished APK is copied
+#   CROMIKO_DIST           where the finished APK or App Bundle is copied
 #                          (default: $CROMIKO_WORKDIR/dist)
 #   CROMIKO_FLAVOR         github (default): the APK of the GitHub releases.
 #                          play: the App Bundle (.aab) to upload to Google Play.
@@ -85,6 +86,8 @@ if [ "$FLAVOR" = play ]; then
 else
   echo "CromIKO for GitHub, Chromium $VERSION, target $TARGET_CPU"
 fi
+echo "CromIKO $(git -C "$REPO_DIR" log -1 --format='%h (%cs) %s' 2>/dev/null || echo '(not a git checkout)')," \
+  "$(grep -c '^CromIKO-.*\.patch$' "$REPO_DIR/build/cromite_patches_list.txt") CromIKO patches"
 echo "CPU cores: $(nproc), memory: $(free -g | awk '/^Mem:/ {print $2}') GB"
 free_gb=$(df -BG --output=avail "$WORKDIR" | tail -1 | tr -dc '0-9')
 echo "Free disk in $WORKDIR: ${free_gb} GB"
@@ -262,8 +265,28 @@ if [ "$FLAVOR" = play ]; then
     cp "$OUT/apks/ChromePublic.aab.mapping" "$AAB.mapping"
   fi
   echo "App Bundle for Google Play: $AAB"
+
+  # An .aab is only for the Play Console; phones can't install it. In the bundle, the
+  # browser and all of CromIKO are in a split of their own ("chrome"), so tools that take
+  # only the base of an .aab make a broken app. This APK has all of the bundle in one file,
+  # signed like the bundle, to try the Google Play version first.
+  step "Making an APK of the App Bundle, to try it on a phone"
+  APKS=$WORKDIR/play-test.apks
+  TEST_APK=$DIST/CromIKO-$VERSION-$TARGET_CPU-play-test.apk
+  rm -f "$APKS"
+  "$SRC/$OUT/bin/chrome_public_bundle" build-bundle-apks --output-apks "$APKS" \
+    --build-mode universal
+  python3 - "$APKS" "$TEST_APK" <<'EOF'
+import shutil, sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as apks, apks.open('universal.apk') as src, \
+    open(sys.argv[2], 'wb') as dst:
+  shutil.copyfileobj(src, dst)
+EOF
+  rm -f "$APKS"
+  echo "APK of the Google Play version, to try it on a phone: $TEST_APK"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "aab=$AAB" >> "$GITHUB_OUTPUT"
+    echo "play_test_apk=$TEST_APK" >> "$GITHUB_OUTPUT"
     echo "version=$VERSION" >> "$GITHUB_OUTPUT"
   fi
 else
