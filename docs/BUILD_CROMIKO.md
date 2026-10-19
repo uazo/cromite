@@ -5,8 +5,8 @@ CromIKO is Cromite plus its own patches (look, name and new features, the
 built the same way as Cromite: download Chromium at the version in
 `build/RELEASE`, apply all the patches, compile.
 
-Everything is done by one script, `tools/cromiko/build-android.sh`. The
-**Build CromIKO** GitHub Actions workflow
+Everything is done by one script, `tools/cromiko/build.sh` (for Android and
+for Windows). The **Build CromIKO** GitHub Actions workflow
 (`.github/workflows/build_cromiko.yaml`) runs that script and gives you the
 APK to download.
 
@@ -109,6 +109,10 @@ curl -fsSLO https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/crom
 bash server-build.sh
 ```
 
+This builds the `master` branch. To build another branch, take the script of
+that branch (its name instead of `master` in the address) and run it with
+`CROMIKO_BRANCH=<branch> bash server-build.sh`.
+
 `tools/cromiko/server-build.sh` installs the basic tools, creates a `builder`
 user, clones this repository and starts the build in a tmux session, so it
 keeps running if your connection drops. Press Ctrl+b, then d to leave it
@@ -126,7 +130,7 @@ read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTO
 bash server-build.sh
 ```
 
-## GitHub version or Google Play version
+## GitHub, Google Play or Windows version
 
 When `server-build.sh` starts, it asks which version to build:
 
@@ -144,6 +148,28 @@ When `server-build.sh` starts, it asks which version to build:
    the bundle, the browser and all of CromIKO are in a split of their own,
    so apps that "convert" an `.aab` or install only its base give a broken
    browser. Google Play itself installs all of it.
+
+3. **Windows version**: `CromIKO-<version>-win64.zip`, CromIKO for Windows 10
+   and 11 (64-bit). Unpack it anywhere and start `chrome.exe` in the
+   `CromIKO` folder; it keeps its profile in `%LOCALAPPDATA%\CromIKO`, so it
+   runs next to Cromite and Chromium. It has the CromIKO name, icons and
+   periwinkle color, secure DNS on with Quad9 and the CromIKO providers
+   (Settings > Privacy and security > Security > Use secure DNS), every
+   pop-up held until you allow it (the icon in the address bar), and
+   Cromite's ad blocking. The other CromIKO features are made for the Android app and are
+   not in the Windows version yet.
+
+   It is cross-compiled on the Linux server, like Cromite's Windows version:
+   the build downloads Microsoft's Visual Studio Build Tools and Windows SDK
+   (about 1 GB, with [msvc-wine](https://github.com/mstorsjo/msvc-wine)), so
+   it asks you to accept Microsoft's license terms for them first
+   (`CROMIKO_ACCEPT_MSVC_LICENSE=1` skips the question). They go into a 40 GB
+   image file with a folder without case (Windows file names are not
+   case-sensitive), which needs a kernel with ext4 casefold support, as
+   Debian 12 and Ubuntu have. Plan for about 300 GB of disk for the Android
+   and the Windows version together. A server whose Chromium download was
+   made for Android only downloads Chromium again once, with the Windows
+   files.
 
 For the Google Play version it also asks for the number of the upload.
 Google Play only accepts an upload with a higher version code than the one
@@ -168,8 +194,9 @@ redoes the Google Play patch and rebuilds what it changes. Without
 both versions are of the same CromIKO. A branch without the Google Play
 version (an older one) stops with an error instead of building the GitHub
 APK of an older CromIKO. Without the
-server script, `CROMIKO_FLAVOR=play tools/cromiko/build-android.sh arm64`
-does the same. The GitHub Actions workflow always builds the GitHub version.
+server script, `CROMIKO_FLAVOR=play tools/cromiko/build.sh arm64` and
+`CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 tools/cromiko/build.sh`
+do the same. The GitHub Actions workflow always builds the GitHub version.
 
 ## Building again after changes
 
@@ -198,7 +225,7 @@ The build script itself works on any machine from the table above:
 ```sh
 git clone https://github.com/PupJune2/cromIKO
 cd cromIKO
-CROMIKO_INSTALL_DEPS=1 tools/cromiko/build-android.sh arm64
+CROMIKO_INSTALL_DEPS=1 tools/cromiko/build.sh arm64
 ```
 
 The finished APK is copied to `~/cromiko-build/dist/`. For a signed build,

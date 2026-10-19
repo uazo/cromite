@@ -22,6 +22,7 @@ Second round, picked from the update ideas:
 | Pop-up guard with trust score     | large  | done    |
 | Pop-up guard settings             | small  | done    |
 | One CromIKO settings page         | medium | done    |
+| CromIKO for Windows: first step   | medium | done    |
 
 ## Video and audio player (weight 10) - done
 
@@ -204,3 +205,22 @@ the mascot.
   Downloads), so they are found in both places.
 - The tops of the CromIKO pages keep their tinted card in the rounded
   style of the settings of Chromium 153.
+
+## CromIKO for Windows - first step done
+
+Done in `CromIKO-Windows.patch` and the Windows version of
+`tools/cromiko/build.sh` (option 3 of `server-build.sh`): a zip with CromIKO
+for Windows 10 and 11, cross-compiled on the Linux build server like
+Cromite's Windows version.
+
+- The CromIKO name, icons (app, incognito, web pages, PDF, Start menu) and
+  logo, and periwinkle as the color of the browser.
+- Its own profile folder and Windows names, so it runs next to Cromite.
+- From the shared code: secure DNS with Quad9 and the CromIKO providers,
+  every pop-up held (the icon in the address bar), Cromite's ad blocking.
+
+The other features are Android screens, and need a desktop version each:
+the home screen widgets and the shield card on the new tab page, the weekly
+shield report, the CromIKO settings page, the Fire button, the pop-up guard
+toast and trust score, the CromIKO player, manga mode and the download
+manager settings.
