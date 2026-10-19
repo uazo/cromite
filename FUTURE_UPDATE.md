@@ -19,6 +19,7 @@ Second round, picked from the update ideas:
 |-----------------------------------|:------:|:-------:|
 | Weekly shield report              | medium | done    |
 | Custom accent color picker        | medium | done    |
+| Pop-up guard with trust score     | large  | done    |
 
 ## Video and audio player (weight 10) - done
 
@@ -144,3 +145,28 @@ Done in `CromIKO-Accent-Color.patch`, in Settings > Appearance > Accent color.
   mode follow it; the mascot and the logo keep their periwinkle star.
 - Needs Android 12 or newer (on older phones only the player and manga mode
   change). Incognito windows and custom tabs keep their own colors.
+
+## Pop-up guard with trust score - done
+
+Done in `CromIKO-Popup-Guard.patch`.
+
+- Every pop-up is held first, also the ones opened with a tap ("Block all
+  pop-ups" is the default of Site settings > Pop-ups and redirects), so
+  Adblock Plus no longer has to close them after they opened.
+- Redirects of a tab to another site are held too when the user did not ask
+  for them: without a tap, started by an ad script, or started by another
+  site (an ad frame, the pop-up of the page). Taps on links of the page,
+  form posts, reloads and back/forward go through.
+- A toast slides up above the toolbar with the address and "Open"; it goes
+  away after 8 seconds or with a swipe. "Open" grows a menu out of it: who
+  runs the site (a list in the browser, nothing is sent anywhere), the whole
+  address, a trust score from 0 to 100 with its reasons, and Open, Block or
+  Always allow on the site. Opening something on the Adblock Plus list lets
+  its site through Adblock Plus until the browser closes.
+- Trust score: known companies start at 95, or 80 when they track their
+  visitors (a Google login gets 80); unknown sites at 65, sites on services
+  where anyone can make one at 60, ad networks at 15. Being on the Adblock
+  Plus list caps it at 25; http, IP addresses, look-alike letters, spam
+  domain endings, hidden addresses, short links, app downloads, tracking
+  codes, forwarding and opening without a tap lower it; the same site as
+  the page raises it.
