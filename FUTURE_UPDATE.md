@@ -231,10 +231,10 @@ code: secure DNS with Quad9 and the CromIKO providers, every pop-up held
 
 | # | Feature | On Windows | Effort | Status |
 |---|---------|------------|:------:|:------:|
-| 2.1 | Fire button | "Burn tabs and data" in the app menu, with the CromIKO fire icon: after a confirmation it closes all tabs and windows, also incognito ones, without keeping them in Recent tabs, deletes history, cookies, site data and cache of all time, and leaves one window with a new tab and "All clean!" (`CromIKO-Windows-Fire-Button.patch`) | small | done, to try |
-| 2.2 | CromIKO DNS | The secure DNS setting is named CromIKO DNS, says what each provider filters (ads, family, malware, nothing) in the order of the Android screen, has "Test connection", and "CromIKO DNS" in the app menu opens it (`CromIKO-Windows-DNS.patch`) | small | done, to try |
+| 2.1 | Fire button | "Burn tabs and data" in the app menu, with the CromIKO fire icon: after a confirmation with the mascot in front of a flame, it closes all tabs and windows, also incognito ones, without keeping them in Recent tabs, deletes history, cookies, site data and cache of all time, and leaves one window with a new tab and "All clean!" (`CromIKO-Windows-Fire-Button.patch`) | small | done, to try |
+| 2.2 | CromIKO DNS | The CromIKO DNS screen in the security settings: the animated orbit with the big status, "Test connection", and the providers as cards that say what they filter, in the order of the Android screen; "CromIKO DNS" in the app menu opens it (`CromIKO-Windows-DNS.patch`) | medium | done, to try |
 | 2.3 | Download manager | The CromIKO queue on Windows too: connections per file (faster big files), downloads at the same time, a queue that waits; its settings in Settings > Downloads | small | |
-| 2.4 | Accent colors | The CromIKO colors (Periwinkle, Lavender, Mint, ...) first in Customize Chrome | small | |
+| 2.4 | Accent colors | The 11 CromIKO colors (Periwinkle, Lavender, Mint, ...) first in Customize Chrome, then the muted ones of Chromium (`CromIKO-Windows-Accent-Colors.patch`) | small | done, to try |
 
 ### Step 3: the CromIKO pages
 
