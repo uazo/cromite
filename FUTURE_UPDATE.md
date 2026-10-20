@@ -233,7 +233,7 @@ code: secure DNS with Quad9 and the CromIKO providers, every pop-up held
 |---|---------|------------|:------:|:------:|
 | 2.1 | Fire button | "Burn tabs and data" in the app menu, with the CromIKO fire icon: after a confirmation with the mascot in front of a flame, it closes all tabs and windows, also incognito ones, without keeping them in Recent tabs, deletes history, cookies, site data and cache of all time, and leaves one window with a new tab and "All clean!" (`CromIKO-Windows-Fire-Button.patch`) | small | done, to try |
 | 2.2 | CromIKO DNS | The CromIKO DNS screen in the security settings: the animated orbit with the big status, "Test connection", and the providers as cards that say what they filter, in the order of the Android screen; "CromIKO DNS" in the app menu opens it (`CromIKO-Windows-DNS.patch`) | medium | done, to try |
-| 2.3 | Download manager | The CromIKO queue on Windows too: connections per file (faster big files), downloads at the same time, a queue that waits; its settings in Settings > Downloads | small | |
+| 2.3 | Download manager | The CromIKO queue on Windows too: 4 connections per file (faster big files), 3 downloads at the same time and a queue that waits ("In queue" in chrome://downloads and the download bubble, "• 4 connections" while it runs), pause on metered connections; a CromIKO card in Settings > Downloads with a live preview of each choice (`CromIKO-Windows-Download-Manager.patch`) | small | done, to try |
 | 2.4 | Accent colors | The 11 CromIKO colors (Periwinkle, Lavender, Mint, ...) first in Customize Chrome, then the muted ones of Chromium (`CromIKO-Windows-Accent-Colors.patch`) | small | done, to try |
 
 ### Step 3: the CromIKO pages
