@@ -298,6 +298,7 @@ def vector_drawable(icon, color):
 # The icons of the Windows version (chrome/app/vector_icons/<name>.icon
 # becomes k<Name>Icon in C++).
 VECTOR_ICONS = {
+    'chrome/app/vector_icons/cromiko_dns.icon': 'dns',
     'chrome/app/vector_icons/cromiko_fire.icon': 'fire',
 }
 ICON_COMMANDS = {'M': ('MOVE_TO', 2), 'L': ('LINE_TO', 2), 'H': ('H_LINE_TO', 1),
@@ -353,7 +354,9 @@ def install(svg_path, src_dir):
         with open(out, 'w') as f:
             f.write(vector_drawable(all_icons[name], color))
     for path, name in VECTOR_ICONS.items():
-        with open(os.path.join(src_dir, path), 'w') as f:
+        out = os.path.join(src_dir, path)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, 'w') as f:
             f.write(vector_icon(all_icons[name]))
     print('Wrote %d drawables and %d vector icons to %s' % (
         len(DRAWABLES), len(VECTOR_ICONS), src_dir))

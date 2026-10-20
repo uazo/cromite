@@ -153,8 +153,9 @@ When `server-build.sh` starts, it asks which version to build:
    and 11 (64-bit). Unpack it anywhere and start `chrome.exe` in the
    `CromIKO` folder; it keeps its profile in `%LOCALAPPDATA%\CromIKO`, so it
    runs next to Cromite and Chromium. It has the CromIKO name, icons and
-   periwinkle color, secure DNS on with Quad9 and the CromIKO providers
-   (Settings > Privacy and security > Security > Use secure DNS), every
+   periwinkle color, CromIKO DNS on with Quad9 and the CromIKO providers
+   (Settings > Privacy and security > Security, or CromIKO DNS in the
+   menu), every
    pop-up held until you allow it (the icon in the address bar),
    Cromite's ad blocking, and the Fire button ("Burn tabs and data" in the
    menu). The other CromIKO features are made for the Android app and come
