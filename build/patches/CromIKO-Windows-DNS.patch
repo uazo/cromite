@@ -6,35 +6,54 @@ Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 The CromIKO DNS screen of the Android app (CromIKO-DNS-Screen.patch and
-CromIKO-DNS-Shortcut.patch) in the settings of the desktop version:
+CromIKO-DNS-Shortcut.patch) in the settings of the desktop version
+(Settings > Privacy and security > Security), instead of the switch and
+the drop-down of secure DNS:
 
-- The secure DNS setting (Settings > Privacy and security > Security) is
-  named CromIKO DNS, "Encrypt the addresses of the sites you visit".
-- The providers say what they filter (blocks ads and trackers, family
-  filter, blocks malware, no filtering), and are in the order of the
-  Android screen instead of a random one: Quad9, the default, first and
-  "recommended", then the ones that block ads, the family filters, the
-  ones that block malware and the unfiltered ones.
-- "Test connection" checks that the chosen provider answers and shows how
-  fast ("Connected • 42 ms") or that it can't be reached.
+- An animated orbit (cromiko_dns_orbit.ts, drawn like the Android one):
+  the DNS icon glows in the middle of orbits like the ring of the mascot,
+  queries go round them and stars of the logo twinkle. Off, it is gray and
+  still; with "reduce motion" it stands still.
+- A big status: "Protected" with the provider, "Protected when possible"
+  (automatic) or "CromIKO DNS is off", with the notices of managed
+  browsers and parental controls.
+- "Test connection" checks that the provider answers, with waves from the
+  middle of the orbit, and shows how fast ("Connected • 42 ms") or that it
+  can't be reached.
+- The providers as cards with a letter in a CromIKO color, what they
+  filter as a colored tag (blocks ads and trackers, family filter, blocks
+  malware, no filtering) and "Recommended" on Quad9, the default. They are
+  in the order of the Android screen instead of a random one: Quad9, then
+  the ones that block ads, the family filters, the ones that block malware
+  and the unfiltered ones, with "Automatic" and "Custom" (and its address
+  field). Only the chosen card shows until "Choose another provider".
+- Everything takes the colors of the theme, so it follows the accent
+  color, in light and dark.
 - "CromIKO DNS" in the app menu, under the Fire button, with the CromIKO
   DNS icon (drawn from the logo by tools/cromiko/gen_feature_icons.py),
   opens the security settings at CromIKO DNS.
 
+It stores the same settings as before and keeps the checks of a custom
+address.
+
 License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
 ---
- chrome/app/chrome_command_ids.h               |  2 +
- chrome/app/vector_icons/BUILD.gn              |  1 +
- chrome/app/vector_icons/cromiko_dns.icon      | 62 ++++++++++++
- .../privacy_page/security/secure_dns.html     | 16 ++++
- .../privacy_page/security/secure_dns.ts       | 66 ++++++++++++-
- .../browser/ui/browser_command_controller.cc  |  9 ++
- chrome/browser/ui/toolbar/app_menu_model.cc   |  5 +-
- .../settings/settings_secure_dns_handler.cc   | 94 +++++++++++++++++--
- ...red_settings_localized_strings_provider.cc |  9 +-
- .../CromIKO-Windows-DNS.grdp                  | 42 +++++++++
- 10 files changed, 294 insertions(+), 12 deletions(-)
+ chrome/app/chrome_command_ids.h               |   2 +
+ chrome/app/vector_icons/BUILD.gn              |   1 +
+ chrome/app/vector_icons/cromiko_dns.icon      |  62 +++
+ chrome/browser/resources/settings/BUILD.gn    |   1 +
+ .../security/cromiko_dns_orbit.ts             | 349 +++++++++++++++
+ .../privacy_page/security/secure_dns.html     | 410 ++++++++++++++++--
+ .../privacy_page/security/secure_dns.ts       | 360 +++++++++++++--
+ .../security_page_browser_proxy.ts            |   4 +
+ .../browser/ui/browser_command_controller.cc  |   9 +
+ chrome/browser/ui/toolbar/app_menu_model.cc   |   5 +-
+ .../settings/settings_secure_dns_handler.cc   |  90 +++-
+ ...red_settings_localized_strings_provider.cc |  31 +-
+ .../CromIKO-Windows-DNS.grdp                  |  88 ++++
+ 13 files changed, 1338 insertions(+), 74 deletions(-)
  create mode 100644 chrome/app/vector_icons/cromiko_dns.icon
+ create mode 100644 chrome/browser/resources/settings/privacy_page/security/cromiko_dns_orbit.ts
  create mode 100644 components/cromite_components_strings_grd/CromIKO-Windows-DNS.grdp
 
 diff --git a/chrome/app/chrome_command_ids.h b/chrome/app/chrome_command_ids.h
@@ -127,95 +146,1006 @@ new file mode 100644
 +CUBIC_TO, 19.18f, 6.16f, 19.27f, 5.97f, 16.9f, 5.37f,
 +CUBIC_TO, 18.98f, 4.72f, 19.31f, 4.58f, 19.94f, 2.48f,
 +CLOSE,
+diff --git a/chrome/browser/resources/settings/BUILD.gn b/chrome/browser/resources/settings/BUILD.gn
+--- a/chrome/browser/resources/settings/BUILD.gn
++++ b/chrome/browser/resources/settings/BUILD.gn
+@@ -352,6 +352,7 @@ build_webui("build") {
+     "privacy_page/privacy_guide/constants.ts",
+     "privacy_page/privacy_guide/privacy_guide_availability_mixin.ts",
+     "privacy_page/privacy_guide/privacy_guide_browser_proxy.ts",
++    "privacy_page/security/cromiko_dns_orbit.ts",
+     "privacy_page/security/safe_browsing_types.ts",
+     "privacy_page/security/security_keys_browser_proxy.ts",
+     "relaunch_mixin.ts",
+diff --git a/chrome/browser/resources/settings/privacy_page/security/cromiko_dns_orbit.ts b/chrome/browser/resources/settings/privacy_page/security/cromiko_dns_orbit.ts
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/resources/settings/privacy_page/security/cromiko_dns_orbit.ts
+@@ -0,0 +1,349 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++/**
++ * @fileoverview 'cromiko-dns-orbit' is the animated picture of CromIKO DNS, as
++ * on the CromIKO DNS screen of Android (CromikoDnsOrbitView.java): the DNS icon
++ * glows in the middle of orbits like the ring of the CromIKO mascot, queries go
++ * round them and stars of the logo twinkle. Off, it is gray and still. While
++ * the provider is tested, waves go out of the middle, which then flashes with
++ * the result. With "reduce motion" in the system, it stands still.
++ *
++ * The colors come from CSS, so they follow the theme and the accent color:
++ * --cromiko-dns-on (on), --cromiko-dns-off (off), --cromiko-dns-on-icon and
++ * --cromiko-dns-off-icon (the icon in the middle) and --cromiko-dns-error (a
++ * failed test).
++ */
++
++// The orbits: width and height (in px), tilt (in degrees) and the time of a
++// turn of a query (in ms).
++const ORBITS: Array<[number, number, number, number]> = [
++  [150, 52, -18, 5200],
++  [200, 70, 24, 7300],
++  [250, 88, -62, 9800],
++];
++// The stars: position (fraction of the width and height) and size (in px).
++const STARS: Array<[number, number, number]> = [
++  [0.16, 0.24, 9],
++  [0.84, 0.20, 12],
++  [0.10, 0.74, 7],
++  [0.88, 0.78, 8],
++  [0.70, 0.08, 6],
++];
++const TRAIL = 6;
++const SWITCH_MS = 700;
++const FLASH_MS = 900;
++
++// The DNS icon of CromIKO in a 24x24 box (the "dns" icon of
++// tools/cromiko/gen_feature_icons.py): the servers, filled even-odd, and the
++// star of the logo.
++const DNS_ICON_SERVERS =
++    'M5.1,4 H13.4 A2.6,2.6 0 0 1 16,6.6 V8.4 A2.6,2.6 0 0 1 13.4,11 ' +
++    'H5.1 A2.6,2.6 0 0 1 2.5,8.4 V6.6 A2.6,2.6 0 0 1 5.1,4Z' +
++    'M5.1,13 H18.9 A2.6,2.6 0 0 1 21.5,15.6 V17.9 A2.6,2.6 0 0 1 ' +
++    '18.9,20.5 H5.1 A2.6,2.6 0 0 1 2.5,17.9 V15.6 A2.6,2.6 0 0 1 5.1,13Z' +
++    'M4.9,7.5 A1.3,1.3 0 1 0 7.5,7.5 A1.3,1.3 0 1 0 4.9,7.5Z' +
++    'M4.9,16.75 A1.3,1.3 0 1 0 7.5,16.75 A1.3,1.3 0 1 0 4.9,16.75Z' +
++    'M9.7,6.8 H12.9 A0.7,0.7 0 0 1 13.6,7.5 V7.5 A0.7,0.7 0 0 1 ' +
++    '12.9,8.2 H9.7 A0.7,0.7 0 0 1 9,7.5 V7.5 A0.7,0.7 0 0 1 9.7,6.8Z' +
++    'M9.7,16.05 H17.7 A0.7,0.7 0 0 1 18.4,16.75 V16.75 A0.7,0.7 0 0 1 ' +
++    '17.7,17.45 H9.7 A0.7,0.7 0 0 1 9,16.75 V16.75 A0.7,0.7 0 0 1 ' +
++    '9.7,16.05Z';
++const DNS_ICON_STAR =
++    'M19.94,2.48C20.06,2.60 20.48,3.86 20.65,4.13C21.08,4.85 22.25,5.15 ' +
++    '23.00,5.35C20.90,5.96 20.57,6.24 19.98,8.32C19.18,6.16 19.27,5.97 ' +
++    '16.90,5.37C18.98,4.72 19.31,4.58 19.94,2.48Z';
++
++type Rgb = [number, number, number];
++
++export class CromikoDnsOrbitElement extends HTMLElement {
++  private canvas_: HTMLCanvasElement;
++  private context_: CanvasRenderingContext2D|null;
++  private servers_ = new Path2D(DNS_ICON_SERVERS);
++  private star_ = new Path2D(DNS_ICON_STAR);
++  private reducedMotion_ = window.matchMedia('(prefers-reduced-motion: reduce)');
++  private resizeObserver_ = new ResizeObserver(() => this.resize_());
++  private intersectionObserver_ = new IntersectionObserver(entries => {
++    this.visible_ = entries.some(entry => entry.isIntersecting);
++    this.update_();
++  });
++  private visible_ = false;
++  private frame_: number|null = null;
++  private start_ = performance.now();
++  // 1 when on, 0 when off, and the switch between them.
++  private on_ = false;
++  private switchFrom_ = 0;
++  private switchStart_ = -SWITCH_MS;
++  private testing_ = false;
++  private testStart_ = 0;
++  private resultOk_ = true;
++  private resultTime_ = -FLASH_MS;
++
++  constructor() {
++    super();
++    const root = this.attachShadow({mode: 'open'});
++    root.innerHTML = '<style>:host{display:block}canvas{display:block;' +
++        'width:100%;height:100%}</style><canvas></canvas>';
++    this.canvas_ = root.querySelector('canvas')!;
++    this.context_ = this.canvas_.getContext('2d');
++  }
++
++  /** Whether CromIKO DNS is on. The picture lights up or goes gray. */
++  set on(on: boolean) {
++    on = !!on;
++    if (on === this.on_) {
++      return;
++    }
++    const now = performance.now();
++    this.switchFrom_ = this.amountOn_(now);
++    this.switchStart_ = this.isConnected ? now : -SWITCH_MS;
++    this.on_ = on;
++    this.update_();
++  }
++
++  get on(): boolean {
++    return this.on_;
++  }
++
++  /** Whether the provider is tested: waves go out of the middle. */
++  set testing(testing: boolean) {
++    this.testing_ = !!testing;
++    this.testStart_ = performance.now();
++    this.update_();
++  }
++
++  get testing(): boolean {
++    return this.testing_;
++  }
++
++  /** Flashes the middle after a test: accent color if it worked, else red. */
++  showResult(ok: boolean) {
++    this.resultOk_ = ok;
++    this.resultTime_ = performance.now();
++    this.update_();
++  }
++
++  connectedCallback() {
++    this.start_ = performance.now();
++    this.resizeObserver_.observe(this);
++    this.intersectionObserver_.observe(this);
++    this.reducedMotion_.addEventListener('change', this.onMotionChanged_);
++    this.resize_();
++  }
++
++  disconnectedCallback() {
++    this.resizeObserver_.disconnect();
++    this.intersectionObserver_.disconnect();
++    this.reducedMotion_.removeEventListener('change', this.onMotionChanged_);
++    this.stop_();
++  }
++
++  private onMotionChanged_ = () => this.update_();
++
++  private resize_() {
++    const ratio = window.devicePixelRatio || 1;
++    const width = Math.round(this.clientWidth * ratio);
++    const height = Math.round(this.clientHeight * ratio);
++    if (width !== this.canvas_.width || height !== this.canvas_.height) {
++      this.canvas_.width = width;
++      this.canvas_.height = height;
++    }
++    this.draw_(performance.now());
++  }
++
++  // Runs the animation while the picture shows, is on and motion is allowed
++  // (and while it switches or flashes), and otherwise draws one still frame.
++  private update_() {
++    const now = performance.now();
++    const switching = now - this.switchStart_ < SWITCH_MS;
++    const flashing = now - this.resultTime_ < FLASH_MS;
++    const moving = !this.reducedMotion_.matches && (this.on_ || this.testing_);
++    const run = this.isConnected && this.visible_ &&
++        (moving || switching || flashing);
++    if (run && this.frame_ === null) {
++      this.frame_ = requestAnimationFrame(this.onFrame_);
++    } else if (!run) {
++      this.stop_();
++      this.draw_(now);
++    }
++  }
++
++  private stop_() {
++    if (this.frame_ !== null) {
++      cancelAnimationFrame(this.frame_);
++      this.frame_ = null;
++    }
++  }
++
++  private onFrame_ = (now: number) => {
++    this.frame_ = null;
++    this.draw_(now);
++    this.update_();
++  };
++
++  private amountOn_(now: number): number {
++    const target = this.on_ ? 1 : 0;
++    const progress = Math.min(1, (now - this.switchStart_) / SWITCH_MS);
++    // Decelerates, like the Android switch.
++    const eased = 1 - (1 - progress) * (1 - progress);
++    return this.switchFrom_ + (target - this.switchFrom_) * eased;
++  }
++
++  private color_(property: string, fallback: string): Rgb {
++    const value =
++        getComputedStyle(this).getPropertyValue(property).trim() || fallback;
++    const context = this.context_!;
++    // The canvas turns any CSS color into #rrggbb or rgba(...).
++    context.fillStyle = fallback;
++    context.fillStyle = value;
++    const color = String(context.fillStyle);
++    if (color.startsWith('#')) {
++      return [
++        parseInt(color.slice(1, 3), 16),
++        parseInt(color.slice(3, 5), 16),
++        parseInt(color.slice(5, 7), 16),
++      ];
++    }
++    const parts = color.match(/[\d.]+/g) || ['0', '0', '0'];
++    return [Number(parts[0]), Number(parts[1]), Number(parts[2])];
++  }
++
++  private draw_(now: number) {
++    const context = this.context_;
++    if (!context || !this.canvas_.width || !this.canvas_.height) {
++      return;
++    }
++    const ratio = window.devicePixelRatio || 1;
++    const width = this.canvas_.width / ratio;
++    const height = this.canvas_.height / ratio;
++    context.setTransform(ratio, 0, 0, ratio, 0, 0);
++    context.clearRect(0, 0, width, height);
++
++    const still = this.reducedMotion_.matches;
++    // Motion only when it is allowed: otherwise one still frame.
++    const t = still ? 0.35 : (now - this.start_) / 1000;
++    const on = this.amountOn_(now);
++    const accent = this.color_('--cromiko-dns-on', '#5c7cfc');
++    const off = this.color_('--cromiko-dns-off', '#6b7a90');
++    const blend = (from: Rgb, to: Rgb) =>
++        [0, 1, 2].map(i => from[i] + (to[i] - from[i]) * on) as Rgb;
++    const color = blend(off, accent);
++    const rgba = (c: Rgb, alpha: number) =>
++        `rgba(${Math.round(c[0])}, ${Math.round(c[1])}, ${Math.round(c[2])}, ${
++            Math.max(0, Math.min(1, alpha))})`;
++    const cx = width / 2;
++    const cy = height / 2;
++    // As big as fits (the orbits reach 112 px up and down and 93 px to the
++    // sides at full size), smaller while off, growing when CromIKO DNS turns
++    // on.
++    const scale = Math.min(1, (height / 2 - 6) / 112, (width / 2 - 6) / 93) *
++        (0.86 + 0.14 * on);
++
++    // The glow behind the middle.
++    const pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
++    context.fillStyle = rgba(color, ((24 + 20 * pulse) / 255) * on);
++    context.beginPath();
++    context.arc(cx, cy, (52 + 8 * pulse) * scale, 0, 2 * Math.PI);
++    context.fill();
++
++    // The orbits, with the queries going round them.
++    ORBITS.forEach(([orbitWidth, orbitHeight, tilt, turnMs], i) => {
++      const rx = orbitWidth / 2 * scale;
++      const ry = orbitHeight / 2 * scale;
++      context.save();
++      context.translate(cx, cy);
++      context.rotate(tilt * Math.PI / 180);
++      context.strokeStyle = rgba(color, (0.18 + 0.22 * on) * (1 - i * 0.18));
++      context.lineWidth = 2;
++      context.beginPath();
++      context.ellipse(0, 0, rx, ry, 0, 0, 2 * Math.PI);
++      context.stroke();
++      if (on > 0) {
++        const angle = 2 * Math.PI * (t * 1000 / turnMs + i * 0.37);
++        for (let k = TRAIL; k >= 0; k--) {
++          const a = angle - k * 0.12;
++          context.fillStyle = rgba(color, on * (1 - k / (TRAIL + 1)));
++          context.beginPath();
++          context.arc(
++              rx * Math.cos(a), ry * Math.sin(a), k === 0 ? 4.5 : 3.2 - k * 0.3,
++              0, 2 * Math.PI);
++          context.fill();
++        }
++      }
++      context.restore();
++    });
++
++    // Waves while the provider is tested.
++    if (this.testing_) {
++      const since = (now - this.testStart_) / 1000;
++      for (let k = 0; k < 3; k++) {
++        const phase = (since + k / 3) % 1;
++        context.strokeStyle = rgba(accent, (200 / 255) * (1 - phase));
++        context.lineWidth = 3;
++        context.beginPath();
++        context.arc(cx, cy, (40 + 90 * phase) * scale, 0, 2 * Math.PI);
++        context.stroke();
++      }
++    }
++
++    // The middle, with the DNS icon, and the flash of the last test.
++    const radius = 36 * scale;
++    context.fillStyle = rgba(color, 1);
++    context.beginPath();
++    context.arc(cx, cy, radius, 0, 2 * Math.PI);
++    context.fill();
++    const flash = 1 - Math.min(1, (now - this.resultTime_) / FLASH_MS);
++    if (flash > 0) {
++      const result = this.resultOk_ ?
++          accent :
++          this.color_('--cromiko-dns-error', '#d93025');
++      context.strokeStyle = rgba(result, flash);
++      context.lineWidth = 5;
++      context.beginPath();
++      context.arc(cx, cy, radius + (1 - flash) * 18, 0, 2 * Math.PI);
++      context.stroke();
++    }
++    const iconColor = blend(
++        this.color_('--cromiko-dns-off-icon', '#ffffff'),
++        this.color_('--cromiko-dns-on-icon', '#ffffff'));
++    const iconSize = 36 * scale;
++    context.save();
++    context.translate(cx - iconSize / 2, cy - iconSize / 2);
++    context.scale(iconSize / 24, iconSize / 24);
++    context.fillStyle = rgba(iconColor, 1);
++    context.fill(this.servers_, 'evenodd');
++    context.fill(this.star_);
++    context.restore();
++
++    // The stars of the logo, twinkling.
++    STARS.forEach(([x, y, size], i) => {
++      const twinkle = 0.5 + 0.5 * Math.sin(t * 1.7 + i * 1.3);
++      const r = size * (0.6 + 0.4 * twinkle) * (0.5 + 0.5 * on);
++      context.fillStyle =
++          rgba(color, (0.25 + 0.75 * on) * (0.35 + 0.65 * twinkle));
++      this.drawStar_(context, x * width, y * height, r);
++    });
++  }
++
++  // A star with four points, like the one of the CromIKO logo.
++  private drawStar_(
++      context: CanvasRenderingContext2D, x: number, y: number, r: number) {
++    const c = r * 0.18;
++    context.beginPath();
++    context.moveTo(x, y - r);
++    context.quadraticCurveTo(x + c, y - c, x + r, y);
++    context.quadraticCurveTo(x + c, y + c, x, y + r);
++    context.quadraticCurveTo(x - c, y + c, x - r, y);
++    context.quadraticCurveTo(x - c, y - c, x, y - r);
++    context.closePath();
++    context.fill();
++  }
++}
++
++declare global {
++  interface HTMLElementTagNameMap {
++    'cromiko-dns-orbit': CromikoDnsOrbitElement;
++  }
++}
++
++customElements.define('cromiko-dns-orbit', CromikoDnsOrbitElement);
 diff --git a/chrome/browser/resources/settings/privacy_page/security/secure_dns.html b/chrome/browser/resources/settings/privacy_page/security/secure_dns.html
 --- a/chrome/browser/resources/settings/privacy_page/security/secure_dns.html
 +++ b/chrome/browser/resources/settings/privacy_page/security/secure_dns.html
-@@ -33,6 +33,10 @@
-       #secureDnsInputContainer {
-         margin-top: calc(var(--cr-section-padding) / 2);
+@@ -1,5 +1,13 @@
+-    <style include="cr-shared-style md-select">
++    <style include="cr-shared-style">
+       :host {
++        /* CromIKO DNS takes the accent color of the theme. */
++        --cromiko-dns-accent: var(--color-sys-primary, var(--cr-checked-color));
++        --cromiko-dns-on-accent: var(--color-sys-on-primary, white);
++        --cromiko-dns-outline: var(--color-sys-tonal-outline,
++            var(--cr-separator-color));
++        --cromiko-dns-mint: #34b98a;
++        --cromiko-dns-amber: #e9a23b;
++        --cromiko-dns-slate: #6b7a90;
+         display: flex;
+         flex-direction: column;
        }
-+
-+      #cromikoDnsTestResult {
-+        flex: 1;
+@@ -11,17 +19,268 @@
+         border-top: 0;
+       }
+ 
+-      #resolverSelect {
+-        width: inherit;
++      #hero {
++        align-items: center;
++        /* Solid colors: the canvas of the orbit shows no edge on them. */
++        background: linear-gradient(135deg,
++            color-mix(in srgb, var(--cromiko-dns-accent) 14%,
++                var(--cr-card-background-color, white)),
++            color-mix(in srgb, var(--cromiko-dns-accent) 4%,
++                var(--cr-card-background-color, white)));
++        border-radius: 16px;
++        display: flex;
++        gap: 8px;
++        margin: 4px var(--cr-section-padding) 12px;
++        padding: 8px 20px 8px 4px;
++        transition: background 700ms;
 +      }
++
++      #hero.off {
++        background: color-mix(in srgb, var(--cr-secondary-text-color) 8%,
++            var(--cr-card-background-color, white));
+       }
+ 
+-      #resolverLabel {
++      cromiko-dns-orbit {
++        --cromiko-dns-on: var(--cromiko-dns-accent);
++        --cromiko-dns-off: var(--cr-secondary-text-color);
++        --cromiko-dns-on-icon: var(--cromiko-dns-on-accent);
++        --cromiko-dns-off-icon: var(--cr-card-background-color, white);
++        --cromiko-dns-error: var(--cr-input-error-color, #d93025);
++        flex: none;
++        height: 176px;
++        width: 220px;
++      }
++
++      #heroText {
+         flex: 1;
++        min-width: 0;
++      }
++
++      #statusTitle {
++        color: var(--cr-primary-text-color);
++        font-size: 22px;
++        font-weight: 500;
++        line-height: 28px;
++      }
++
++      #hero.on #statusTitle {
++        color: var(--cromiko-dns-accent);
++      }
++
++      #statusDetail {
++        color: var(--cr-secondary-text-color);
++        line-height: 20px;
++        margin-top: 4px;
++      }
++
++      #testRow {
++        align-items: center;
++        display: flex;
++        flex-wrap: wrap;
++        gap: 12px;
++        margin-top: 14px;
++      }
++
++      #testRow cr-button {
++        --cr-button-height: 32px;
++        border-radius: 16px;
++      }
++
++      #testResult {
++        align-items: center;
++        border-radius: 12px;
++        display: inline-flex;
++        font-size: 12px;
++        font-weight: 500;
++        gap: 6px;
++        padding: 4px 10px;
++      }
++
++      #testResult.ok {
++        background: color-mix(in srgb, var(--cromiko-dns-accent) 16%,
++            transparent);
++        color: var(--cromiko-dns-accent);
++      }
++
++      #testResult.failed {
++        background: color-mix(in srgb, var(--cr-input-error-color, #d93025) 14%,
++            transparent);
++        color: var(--cr-input-error-color, #d93025);
++      }
++
++      #testResult::before {
++        background: currentColor;
++        border-radius: 50%;
++        content: '';
++        height: 8px;
++        width: 8px;
++      }
++
++      #testHint {
++        color: var(--cr-secondary-text-color);
++        font-size: 12px;
++      }
++
++      #providersHeader {
++        align-items: center;
++        display: flex;
++        padding: 0 var(--cr-section-padding);
++      }
++
++      #providersTitle {
++        color: var(--cr-primary-text-color);
++        flex: 1;
++        font-weight: 500;
++      }
++
++      #providers {
++        display: grid;
++        gap: 8px;
++        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
++        padding: 8px var(--cr-section-padding) 0;
++      }
++
++      .card {
++        align-items: center;
++        background: var(--cr-card-background-color, transparent);
++        border: 1px solid var(--cromiko-dns-outline);
++        border-radius: 12px;
++        box-sizing: border-box;
++        cursor: pointer;
++        display: flex;
++        gap: 12px;
++        min-height: 60px;
++        outline: none;
++        padding: 10px 12px;
++        position: relative;
++        transition: background 150ms, border-color 150ms, box-shadow 150ms;
++      }
++
++      .card:hover {
++        background: color-mix(in srgb, var(--cr-primary-text-color) 4%,
++            var(--cr-card-background-color, transparent));
++      }
++
++      .card:focus-visible {
++        box-shadow: 0 0 0 2px var(--cr-focus-outline-color,
++            var(--cromiko-dns-accent));
++      }
++
++      .card.selected {
++        background: color-mix(in srgb, var(--cromiko-dns-accent) 9%,
++            var(--cr-card-background-color, transparent));
++        border-color: var(--cromiko-dns-accent);
++        box-shadow: inset 0 0 0 1px var(--cromiko-dns-accent);
++      }
++
++      .card.folded {
++        display: none;
++      }
++
++      /* The chosen provider alone takes the whole row. */
++      #providers.one .card.selected {
++        grid-column: 1 / -1;
++      }
++
++      .monogram {
++        --monogram-color: var(--cromiko-dns-accent);
++        align-items: center;
++        background: color-mix(in srgb, var(--monogram-color) 18%, transparent);
++        border-radius: 50%;
++        color: color-mix(in srgb, var(--monogram-color) 80%,
++            var(--cr-primary-text-color));
++        display: flex;
++        flex: none;
++        font-size: 15px;
++        font-weight: 600;
++        height: 36px;
++        justify-content: center;
++        width: 36px;
++      }
++
++      .monogram svg {
++        fill: currentColor;
++        height: 20px;
++        width: 20px;
++      }
++
++      .card-text {
++        flex: 1;
++        min-width: 0;
++      }
++
++      .card-name {
++        color: var(--cr-primary-text-color);
++        font-weight: 500;
++        overflow: hidden;
++        text-overflow: ellipsis;
++        white-space: nowrap;
++      }
++
++      .card-detail {
++        color: var(--cr-secondary-text-color);
++        font-size: 12px;
++        margin-top: 2px;
++      }
++
++      .tags {
++        display: flex;
++        flex-wrap: wrap;
++        gap: 6px;
++        margin-top: 4px;
++      }
++
++      .tag,
++      .badge {
++        border-radius: 10px;
++        font-size: 11px;
++        font-weight: 500;
++        line-height: 18px;
++        padding: 0 8px;
++      }
++
++      .tag {
++        --tag-color: var(--cromiko-dns-slate);
++        background: color-mix(in srgb, var(--tag-color) 15%, transparent);
++        color: color-mix(in srgb, var(--tag-color) 75%,
++            var(--cr-primary-text-color));
++      }
++
++      .tag.ads {
++        --tag-color: var(--cromiko-dns-accent);
++      }
++
++      .tag.family {
++        --tag-color: var(--cromiko-dns-mint);
++      }
++
++      .tag.malware {
++        --tag-color: var(--cromiko-dns-amber);
++      }
++
++      .badge {
++        background: var(--cromiko-dns-accent);
++        color: var(--cromiko-dns-on-accent);
++      }
++
++      .check {
++        border: 2px solid var(--cromiko-dns-outline);
++        border-radius: 50%;
++        box-sizing: border-box;
++        flex: none;
++        height: 20px;
++        width: 20px;
++      }
++
++      .card.selected .check {
++        background: var(--cromiko-dns-accent);
++        border-color: var(--cromiko-dns-accent);
++        box-shadow: inset 0 0 0 3px var(--cr-card-background-color, white);
+       }
+ 
+       #privacyPolicy {
+         display: none;
+-        padding: calc(var(--cr-section-padding) / 2) var(--cr-section-padding);
++        padding: 8px var(--cr-section-padding) 0;
+       }
+ 
+       /* Style the link appearing within the privacyPolicy's localized
+@@ -31,7 +290,14 @@
+       }
+ 
+       #secureDnsInputContainer {
+-        margin-top: calc(var(--cr-section-padding) / 2);
++        padding: 8px var(--cr-section-padding) 0;
++      }
++
++      #explanation {
++        color: var(--cr-secondary-text-color);
++        font-size: 12px;
++        line-height: 18px;
++        padding: 12px var(--cr-section-padding) 16px;
+       }
      </style>
  
-     <settings-toggle-button
-@@ -80,4 +84,16 @@
+@@ -44,40 +310,122 @@
+         on-change="onToggleChanged_">
+     </settings-toggle-button>
+ 
+-    <cr-collapse id="resolverOptions" opened="[[showSecureDnsOptions_]]">
+-      <div class="cr-row continuation">
+-        <div id="resolverLabel" class="flex cr-padded-text">
+-          $i18n{secureDnsSecureDropdownModeDescription}
++    <div id="hero" class$="[[heroClass_(secureDnsToggle_.value, mode_)]]">
++      <cromiko-dns-orbit id="orbit" aria-hidden="true"
++          on="[[isOn_(secureDnsToggle_.value, mode_)]]">
++      </cromiko-dns-orbit>
++      <div id="heroText" role="status">
++        <div id="statusTitle">[[statusTitle_]]</div>
++        <div id="statusDetail">[[statusDetail_]]</div>
++        <div id="testRow" hidden="[[!showSecureDnsOptions_]]">
++          <cr-button id="testButton" on-click="onTestClick_"
++              disabled="[[!testTemplate_]]" hidden="[[testing_]]">
++            $i18n{cromikoDnsTest}
++          </cr-button>
++          <cr-button disabled hidden="[[!testing_]]">
++            $i18n{cromikoDnsTesting}
++          </cr-button>
++          <span id="testResult" class$="[[testResultClass_(testFailed_)]]"
++              hidden="[[!testResult_]]">[[testResult_]]</span>
++          <span id="testHint"
++              hidden="[[!showTestHint_(secureDnsToggle_.value, mode_)]]">
++            $i18n{cromikoDnsTestAutomatic}
++          </span>
+         </div>
++      </div>
++    </div>
+ 
+-        <select id="resolverSelect"
+-            class="md-select"
+-            aria-labelledby="resolverLabel"
+-            on-change="onDropdownSelectionChanged_">
+-          <option value="[[resolverTypeEnum_.AUTOMATIC]]">
+-            $i18n{secureDnsAutomaticModeDescription}
+-          </option>
+-          <option value="[[resolverTypeEnum_.CUSTOM]]">
+-            $i18n{secureDnsCustomProviderDescription}
+-          </option>
+-          <template is="dom-repeat" items="[[resolverOptions_]]">
+-            <option data-resolver-type$="[[resolverTypeEnum_.BUILT_IN]]"
+-                value="[[index]]">
+-              [[item.name]]
+-            </option>
+-          </template>
+-        </select>
++    <cr-collapse id="resolverOptions" opened="[[showSecureDnsOptions_]]">
++      <div id="providersHeader">
++        <div id="providersTitle">$i18n{cromikoDnsProviders}</div>
++        <cr-button id="showAllProviders" class="text-button"
++            on-click="onShowAllProvidersClick_"
++            aria-expanded$="[[showAllProviders_]]">
++          [[showAllLabel_(showAllProviders_)]]
++        </cr-button>
+       </div>
+ 
+-      <div id="privacyPolicy">
+-        <div class="cr-secondary-text"
+-            inner-h-t-m-l="[[privacyPolicyString_]]"></div>
++      <div id="providers" role="radiogroup"
++          class$="[[providersClass_(showAllProviders_)]]"
++          aria-label="$i18n{cromikoDnsProviders}">
++        <template is="dom-repeat" items="[[resolverOptions_]]">
++          <div class$="[[indexCardClass_(index, selectedResolver_,
++                                         showAllProviders_)]]"
++              role="radio" tabindex="0" data-resolver$="[[index]]"
++              aria-checked$="[[isIndexSelected_(index, selectedResolver_)]]"
++              aria-label$="[[cardLabel_(item)]]"
++              on-click="onResolverCardClick_"
++              on-keydown="onResolverCardKeydown_">
++            <div class="monogram" style$="[[monogramStyle_(item.name)]]">
++              [[monogram_(item.name)]]
++            </div>
++            <div class="card-text">
++              <div class="card-name">[[item.name]]</div>
++              <div class="tags">
++                <span class$="[[filterClass_(item.cromikoFilter)]]">
++                  [[filterName_(item.cromikoFilter)]]
++                </span>
++                <span class="badge" hidden="[[!item.cromikoRecommended]]">
++                  $i18n{cromikoDnsRecommended}
++                </span>
++              </div>
++            </div>
++            <div class="check"></div>
++          </div>
++        </template>
++
++        <div class$="[[cardClass_(resolverTypeEnum_.AUTOMATIC,
++                                  selectedResolver_, showAllProviders_)]]"
++            role="radio" tabindex="0"
++            data-resolver$="[[resolverTypeEnum_.AUTOMATIC]]"
++            aria-checked$="[[isSelected_(resolverTypeEnum_.AUTOMATIC,
++                                         selectedResolver_)]]"
++            on-click="onResolverCardClick_"
++            on-keydown="onResolverCardKeydown_">
++          <div class="monogram">
++            <svg viewBox="0 0 24 24" aria-hidden="true">
++              <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"></path>
++            </svg>
++          </div>
++          <div class="card-text">
++            <div class="card-name">$i18n{cromikoDnsAutomatic}</div>
++            <div class="card-detail">$i18n{cromikoDnsStatusAutomaticDetail}</div>
++          </div>
++          <div class="check"></div>
++        </div>
++
++        <div class$="[[cardClass_(resolverTypeEnum_.CUSTOM,
++                                  selectedResolver_, showAllProviders_)]]"
++            role="radio" tabindex="0"
++            data-resolver$="[[resolverTypeEnum_.CUSTOM]]"
++            aria-checked$="[[isSelected_(resolverTypeEnum_.CUSTOM,
++                                         selectedResolver_)]]"
++            on-click="onResolverCardClick_"
++            on-keydown="onResolverCardKeydown_">
++          <div class="monogram">
++            <svg viewBox="0 0 24 24" aria-hidden="true">
++              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"></path>
++            </svg>
++          </div>
++          <div class="card-text">
++            <div class="card-name">$i18n{cromikoDnsCustom}</div>
++            <div class="card-detail">$i18n{cromikoDnsCustomDetail}</div>
++          </div>
++          <div class="check"></div>
++        </div>
+       </div>
+ 
+-      <div id="secureDnsInputContainer" class="cr-row continuation">
++      <div id="secureDnsInputContainer" hidden>
+         <secure-dns-input id="secureDnsInput"
+             value="[[secureDnsInputValue_]]"
              on-value-update="onSecureDnsInputEvaluated_">
          </secure-dns-input>
        </div>
 +
-+      <div id="cromikoDnsTest" class="cr-row continuation"
-+          hidden="[[!cromikoTestTemplate_]]">
-+        <div id="cromikoDnsTestResult" class="cr-padded-text cr-secondary-text"
-+            role="status">
-+          [[cromikoTestResult_]]
-+        </div>
-+        <cr-button id="cromikoDnsTestButton" disabled="[[cromikoTesting_]]"
-+            on-click="onCromikoTestClick_">
-+          $i18n{cromikoDnsTest}
-+        </cr-button>
++      <div id="privacyPolicy">
++        <div class="cr-secondary-text"
++            inner-h-t-m-l="[[privacyPolicyString_]]"></div>
 +      </div>
++
++      <div id="explanation">$i18n{cromikoDnsExplanation}</div>
      </cr-collapse>
 diff --git a/chrome/browser/resources/settings/privacy_page/security/secure_dns.ts b/chrome/browser/resources/settings/privacy_page/security/secure_dns.ts
 --- a/chrome/browser/resources/settings/privacy_page/security/secure_dns.ts
 +++ b/chrome/browser/resources/settings/privacy_page/security/secure_dns.ts
-@@ -14,6 +14,7 @@
+@@ -12,14 +12,21 @@
+  * managed environment, whether we've detected parental controls, etc). Instead,
+  * the setting listens for secure-dns-setting-changed events, which are sent
   * by PrivacyPageBrowserProxy and describe the new host resolver configuration.
++ *
++ * CromIKO: this is CromIKO DNS, as on the CromIKO DNS screen of Android: an
++ * animated orbit with the status ("Protected", "Protected when possible", "off")
++ * and "Test connection", and the providers as cards that say what they filter,
++ * with "Automatic" and "Custom" (with its address field). Only the chosen one
++ * shows until "Choose another provider".
   */
  
 +import 'chrome://resources/cr_elements/cr_button/cr_button.js';
  import 'chrome://resources/cr_elements/cr_collapse/cr_collapse.js';
  import 'chrome://resources/cr_elements/cr_shared_style.css.js';
  import 'chrome://resources/cr_elements/cr_shared_vars.css.js';
-@@ -32,6 +33,7 @@ import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
+-import 'chrome://resources/cr_elements/md_select.css.js';
+ import '/shared/settings/prefs/prefs.js';
+ import '../../controls/settings_toggle_button.js';
++import './cromiko_dns_orbit.js';
+ import './secure_dns_input.js';
+ 
+ import {PrefsMixin} from '/shared/settings/prefs/prefs_mixin.js';
+@@ -32,16 +39,18 @@ import {sanitizeInnerHtml} from 'chrome://resources/js/parse_html_subset.js';
  import {PolymerElement} from 'chrome://resources/polymer/v3_0/polymer/polymer_bundled.min.js';
  
  import {loadTimeData} from '../../i18n_setup.js';
 +import {Router} from '../../router.js';
  
++import type {CromikoDnsOrbitElement} from './cromiko_dns_orbit.js';
  import {getTemplate} from './secure_dns.html.js';
  import type {SecureDnsInputElement} from './secure_dns_input.js';
-@@ -117,6 +119,27 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+ 
+ export interface SettingsSecureDnsElement {
+   $: {
++    orbit: CromikoDnsOrbitElement,
+     privacyPolicy: HTMLElement,
+     secureDnsInput: SecureDnsInputElement,
+     secureDnsInputContainer: HTMLElement,
+-    resolverSelect: HTMLSelectElement,
+   };
+ }
+ 
+@@ -58,6 +67,24 @@ export enum SecureDnsResolverType {
+   CUSTOM = 'custom',
+ }
+ 
++/**
++ * CromIKO: the colors of the letters of the providers, from the CromIKO accent
++ * colors (Periwinkle, Lavender, Grape, Rose, Coral, Amber, Lime, Mint, Teal and
++ * Sky), the same for a provider every time.
++ */
++const MONOGRAM_COLORS = [
++  '#5c7cfc',
++  '#9d7bea',
++  '#b565d6',
++  '#e0607e',
++  '#f07a5a',
++  '#e9a23b',
++  '#8dba3e',
++  '#34b98a',
++  '#23a6b0',
++  '#3d9fe8',
++];
++
+ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+   static get is() {
+     return 'settings-secure-dns';
+@@ -103,9 +130,27 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+       showSecureDnsOptions_: Boolean,
+ 
+       /**
+-       * List of secure DNS resolvers to display in dropdown menu.
++       * List of secure DNS resolvers to display as cards.
++       */
++      resolverOptions_: {
++        type: Array,
++        value: () => [],
++      },
++
++      /**
++       * The chosen resolver: an AUTOMATIC or CUSTOM resolver type, or the index
++       * of a built-in resolver in |resolverOptions_|.
+        */
+-      resolverOptions_: Array,
++      selectedResolver_: {
++        type: String,
++        value: SecureDnsResolverType.AUTOMATIC,
++      },
++
++      /** Whether all the providers show, not only the chosen one. */
++      showAllProviders_: {
++        type: Boolean,
++        value: false,
++      },
+ 
+       /**
+        * String displaying the privacy policy of the resolver selected in the
+@@ -117,15 +162,77 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
         * String to display in the custom text field.
         */
        secureDnsInputValue_: String,
 +
-+      /**
-+       * CromIKO: the DoH template that "Test connection" tests, empty when
-+       * there is none to test (automatic mode, custom address not valid yet).
-+       */
-+      cromikoTestTemplate_: {
++      /** The secure DNS mode that the host resolver uses. */
++      mode_: {
++        type: String,
++        value: SecureDnsMode.OFF,
++      },
++
++      /** The DoH templates that the host resolver uses in secure mode. */
++      config_: {
 +        type: String,
 +        value: '',
 +      },
 +
-+      /** CromIKO: whether the connection test runs. */
-+      cromikoTesting_: {
++      /** The big status line: "Protected", "Protected when possible", off. */
++      statusTitle_: String,
++
++      /** The line under the status. */
++      statusDetail_: String,
++
++      /**
++       * The DoH template that "Test connection" tests, empty when there is
++       * none to test (automatic mode, custom address not valid yet).
++       */
++      testTemplate_: {
++        type: String,
++        value: '',
++      },
++
++      /** Whether the connection test runs. */
++      testing_: {
 +        type: Boolean,
 +        value: false,
 +      },
 +
-+      /** CromIKO: the result of the connection test. */
-+      cromikoTestResult_: {
++      /** The result of the connection test, empty before one. */
++      testResult_: {
 +        type: String,
 +        value: '',
++      },
++
++      /** Whether the last connection test failed. */
++      testFailed_: {
++        type: Boolean,
++        value: false,
 +      },
      };
    }
  
-@@ -126,6 +149,9 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
++  static get observers() {
++    return [
++      'updateStatus_(secureDnsToggle_.value, mode_, config_, ' +
++          'resolverOptions_, secureDnsDescription_)',
++    ];
++  }
++
+   declare private secureDnsDescription_: string;
+   declare private secureDnsToggle_: chrome.settingsPrivate.PrefObject<boolean>;
+   declare private showSecureDnsOptions_: boolean;
    declare private resolverOptions_: ResolverOption[];
++  declare private selectedResolver_: string;
++  declare private showAllProviders_: boolean;
    declare private privacyPolicyString_: TrustedHTML;
    declare private secureDnsInputValue_: string;
-+  declare private cromikoTestTemplate_: string;
-+  declare private cromikoTesting_: boolean;
-+  declare private cromikoTestResult_: string;
++  declare private mode_: SecureDnsMode;
++  declare private config_: string;
++  declare private statusTitle_: string;
++  declare private statusDetail_: string;
++  declare private testTemplate_: string;
++  declare private testing_: boolean;
++  declare private testResult_: string;
++  declare private testFailed_: boolean;
    private browserProxy_: SecurityPageBrowserProxy =
        SecurityPageBrowserProxyImpl.getInstance();
  
-@@ -137,8 +163,14 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+@@ -137,8 +244,14 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
      this.browserProxy_.getSecureDnsResolverList().then(resolvers => {
        this.resolverOptions_ = resolvers;
        this.browserProxy_.getSecureDnsSetting().then(
@@ -226,56 +1156,361 @@ diff --git a/chrome/browser/resources/settings/privacy_page/security/secure_dns.
 +            // CromIKO: "CromIKO DNS" in the app menu opens the security page
 +            // at this setting.
 +            if (Router.getInstance().getQueryParameters().get('q') === 'dns') {
-+              this.scrollIntoView({block: 'center'});
++              this.scrollIntoView({block: 'start'});
 +            }
 +          });
  
        // Listen to changes in the host resolver configuration and update the
        // UI representation to match. (Changes to the host resolver configuration
-@@ -358,6 +390,35 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+@@ -167,14 +280,15 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+       default:
+         assertNotReached('Received unknown secure DNS mode');
+     }
++    this.mode_ = setting.mode;
++    this.config_ = setting.config;
+ 
+     this.updateManagementView_(setting);
+   }
+ 
+   /**
+    * Updates the underlying secure DNS mode pref based on the new toggle
+-   * selection (and the underlying select menu if the toggle has just been
+-   * turned on).
++   * selection (and the chosen resolver if the toggle has just been turned on).
+    */
+   private onToggleChanged_() {
+     this.showSecureDnsOptions_ = this.secureDnsToggle_.value;
+@@ -184,7 +298,7 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+       return;
+     }
+ 
+-    const resolver = this.$.resolverSelect.value;
++    const resolver = this.selectedResolver_;
+     if (resolver === SecureDnsResolverType.AUTOMATIC) {
+       this.updateDnsPrefs_(SecureDnsMode.AUTOMATIC);
+     } else {
+@@ -206,11 +320,11 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+       case SecureDnsMode.SECURE:
+         // If going to secure mode, set the templates pref first to prevent the
+         // stub resolver config from being momentarily invalid. If the user has
+-        // selected the custom dropdown option, only update the underlying
+-        // prefs if the templates param was specified. If the templates param
+-        // was not specified, the custom entry may be invalid or may not
+-        // have passed validation yet, and we should not update either the
+-        // underlying mode or templates prefs.
++        // selected the custom option, only update the underlying prefs if the
++        // templates param was specified. If the templates param was not
++        // specified, the custom entry may be invalid or may not have passed
++        // validation yet, and we should not update either the underlying mode
++        // or templates prefs.
+         const builtInResolver = this.builtInResolver_();
+         if (!builtInResolver) {
+           if (!templates) {
+@@ -225,7 +339,7 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+       case SecureDnsMode.AUTOMATIC:
+       case SecureDnsMode.OFF:
+         // If going to automatic or off mode, set the mode pref first to avoid
+-        // clearing the dropdown selection when the templates pref is cleared.
++        // clearing the chosen card when the templates pref is cleared.
+         this.setPrefValue('dns_over_https.mode', mode);
+         this.setPrefValue('dns_over_https.templates', '');
+         break;
+@@ -235,11 +349,22 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+   }
+ 
+   /**
+-   * Updates the underlying secure DNS templates pref based on the selected
+-   * resolver and displays the corresponding privacy policy.
++   * CromIKO: a provider card was chosen (the cards replace the dropdown
++   * menu). Updates the underlying secure DNS templates pref based on the
++   * chosen resolver and displays the corresponding privacy policy.
+    */
+-  private onDropdownSelectionChanged_() {
+-    switch (this.$.resolverSelect.value) {
++  private onResolverCardClick_(e: Event) {
++    const card = e.currentTarget as HTMLElement;
++    const resolver = card.dataset['resolver'];
++    assert(resolver !== undefined);
++    if (resolver === this.selectedResolver_ &&
++        resolver !== SecureDnsResolverType.CUSTOM) {
++      return;
++    }
++    this.selectedResolver_ = resolver;
++    // The list folds to the chosen card (with the address field for Custom).
++    this.showAllProviders_ = false;
++    switch (resolver) {
+       case SecureDnsResolverType.AUTOMATIC:
+         this.updateDnsPrefs_(SecureDnsMode.AUTOMATIC);
+         this.updateConfigRepresentation_(SecureDnsMode.AUTOMATIC, '');
+@@ -249,14 +374,26 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+         this.updateConfigRepresentation_(SecureDnsMode.SECURE, '');
+         break;
+       default:
+-        const resolver = this.builtInResolver_();
+-        assert(resolver);
+-        this.updateDnsPrefs_(SecureDnsMode.SECURE, resolver.value);
+-        this.updateConfigRepresentation_(SecureDnsMode.SECURE, resolver.value);
++        const builtIn = this.builtInResolver_();
++        assert(builtIn);
++        this.updateDnsPrefs_(SecureDnsMode.SECURE, builtIn.value);
++        this.updateConfigRepresentation_(SecureDnsMode.SECURE, builtIn.value);
+         break;
+     }
+   }
+ 
++  /** CromIKO: Enter and space choose a card, as a click does. */
++  private onResolverCardKeydown_(e: KeyboardEvent) {
++    if (e.key === 'Enter' || e.key === ' ') {
++      e.preventDefault();
++      (e.currentTarget as HTMLElement).click();
++    }
++  }
++
++  private onShowAllProvidersClick_() {
++    this.showAllProviders_ = !this.showAllProviders_;
++  }
++
+   /**
+    * Updates the setting to communicate the type of management, if any. The
+    * setting is always collapsed if there is any management.
+@@ -323,7 +460,7 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+    */
+   private updateConfigRepresentation_(mode: SecureDnsMode, template: string) {
+     let hideCustomEntry = true;
+-    let selectValue = '';
++    let selected = '';
+     let privacyPolicy = '';
+ 
+     const index = this.resolverOptions_.findIndex(r => r.value === template);
+@@ -333,21 +470,21 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+ 
+     switch (mode) {
+       case SecureDnsMode.AUTOMATIC:
+-        selectValue = SecureDnsResolverType.AUTOMATIC;
++        selected = SecureDnsResolverType.AUTOMATIC;
+         break;
+       case SecureDnsMode.SECURE:
+         if (index === -1) {
+-          selectValue = SecureDnsResolverType.CUSTOM;
++          selected = SecureDnsResolverType.CUSTOM;
+           hideCustomEntry = false;
+         } else {
+-          selectValue = index.toString();
++          selected = index.toString();
+         }
+         break;
+       default:
+         assertNotReached(`Unexpected DNS mode ${mode}`);
+     }
+ 
+-    this.$.resolverSelect.value = selectValue;
++    this.selectedResolver_ = selected;
+ 
+     this.updatePrivacyPolicyLine_(privacyPolicy);
+ 
+@@ -358,6 +495,12 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
          this.$.secureDnsInput.focus();
        }
      }
 +
-+    if (template !== this.cromikoTestTemplate_) {
-+      this.cromikoTestResult_ = '';
++    const testTemplate = mode === SecureDnsMode.SECURE ? template : '';
++    if (testTemplate !== this.testTemplate_) {
++      this.testResult_ = '';
 +    }
-+    this.cromikoTestTemplate_ = mode === SecureDnsMode.SECURE ? template : '';
++    this.testTemplate_ = testTemplate;
+   }
+ 
+   /**
+@@ -388,6 +531,7 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+       event: CustomEvent<{text: string, isValid: boolean}>) {
+     if (event.detail.isValid) {
+       this.updateDnsPrefs_(SecureDnsMode.SECURE, event.detail.text);
++      this.testTemplate_ = event.detail.text;
+     }
+   }
+ 
+@@ -396,12 +540,162 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
+    * resolver is a built-in one.
+    */
+   private builtInResolver_(): ResolverOption|undefined {
+-    if (this.$.resolverSelect.selectedOptions[0].dataset['resolverType'] ===
+-        SecureDnsResolverType.BUILT_IN) {
+-      const index = Number.parseInt(this.$.resolverSelect.value);
+-      return this.resolverOptions_[index];
++    if (this.selectedResolver_ === SecureDnsResolverType.AUTOMATIC ||
++        this.selectedResolver_ === SecureDnsResolverType.CUSTOM) {
++      return undefined;
++    }
++    return this.resolverOptions_[Number.parseInt(this.selectedResolver_)];
++  }
++
++  /** CromIKO: the status of CromIKO DNS, as on Android. */
++  private updateStatus_() {
++    if (!this.isOn_(this.secureDnsToggle_.value, this.mode_)) {
++      this.statusTitle_ = this.i18n('cromikoDnsStatusOff');
++      const managed = this.secureDnsToggle_.enforcement ===
++          chrome.settingsPrivate.Enforcement.ENFORCED;
++      this.statusDetail_ = managed && this.secureDnsDescription_ ?
++          this.secureDnsDescription_ :
++          this.i18n('cromikoDnsStatusOffDetail');
++    } else if (this.mode_ === SecureDnsMode.AUTOMATIC) {
++      this.statusTitle_ = this.i18n('cromikoDnsStatusAutomatic');
++      this.statusDetail_ = this.i18n('cromikoDnsStatusAutomaticDetail');
++    } else {
++      this.statusTitle_ = this.i18n('cromikoDnsStatusOn');
++      this.statusDetail_ = this.i18n(
++          'cromikoDnsStatusOnDetail', this.providerName_(this.config_));
++    }
++  }
++
++  /**
++   * The name of the provider of |config|: its name for a built-in one, else
++   * the host of its address.
++   */
++  private providerName_(config: string): string {
++    const resolver = this.resolverOptions_.find(r => r.value === config);
++    if (resolver) {
++      return resolver.name;
++    }
++    const first = config.trim().split(/\s+/)[0] || '';
++    try {
++      return new URL(first.replace(/\{[^}]*\}/g, '')).hostname || first;
++    } catch {
++      return first;
++    }
++  }
++
++  private isOn_(toggle: boolean, mode: SecureDnsMode): boolean {
++    return !!toggle && mode !== SecureDnsMode.OFF;
++  }
++
++  private heroClass_(toggle: boolean, mode: SecureDnsMode): string {
++    return this.isOn_(toggle, mode) ? 'on' : 'off';
++  }
++
++  /** Whether "Test connection" waits for a provider (automatic mode). */
++  private showTestHint_(toggle: boolean, mode: SecureDnsMode): boolean {
++    return this.isOn_(toggle, mode) && mode === SecureDnsMode.AUTOMATIC;
++  }
++
++  private isSelected_(resolver: string, selected: string): boolean {
++    return resolver === selected;
++  }
++
++  private isIndexSelected_(index: number, selected: string): boolean {
++    return index.toString() === selected;
++  }
++
++  /** The class of a card: chosen or not, and folded until "show all". */
++  private cardClass_(resolver: string, selected: string, showAll: boolean):
++      string {
++    const isSelected = resolver === selected;
++    return 'card' + (isSelected ? ' selected' : '') +
++        (!isSelected && !showAll ? ' folded' : '');
++  }
++
++  private indexCardClass_(index: number, selected: string, showAll: boolean):
++      string {
++    return this.cardClass_(index.toString(), selected, showAll);
++  }
++
++  private filterName_(filter: string|undefined): string {
++    switch (filter) {
++      case 'ads':
++        return this.i18n('cromikoDnsFilterAds');
++      case 'family':
++        return this.i18n('cromikoDnsFilterFamily');
++      case 'malware':
++        return this.i18n('cromikoDnsFilterMalware');
++      default:
++        return this.i18n('cromikoDnsFilterNone');
++    }
++  }
++
++  private filterClass_(filter: string|undefined): string {
++    return 'tag ' + (filter || 'none');
++  }
++
++  private cardLabel_(resolver: ResolverOption): string {
++    return this.i18n(
++        resolver.cromikoRecommended ? 'cromikoDnsCardRecommended' :
++                                      'cromikoDnsCard',
++        resolver.name, this.filterName_(resolver.cromikoFilter));
++  }
++
++  /** The first letter or digit of |name|, in the circle of a provider. */
++  private monogram_(name: string): string {
++    const match = name.match(/[\p{L}\p{N}]/u);
++    return match ? match[0].toLocaleUpperCase() : '?';
++  }
++
++  /** The color of the letter, the same for all the services of a company. */
++  private monogramStyle_(name: string): string {
++    const company = name.split(/[\s(]/)[0] || name;
++    let hash = 0;
++    for (const char of company.toLowerCase()) {
++      hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
++    }
++    return `--monogram-color: ${
++        MONOGRAM_COLORS[hash % MONOGRAM_COLORS.length]}`;
++  }
++
++  private providersClass_(showAll: boolean): string {
++    return showAll ? 'all' : 'one';
++  }
++
++  private showAllLabel_(showAll: boolean): string {
++    return this.i18n(showAll ? 'cromikoDnsShowLess' : 'cromikoDnsShowAll');
++  }
++
++  private testResultClass_(failed: boolean): string {
++    return failed ? 'failed' : 'ok';
 +  }
 +
 +  /**
 +   * CromIKO: tests whether the provider answers, and how fast, like "Test
 +   * connection" on the CromIKO DNS screen of Android.
 +   */
-+  private async onCromikoTestClick_() {
-+    const template = this.cromikoTestTemplate_;
-+    if (!template || this.cromikoTesting_) {
++  private async onTestClick_() {
++    const template = this.testTemplate_;
++    if (!template || this.testing_) {
 +      return;
 +    }
-+    this.cromikoTesting_ = true;
-+    this.cromikoTestResult_ = this.i18n('cromikoDnsTesting');
++    this.testing_ = true;
++    this.testResult_ = '';
++    this.$.orbit.testing = true;
 +    const start = performance.now();
 +    const connected = await this.browserProxy_.probeConfig(template);
 +    const milliseconds = Math.round(performance.now() - start);
-+    this.cromikoTesting_ = false;
-+    if (template !== this.cromikoTestTemplate_) {
++    this.testing_ = false;
++    this.$.orbit.testing = false;
++    if (template !== this.testTemplate_) {
 +      // Another provider was chosen meanwhile.
 +      return;
-+    }
-+    this.cromikoTestResult_ = connected ?
+     }
+-    return undefined;
++    this.$.orbit.showResult(connected);
++    this.testFailed_ = !connected;
++    this.testResult_ = connected ?
 +        this.i18n('cromikoDnsTestOk', milliseconds.toString()) :
 +        this.i18n('cromikoDnsTestFailed');
    }
+ }
  
-   /**
-@@ -388,6 +449,7 @@ export class SettingsSecureDnsElement extends SettingsSecureDnsElementBase {
-       event: CustomEvent<{text: string, isValid: boolean}>) {
-     if (event.detail.isValid) {
-       this.updateDnsPrefs_(SecureDnsMode.SECURE, event.detail.text);
-+      this.cromikoTestTemplate_ = event.detail.text;
-     }
-   }
+diff --git a/chrome/browser/resources/settings_shared/security_page/security_page_browser_proxy.ts b/chrome/browser/resources/settings_shared/security_page/security_page_browser_proxy.ts
+--- a/chrome/browser/resources/settings_shared/security_page/security_page_browser_proxy.ts
++++ b/chrome/browser/resources/settings_shared/security_page/security_page_browser_proxy.ts
+@@ -12,6 +12,10 @@ export interface ResolverOption {
+   name: string;
+   value: string;
+   policy: string;
++  // CromIKO: what the provider filters ('ads', 'family', 'malware' or 'none')
++  // and whether it is the one that CromIKO uses by default.
++  cromikoFilter?: string;
++  cromikoRecommended?: boolean;
+ }
  
+ /**
 diff --git a/chrome/browser/ui/browser_command_controller.cc b/chrome/browser/ui/browser_command_controller.cc
 --- a/chrome/browser/ui/browser_command_controller.cc
 +++ b/chrome/browser/ui/browser_command_controller.cc
@@ -329,7 +1564,7 @@ diff --git a/chrome/browser/ui/toolbar/app_menu_model.cc b/chrome/browser/ui/too
 diff --git a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc b/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc
 --- a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc
 +++ b/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc
-@@ -4,13 +4,19 @@
+@@ -4,13 +4,18 @@
  
  #include "chrome/browser/ui/webui/settings/settings_secure_dns_handler.h"
  
@@ -346,19 +1581,10 @@ diff --git a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc b/c
  #include "base/functional/bind.h"
 -#include "base/rand_util.h"
 +#include "base/strings/string_util.h"
-+#include "base/strings/utf_string_conversions.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/browser_process_platform_part.h"
  #include "chrome/browser/net/default_dns_over_https_config_source.h"
-@@ -20,6 +26,7 @@
- #include "chrome/browser/net/system_network_context_manager.h"
- #include "chrome/common/pref_names.h"
- #include "components/country_codes/country_codes.h"
-+#include "components/strings/grit/components_strings.h"
- #include "content/public/browser/browser_context.h"
- #include "content/public/browser/storage_partition.h"
- #include "content/public/browser/web_contents.h"
-@@ -43,6 +50,49 @@ namespace settings {
+@@ -43,6 +48,50 @@ namespace settings {
  
  namespace {
  
@@ -391,31 +1617,33 @@ diff --git a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc b/c
 +  return CromikoDnsFilter::kNone;
 +}
 +
-+int GetCromikoDnsFilterName(CromikoDnsFilter filter) {
++// The name of |filter| for the settings page, which shows it as a tag.
++std::string_view GetCromikoDnsFilterKey(CromikoDnsFilter filter) {
 +  switch (filter) {
 +    case CromikoDnsFilter::kAds:
-+      return IDS_CROMIKO_SETTINGS_DNS_FILTER_ADS;
++      return "ads";
 +    case CromikoDnsFilter::kFamily:
-+      return IDS_CROMIKO_SETTINGS_DNS_FILTER_FAMILY;
++      return "family";
 +    case CromikoDnsFilter::kMalware:
-+      return IDS_CROMIKO_SETTINGS_DNS_FILTER_MALWARE;
++      return "malware";
 +    case CromikoDnsFilter::kNone:
 +      break;
 +  }
-+  return IDS_CROMIKO_SETTINGS_DNS_FILTER_NONE;
++  return "none";
 +}
 +
  base::DictValue CreateSecureDnsSettingDict(
      content::BrowserContext* browser_context) {
    // Fetch the current host resolver configuration. It is not sufficient to read
-@@ -123,17 +173,47 @@ void SecureDnsHandler::OnJavascriptDisallowed() {
+@@ -123,17 +172,44 @@ void SecureDnsHandler::OnJavascriptDisallowed() {
  }
  
  base::ListValue SecureDnsHandler::GetSecureDnsResolverList() {
 -  base::ListValue resolvers;
 +  // CromIKO: instead of a random order, Quad9 (the default) first, then the
 +  // providers that block ads, the family filters, the ones that block malware
-+  // and the unfiltered ones, each with what it filters after its name.
++  // and the unfiltered ones, each with what it filters, for the cards of
++  // CromIKO DNS.
 +  struct Provider {
 +    bool recommended;
 +    CromikoDnsFilter filter;
@@ -446,15 +1674,11 @@ diff --git a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc b/c
 -    dict.Set("name", entry->ui_name_cromite.empty() ? entry->provider : entry->ui_name_cromite);
 -    dict.Set("value", doh_config.ToString());
 -    dict.Set("policy", entry->privacy_policy);
-+    dict.Set("name", l10n_util::GetStringFUTF8(
-+                         provider.recommended
-+                             ? IDS_CROMIKO_SETTINGS_DNS_PROVIDER_RECOMMENDED
-+                             : IDS_CROMIKO_SETTINGS_DNS_PROVIDER,
-+                         base::UTF8ToUTF16(provider.name),
-+                         l10n_util::GetStringUTF16(
-+                             GetCromikoDnsFilterName(provider.filter))));
++    dict.Set("name", provider.name);
 +    dict.Set("value", provider.value);
 +    dict.Set("policy", provider.policy);
++    dict.Set("cromikoFilter", GetCromikoDnsFilterKey(provider.filter));
++    dict.Set("cromikoRecommended", provider.recommended);
      resolvers.Append(std::move(dict));
    }
 -
@@ -465,19 +1689,41 @@ diff --git a/chrome/browser/ui/webui/settings/settings_secure_dns_handler.cc b/c
 diff --git a/chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.cc
 --- a/chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.cc
 +++ b/chrome/browser/ui/webui/settings/shared_settings_localized_strings_provider.cc
-@@ -270,8 +270,13 @@ void AddSharedSyncPageStrings(content::WebUIDataSource* html_source) {
+@@ -270,8 +270,35 @@ void AddSharedSyncPageStrings(content::WebUIDataSource* html_source) {
  
  void AddSecureDnsStrings(content::WebUIDataSource* html_source) {
    webui::LocalizedString kLocalizedStrings[] = {
 -      {"secureDns", IDS_SETTINGS_SECURE_DNS},
 -      {"secureDnsDescription", IDS_SETTINGS_SECURE_DNS_DESCRIPTION},
-+      // CromIKO: the secure DNS setting is CromIKO DNS, with a connection test.
++      // CromIKO: the secure DNS setting is CromIKO DNS (secure_dns.ts).
 +      {"secureDns", IDS_CROMIKO_SETTINGS_DNS_TITLE},
 +      {"secureDnsDescription", IDS_CROMIKO_SETTINGS_DNS_DESCRIPTION},
++      {"cromikoDnsStatusOn", IDS_CROMIKO_SETTINGS_DNS_STATUS_ON},
++      {"cromikoDnsStatusOnDetail", IDS_CROMIKO_SETTINGS_DNS_STATUS_ON_DETAIL},
++      {"cromikoDnsStatusAutomatic", IDS_CROMIKO_SETTINGS_DNS_STATUS_AUTOMATIC},
++      {"cromikoDnsStatusAutomaticDetail",
++       IDS_CROMIKO_SETTINGS_DNS_STATUS_AUTOMATIC_DETAIL},
++      {"cromikoDnsStatusOff", IDS_CROMIKO_SETTINGS_DNS_STATUS_OFF},
++      {"cromikoDnsStatusOffDetail", IDS_CROMIKO_SETTINGS_DNS_STATUS_OFF_DETAIL},
 +      {"cromikoDnsTest", IDS_CROMIKO_SETTINGS_DNS_TEST},
 +      {"cromikoDnsTesting", IDS_CROMIKO_SETTINGS_DNS_TESTING},
 +      {"cromikoDnsTestOk", IDS_CROMIKO_SETTINGS_DNS_TEST_OK},
 +      {"cromikoDnsTestFailed", IDS_CROMIKO_SETTINGS_DNS_TEST_FAILED},
++      {"cromikoDnsTestAutomatic", IDS_CROMIKO_SETTINGS_DNS_TEST_AUTOMATIC},
++      {"cromikoDnsProviders", IDS_CROMIKO_SETTINGS_DNS_PROVIDERS},
++      {"cromikoDnsShowAll", IDS_CROMIKO_SETTINGS_DNS_SHOW_ALL},
++      {"cromikoDnsShowLess", IDS_CROMIKO_SETTINGS_DNS_SHOW_LESS},
++      {"cromikoDnsFilterAds", IDS_CROMIKO_SETTINGS_DNS_FILTER_ADS},
++      {"cromikoDnsFilterFamily", IDS_CROMIKO_SETTINGS_DNS_FILTER_FAMILY},
++      {"cromikoDnsFilterMalware", IDS_CROMIKO_SETTINGS_DNS_FILTER_MALWARE},
++      {"cromikoDnsFilterNone", IDS_CROMIKO_SETTINGS_DNS_FILTER_NONE},
++      {"cromikoDnsRecommended", IDS_CROMIKO_SETTINGS_DNS_RECOMMENDED},
++      {"cromikoDnsCard", IDS_CROMIKO_SETTINGS_DNS_CARD},
++      {"cromikoDnsCardRecommended", IDS_CROMIKO_SETTINGS_DNS_CARD_RECOMMENDED},
++      {"cromikoDnsAutomatic", IDS_CROMIKO_SETTINGS_DNS_AUTOMATIC},
++      {"cromikoDnsCustom", IDS_CROMIKO_SETTINGS_DNS_CUSTOM},
++      {"cromikoDnsCustomDetail", IDS_CROMIKO_SETTINGS_DNS_CUSTOM_DETAIL},
++      {"cromikoDnsExplanation", IDS_CROMIKO_SETTINGS_DNS_EXPLANATION},
        {"secureDnsDisabledForManagedEnvironment",
         IDS_SETTINGS_SECURE_DNS_DISABLED_FOR_MANAGED_ENVIRONMENT},
        {"secureDnsDisabledForParentalControl",
@@ -485,9 +1731,10 @@ diff --git a/components/cromite_components_strings_grd/CromIKO-Windows-DNS.grdp 
 new file mode 100644
 --- /dev/null
 +++ b/components/cromite_components_strings_grd/CromIKO-Windows-DNS.grdp
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,88 @@
 +<?xml version="1.0" encoding="utf-8"?>
-+<!-- CromIKO DNS on the desktop. The Android app has its own strings. -->
++<!-- CromIKO DNS on the desktop, like the CromIKO DNS screen of Android. The
++     Android app has its own strings. -->
 +<grit-part>
 +  <if expr="not is_android">
 +    <message name="IDS_CROMIKO_SETTINGS_DNS_TITLE" desc="Name of the secure DNS setting (DNS over HTTPS) of CromIKO, in the settings and the app menu.">
@@ -496,23 +1743,23 @@ new file mode 100644
 +    <message name="IDS_CROMIKO_SETTINGS_DNS_DESCRIPTION" desc="Description of the CromIKO DNS switch in the settings.">
 +      Encrypt the addresses of the sites you visit
 +    </message>
-+    <message name="IDS_CROMIKO_SETTINGS_DNS_PROVIDER" desc="A provider in the list of CromIKO DNS, with what it filters.">
-+      <ph name="PROVIDER">$1<ex>AdGuard (Ad Blocking)</ex></ph> – <ph name="FILTER">$2<ex>Blocks ads and trackers</ex></ph>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_STATUS_ON" desc="Big status of CromIKO DNS when it uses a provider.">
++      Protected
 +    </message>
-+    <message name="IDS_CROMIKO_SETTINGS_DNS_PROVIDER_RECOMMENDED" desc="The provider that CromIKO uses by default in the list of CromIKO DNS, with what it filters.">
-+      <ph name="PROVIDER">$1<ex>Quad9 (9.9.9.9)</ex></ph> – <ph name="FILTER">$2<ex>Blocks malware</ex></ph> (recommended)
++    <message name="IDS_CROMIKO_SETTINGS_DNS_STATUS_ON_DETAIL" desc="Line under the status of CromIKO DNS when it uses a provider.">
++      Your DNS queries are encrypted with <ph name="PROVIDER">$1<ex>Quad9 (9.9.9.9)</ex></ph>
 +    </message>
-+    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_ADS" desc="What a DNS provider filters: ads and trackers.">
-+      Blocks ads and trackers
++    <message name="IDS_CROMIKO_SETTINGS_DNS_STATUS_AUTOMATIC" desc="Big status of CromIKO DNS when it uses the DNS of the network, encrypted when possible.">
++      Protected when possible
 +    </message>
-+    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_FAMILY" desc="What a DNS provider filters: sites for adults.">
-+      Family filter
++    <message name="IDS_CROMIKO_SETTINGS_DNS_STATUS_AUTOMATIC_DETAIL" desc="Line under the status of CromIKO DNS in automatic mode, and the description of the Automatic card.">
++      Your network's DNS, encrypted when it supports it
 +    </message>
-+    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_MALWARE" desc="What a DNS provider filters: sites with malware.">
-+      Blocks malware
++    <message name="IDS_CROMIKO_SETTINGS_DNS_STATUS_OFF" desc="Big status of CromIKO DNS when it is off.">
++      CromIKO DNS is off
 +    </message>
-+    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_NONE" desc="What a DNS provider filters: nothing.">
-+      No filtering
++    <message name="IDS_CROMIKO_SETTINGS_DNS_STATUS_OFF_DETAIL" desc="Line under the status of CromIKO DNS when it is off.">
++      Your network can see and change the addresses of the sites you visit
 +    </message>
 +    <message name="IDS_CROMIKO_SETTINGS_DNS_TEST" desc="Button that tests whether the chosen DNS provider answers.">
 +      Test connection
@@ -525,6 +1772,51 @@ new file mode 100644
 +    </message>
 +    <message name="IDS_CROMIKO_SETTINGS_DNS_TEST_FAILED" desc="Result of the connection test: the DNS provider did not answer.">
 +      Can't reach this provider
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_TEST_AUTOMATIC" desc="Shown next to the disabled connection test in automatic mode, where there is no provider to test.">
++      Choose a provider to test it
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_PROVIDERS" desc="Heading of the list of DNS providers of CromIKO DNS.">
++      Provider
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_SHOW_ALL" desc="Button that shows all the DNS providers, not only the chosen one.">
++      Choose another provider
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_SHOW_LESS" desc="Button that shows only the chosen DNS provider again.">
++      Show less
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_ADS" desc="Tag of a DNS provider that blocks the addresses of ads and trackers.">
++      Blocks ads and trackers
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_FAMILY" desc="Tag of a DNS provider that blocks adult sites, for families.">
++      Family filter
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_MALWARE" desc="Tag of a DNS provider that blocks malware and phishing sites.">
++      Blocks malware
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_FILTER_NONE" desc="Tag of a DNS provider that does not block anything.">
++      No filtering
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_RECOMMENDED" desc="Badge on the DNS provider that CromIKO uses by default.">
++      Recommended
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_CARD" desc="Accessibility label of a DNS provider in the list: its name and what it filters.">
++      <ph name="PROVIDER">$1<ex>AdGuard (Ad Blocking)</ex></ph>, <ph name="FILTER">$2<ex>Blocks ads and trackers</ex></ph>
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_CARD_RECOMMENDED" desc="Accessibility label of the DNS provider that CromIKO uses by default: its name and what it filters.">
++      <ph name="PROVIDER">$1<ex>Quad9 (9.9.9.9)</ex></ph>, <ph name="FILTER">$2<ex>Blocks malware</ex></ph>, recommended
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_AUTOMATIC" desc="Card of CromIKO DNS that uses the DNS of the network, encrypted when it supports it.">
++      Automatic
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_CUSTOM" desc="Card of CromIKO DNS for an address that the user enters.">
++      Custom
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_CUSTOM_DETAIL" desc="Description of the Custom card of CromIKO DNS.">
++      Your own DNS-over-HTTPS address
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DNS_EXPLANATION" desc="Explanation at the bottom of CromIKO DNS.">
++      CromIKO DNS looks up the addresses of websites over an encrypted connection (DNS over HTTPS), so your network and internet provider can't see or change them. The provider you choose can see them, so pick one you trust.
 +    </message>
 +  </if>
 +</grit-part>
