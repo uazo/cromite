@@ -240,7 +240,7 @@ code: secure DNS with Quad9 and the CromIKO providers, every pop-up held
 
 | # | Feature | On Windows | Effort | Status |
 |---|---------|------------|:------:|:------:|
-| 3.1 | New tab page | The mascot instead of the Chromium logo, the shield card (ads and trackers blocked this week, opens the report) and the CromIKO shortcuts (bookmarks, downloads, DNS) | medium | |
+| 3.1 | New tab page | The CromIKO new tab page for every search engine: the CromIKO logo (mascot and wordmark, single-colored on dark themes and background images) instead of the Google logo, the shield card under the shortcuts (ads and trackers blocked this week with a chart of the days, opens the ad blocker settings until 3.2) and the CromIKO shortcuts (Bookmarks, Downloads, CromIKO DNS) (`CromIKO-Windows-New-Tab-Page.patch`) | medium | done, to try |
 | 3.2 | Weekly shield report | A CromIKO page (chrome://cromiko/report) with the count of the week, the bars of the days, last week, the sites and trackers blocked the most and the pop-ups held, from the same counts as Android | medium | |
 | 3.3 | CromIKO settings | A CromIKO section at the top of Settings with all CromIKO features and their icons, like the Android page: DNS, pop-up guard, ad blocking, report, Fire button, download manager, colors, player, manga mode | medium | |
 | 3.4 | Edit the new tab page | The widgets of 3.1 moved, made small or turned off, like Edit home screen on Android | medium | |

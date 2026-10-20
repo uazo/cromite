@@ -157,9 +157,11 @@ When `server-build.sh` starts, it asks which version to build:
    (Settings > Privacy and security > Security, or CromIKO DNS in the
    menu), every pop-up held until you allow it (the icon in the address
    bar), Cromite's ad blocking, the Fire button ("Burn tabs and data" in
-   the menu), the CromIKO accent colors in Customize Chrome, and the CromIKO
+   the menu), the CromIKO accent colors in Customize Chrome, the CromIKO
    download manager (several connections per file and a queue, in
-   Settings > Downloads). The other CromIKO features are made for the
+   Settings > Downloads), and the CromIKO new tab page (the mascot, the
+   shield card with the ads and trackers blocked this week, and the CromIKO
+   shortcuts). The other CromIKO features are made for the
    Android app and come to the Windows version step by step (see
    `FUTURE_UPDATE.md`).
 
