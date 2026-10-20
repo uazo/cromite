@@ -1,0 +1,1634 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 11:00:00 +0000
+Subject: CromIKO Manga Mode
+
+Add "Manga mode" to the app menu of web pages. The first time on a
+site, it asks the user to tap the next chapter button, the previous
+chapter button and a page of the chapter (either button can be
+skipped), and saves how to find them for that site. Then chapters of
+the site open in a full screen reader: only the chapter images, at full
+width on black, with small buttons for the previous and the next
+chapter at the top left and a close button at the top right. A tap
+shows or hides the buttons and goes full screen.
+
+The reader keeps the page and hides everything else, so the site's own
+lazy loading keeps working while scrolling; images added later by the
+site are laid out as they come, and images still waiting for the site's
+script are started when they come near the screen. After a page load
+on a site where manga mode is on, the reader opens by itself on chapter
+pages (pages with the chapter images and a chapter button).
+
+The page script (res/raw/cromiko_manga.js) runs in an isolated world of
+the main frame through a small JNI bridge, CromikoPageScripts. The
+configuration of each site is kept in the cromiko_manga_mode shared
+preferences.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/BUILD.gn                       |   1 +
+ chrome/android/chrome_java_resources.gni      |   1 +
+ chrome/android/chrome_java_sources.gni        |   1 +
+ chrome/android/java/res/raw/cromiko_manga.js  | 959 ++++++++++++++++++
+ chrome/android/java/res/values/ids.xml        |   1 +
+ .../chrome/browser/ChromeTabbedActivity.java  |  10 +
+ .../browser/cromiko/CromikoMangaMode.java     | 235 +++++
+ .../TabbedAppMenuPropertiesDelegate.java      |  23 +
+ chrome/browser/BUILD.gn                       |   1 +
+ chrome/browser/cromiko/BUILD.gn               |  30 +
+ .../cromiko/android/cromiko_page_scripts.cc   |  59 ++
+ .../browser/cromiko/CromikoPageScripts.java   |  36 +
+ .../CromIKO-Manga-Mode.grdp                   |  51 +
+ components/browser_ui/theme/android/BUILD.gn  |   1 +
+ .../res/drawable/cromiko_ic_manga_24dp.xml    |  16 +
+ 15 files changed, 1425 insertions(+)
+ create mode 100644 chrome/android/java/res/raw/cromiko_manga.js
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java
+ create mode 100644 chrome/browser/cromiko/BUILD.gn
+ create mode 100644 chrome/browser/cromiko/android/cromiko_page_scripts.cc
+ create mode 100644 chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Mode.grdp
+ create mode 100644 components/browser_ui/theme/android/java/res/drawable/cromiko_ic_manga_24dp.xml
+
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -402,6 +402,7 @@ if (_is_default_toolchain) {
+       "//chrome/browser/contextmenu:java",
+       "//chrome/browser/contextual_tasks:java",
+       "//chrome/browser/contextual_tasks:utils_java",
++      "//chrome/browser/cromiko:java",
+       "//chrome/browser/data_sharing:factory_java",
+       "//chrome/browser/data_sharing:instant_message_delegate_factory_java",
+       "//chrome/browser/glic:metrics_java",
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -649,6 +649,7 @@ chrome_java_resources = [
+   "java/res/menu/bookmark_toolbar_menu_improved.xml",
+   "java/res/menu/history_manager_menu.xml",
+   "java/res/raw/back_gesture_arrow_animation.json",
++  "java/res/raw/cromiko_manga.js",
+   "java/res/raw/finds_opt_in_animation.json",
+   "java/res/raw/tips_notifications_quick_delete_logo_anim.json",
+   "java/res/transition/fade.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -479,6 +479,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabColorProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabIntentDataProvider.java",
+diff --git a/chrome/android/java/res/raw/cromiko_manga.js b/chrome/android/java/res/raw/cromiko_manga.js
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/raw/cromiko_manga.js
+@@ -0,0 +1,959 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++//
++// CromIKO manga mode, run by CromikoMangaMode.java in an isolated world of the
++// page. The Java side replaces the arguments placeholder at the end with
++// (command, config, texts) and reads the returned JSON.
++//
++// Commands:
++//   "pick"  Ask the user to tap the next chapter button, the previous chapter
++//           button and a page of the chapter. Then save the result (read by
++//           "poll") and open the reader.
++//   "poll"  Return the state of "pick": picking, done (with the config),
++//           cancelled or idle.
++//   "read"  Open the reader now, waiting for the chapter images if needed.
++//   "auto"  Like "read", after a page load: only on chapter pages, and not
++//           again on a page where the user closed the reader.
++//   "stop"  Close the picker or the reader.
++//   "state" Return what is running.
++//
++// The reader keeps the page itself and hides everything except the chapter
++// images, which are shown at full width on black. The page keeps scrolling
++// normally, so sites that load their images while scrolling keep working;
++// images that appear later are styled as they come.
++
++(function(command, config, texts) {
++  'use strict';
++  if (!window.__cromikoManga) {
++    window.__cromikoManga = createManga();
++  }
++  return JSON.stringify(window.__cromikoManga.run(command, config, texts));
++
++  function createManga() {
++    const ACCENT = '#5C7CFC';
++    const LAZY_ATTRIBUTES =
++        ['data-src', 'data-lazy-src', 'data-original', 'data-url', 'data-cfsrc'];
++    const NOT_RENDERED =
++        new Set(['SCRIPT', 'STYLE', 'LINK', 'META', 'NOSCRIPT', 'TEMPLATE']);
++    const MEDIA = 'img, canvas';
++    // How long "read" and "auto" wait for the chapter images to appear.
++    const WAIT_MS = 20000;
++
++    let t = {};
++    let picker = null;
++    let reader = null;
++    let waiter = null;
++    let pickState = 'idle';
++    let pickResult = null;
++    // The user closed the reader on this page: "auto" leaves it closed.
++    let dismissed = false;
++
++    function run(cmd, cfg, txt) {
++      if (txt) {
++        t = txt;
++      }
++      switch (cmd) {
++        case 'pick':
++          stopAll();
++          startPicker();
++          return {state: 'picking'};
++        case 'poll': {
++          const result = {state: pickState};
++          if (pickState === 'done') {
++            result.config = pickResult;
++          }
++          if (pickState !== 'picking') {
++            pickState = 'idle';
++          }
++          return result;
++        }
++        case 'read':
++          dismissed = false;
++          stopAll();
++          return {state: waitAndRead(cfg, false)};
++        case 'auto':
++          if (dismissed || reader || picker || waiter) {
++            return {state: 'skipped'};
++          }
++          return {state: waitAndRead(cfg, true)};
++        case 'stop':
++          stopAll();
++          return {state: 'stopped'};
++        case 'state':
++          return {
++            state: picker ? 'picking' : reader ? 'reading' :
++                                                 waiter ? 'waiting' : 'idle',
++            buttonsHidden: !!reader && reader.wrap.classList.contains('hidden'),
++          };
++      }
++      return {state: 'unknown'};
++    }
++
++    function stopAll() {
++      stopWaiting();
++      if (picker) {
++        stopPicker('cancelled');
++      }
++      if (reader) {
++        stopReader();
++      }
++    }
++
++    // ---------------------------------------------------------------------
++    // Helpers
++
++    function norm(text) {
++      return (text || '').replace(/\s+/g, ' ').trim().slice(0, 60);
++    }
++
++    function labelOf(el) {
++      return norm(el.getAttribute('aria-label') || el.getAttribute('title') ||
++                  el.textContent);
++    }
++
++    // Ids and classes that change from page to page, or that only describe a
++    // state, are no use in a selector that must work on the next chapter.
++    function isStableName(name) {
++      return !!name && name.length <= 40 && !/\d{3,}/.test(name) &&
++          !/[0-9a-f]{8,}/i.test(name) &&
++          !/(^|[-_])(active|hover|focus|selected|current|disabled|lazy\w*|loaded|loading|show|shown|visible|hidden|fade\w*|animated?|in-view)$/i
++               .test(name);
++    }
++
++    function stableClasses(el) {
++      return [...el.classList].filter(isStableName).slice(0, 3);
++    }
++
++    function simpleSelector(el) {
++      let selector = el.tagName.toLowerCase();
++      for (const name of stableClasses(el)) {
++        selector += '.' + CSS.escape(name);
++      }
++      return selector;
++    }
++
++    function isUnique(selector, el) {
++      try {
++        const found = document.querySelectorAll(selector);
++        return found.length === 1 && found[0] === el;
++      } catch (e) {
++        return false;
++      }
++    }
++
++    // A CSS selector for |el| that should also find the same element on
++    // other chapters of the site.
++    function selectorFor(el) {
++      if (el.id && isStableName(el.id) && isUnique('#' + CSS.escape(el.id), el)) {
++        return '#' + CSS.escape(el.id);
++      }
++      const own = simpleSelector(el);
++      if (own.includes('.') && isUnique(own, el)) {
++        return own;
++      }
++      const parts = [];
++      for (let node = el; node && node !== document.documentElement;
++           node = node.parentElement) {
++        if (node !== el && node.id && isStableName(node.id)) {
++          parts.unshift('#' + CSS.escape(node.id));
++          break;
++        }
++        let part = simpleSelector(node);
++        const parent = node.parentElement;
++        if (parent) {
++          const sameTag =
++              [...parent.children].filter(c => c.tagName === node.tagName);
++          if (sameTag.length > 1 &&
++              [...parent.children].filter(c => c.matches(part)).length > 1) {
++            part += ':nth-of-type(' + (sameTag.indexOf(node) + 1) + ')';
++          }
++        }
++        parts.unshift(part);
++        if (node === document.body) {
++          break;
++        }
++        const selector = parts.join(' > ');
++        if (isUnique(selector, el)) {
++          return selector;
++        }
++      }
++      return parts.join(' > ');
++    }
++
++    function queryAll(selector) {
++      try {
++        return selector ? [...document.querySelectorAll(selector)] : [];
++      } catch (e) {
++        return [];
++      }
++    }
++
++    function isDisabled(el) {
++      return el.disabled || el.getAttribute('aria-disabled') === 'true' ||
++          el.classList.contains('disabled');
++    }
++
++    function hasLazyHint(el) {
++      return el.tagName === 'IMG' &&
++          (LAZY_ATTRIBUTES.some(name => el.hasAttribute(name)) ||
++           el.loading === 'lazy' || /lazy/i.test(el.className) ||
++           !el.getAttribute('src'));
++    }
++
++    function isPlaceholder(el) {
++      return el.tagName === 'IMG' &&
++          (!el.complete || el.naturalWidth < 50 ||
++           (el.currentSrc || el.src || '').startsWith('data:'));
++    }
++
++    // ---------------------------------------------------------------------
++    // Shadow DOM user interface, outside of <body> so the reader never hides
++    // it.
++
++    function createHost(css) {
++      const host = document.createElement('div');
++      host.setAttribute('data-cromiko-manga', '');
++      for (const [name, value] of Object.entries({
++             all: 'initial',
++             position: 'fixed',
++             top: '0',
++             left: '0',
++             width: '0',
++             height: '0',
++             'z-index': '2147483647',
++           })) {
++        host.style.setProperty(name, value, 'important');
++      }
++      const root = host.attachShadow({mode: 'closed'});
++      // A constructed style sheet is not blocked by the Content Security
++      // Policy of the page, unlike a <style> element.
++      try {
++        const sheet = new CSSStyleSheet();
++        sheet.replaceSync(css);
++        root.adoptedStyleSheets = [sheet];
++      } catch (e) {
++        const style = document.createElement('style');
++        style.textContent = css;
++        root.appendChild(style);
++      }
++      document.documentElement.appendChild(host);
++      return {host, root};
++    }
++
++    function element(tag, className, parent, text) {
++      const el = document.createElement(tag);
++      if (className) {
++        el.className = className;
++      }
++      if (text) {
++        el.textContent = text;
++      }
++      if (parent) {
++        parent.appendChild(el);
++      }
++      return el;
++    }
++
++    const SVG_NS = 'http://www.w3.org/2000/svg';
++
++    function icon(parent, path) {
++      const svg = document.createElementNS(SVG_NS, 'svg');
++      svg.setAttribute('viewBox', '0 0 24 24');
++      svg.setAttribute('aria-hidden', 'true');
++      const p = document.createElementNS(SVG_NS, 'path');
++      p.setAttribute('d', path);
++      svg.appendChild(p);
++      parent.appendChild(svg);
++      return svg;
++    }
++
++    const ICON_PREV = 'M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z';
++    const ICON_NEXT = 'M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z';
++    const ICON_CLOSE =
++        'M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z';
++
++    function isOurs(event, host) {
++      return host && event.composedPath().includes(host);
++    }
++
++    // ---------------------------------------------------------------------
++    // Picker
++
++    const PICKER_CSS = `
++      .bar { position: fixed; left: 8px; right: 8px; top: 8px;
++        background: rgba(20, 22, 28, 0.94); color: #fff; border-radius: 16px;
++        padding: 12px 14px; font: 15px/1.35 system-ui, sans-serif;
++        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
++        border: 1px solid rgba(255, 255, 255, 0.12); }
++      .step { font-size: 12px; color: ${ACCENT}; font-weight: 600;
++        letter-spacing: 0.04em; }
++      .text { margin: 2px 0 10px; font-weight: 600; }
++      .hint { color: #ffb4a8; font-size: 13px; margin: -6px 0 8px; }
++      .hint:empty { display: none; }
++      .buttons { display: flex; gap: 8px; justify-content: flex-end; }
++      button { font: 600 14px system-ui, sans-serif; border: 0;
++        border-radius: 999px; padding: 8px 14px; color: #fff;
++        background: rgba(255, 255, 255, 0.14); }
++      button.skip[hidden] { display: none; }
++      .box { position: fixed; pointer-events: none; border-radius: 6px;
++        border: 3px solid ${ACCENT}; background: rgba(92, 124, 252, 0.18);
++        transition: all 0.08s; display: none; }
++      .box.done { border-color: #3ddc84; background: rgba(61, 220, 132, 0.2); }
++    `;
++
++    function startPicker() {
++      const steps = [
++        {key: 'next', text: t.stepNext || 'Tap the NEXT chapter button'},
++        {key: 'prev', text: t.stepPrev || 'Tap the PREVIOUS chapter button'},
++        {key: 'image', text: t.stepImage || 'Tap a page of the chapter'},
++      ];
++      const ui = createHost(PICKER_CSS);
++      const bar = element('div', 'bar', ui.root);
++      const stepLabel = element('div', 'step', bar);
++      const text = element('div', 'text', bar);
++      const hint = element('div', 'hint', bar);
++      const buttons = element('div', 'buttons', bar);
++      const skip = element('button', 'skip', buttons, t.skip || 'Skip');
++      const cancel = element('button', 'cancel', buttons, t.cancel || 'Cancel');
++      const box = element('div', 'box', ui.root);
++
++      picker = {ui, steps, index: 0, result: {}, box, target: null};
++      pickState = 'picking';
++
++      const show = () => {
++        const step = steps[picker.index];
++        stepLabel.textContent = (picker.index + 1) + ' / ' + steps.length;
++        text.textContent = step.text;
++        hint.textContent = '';
++        // The chapter image cannot be skipped.
++        skip.hidden = step.key === 'image';
++        box.style.display = 'none';
++      };
++      show();
++
++      const advance = () => {
++        picker.index++;
++        if (picker.index < steps.length) {
++          show();
++        } else {
++          finishPicker();
++        }
++      };
++      skip.addEventListener('click', () => {
++        picker.result[steps[picker.index].key] = null;
++        advance();
++      });
++      cancel.addEventListener('click', () => stopPicker('cancelled'));
++
++      const candidate = (event) => {
++        const step = steps[picker.index];
++        return step.key === 'image' ?
++            imageAt(event.clientX, event.clientY, event.target) :
++            clickableAt(event.target);
++      };
++      const highlight = (el, done) => {
++        if (!el) {
++          box.style.display = 'none';
++          return;
++        }
++        const r = el.getBoundingClientRect();
++        box.style.display = 'block';
++        box.style.left = (r.left - 4) + 'px';
++        box.style.top = (r.top - 4) + 'px';
++        box.style.width = (r.width + 8) + 'px';
++        box.style.height = (r.height + 8) + 'px';
++        box.classList.toggle('done', !!done);
++      };
++      picker.highlight = highlight;
++
++      // While picking, taps select elements instead of using them: links do
++      // not navigate and the site's own click handlers do not run.
++      const swallow = (event) => {
++        if (!event.isTrusted || isOurs(event, ui.host)) {
++          return;
++        }
++        event.stopImmediatePropagation();
++        if (event.type === 'pointerdown' || event.type === 'mouseover') {
++          highlight(candidate(event), false);
++        }
++      };
++      const onClick = (event) => {
++        if (!event.isTrusted || isOurs(event, ui.host)) {
++          return;
++        }
++        event.preventDefault();
++        event.stopImmediatePropagation();
++        const step = steps[picker.index];
++        const el = candidate(event);
++        if (!el) {
++          hint.textContent = step.key === 'image' ?
++              (t.notImage || 'That is not a picture, try again') : '';
++          highlight(null);
++          return;
++        }
++        highlight(el, true);
++        picker.result[step.key] = el;
++        if (step.key === 'image') {
++          // Still in the tap: going full screen is allowed now.
++          requestFullscreen();
++        }
++        setTimeout(advance, step.key === 'image' ? 0 : 450);
++      };
++      picker.listeners = [
++        ['click', onClick],
++        ['auxclick', onClick],
++        ['pointerdown', swallow],
++        ['pointerup', swallow],
++        ['mousedown', swallow],
++        ['mouseup', swallow],
++        ['mouseover', swallow],
++        ['touchend', swallow],
++      ];
++      for (const [type, listener] of picker.listeners) {
++        window.addEventListener(type, listener, true);
++      }
++    }
++
++    // The link or button that was tapped (the tap may land on an icon or a
++    // text inside it).
++    function clickableAt(target) {
++      if (!(target instanceof Element)) {
++        return null;
++      }
++      const clickable = target.closest(
++          'a[href], button, [role="button"], [onclick], ' +
++          'input[type="button"], input[type="submit"]');
++      if (clickable) {
++        return clickable;
++      }
++      // An element made clickable with a script: take the outermost one of
++      // the elements that show a pointer cursor.
++      let found = null;
++      let node = target;
++      for (let i = 0; node && node !== document.body && i < 5; i++) {
++        if (getComputedStyle(node).cursor === 'pointer') {
++          found = node;
++        } else if (found) {
++          break;
++        }
++        node = node.parentElement;
++      }
++      return found || target;
++    }
++
++    // The chapter image at a point, also below transparent elements that some
++    // sites put over their images.
++    function imageAt(x, y, target) {
++      for (const el of document.elementsFromPoint(x, y)) {
++        if (el.matches && el.matches(MEDIA)) {
++          return el;
++        }
++        if (el.tagName === 'PICTURE') {
++          const img = el.querySelector('img');
++          if (img) {
++            return img;
++          }
++        }
++      }
++      if (target instanceof Element) {
++        const media = target.querySelectorAll(MEDIA);
++        if (media.length === 1) {
++          return media[0];
++        }
++      }
++      return null;
++    }
++
++    function navSpec(el) {
++      if (!el) {
++        return null;
++      }
++      // Sites often have the same buttons above and below the chapter: a
++      // selector that finds all of them is fine when they say the same.
++      const own = simpleSelector(el);
++      const same = own.includes('.') ? queryAll(own) : [];
++      const sameLabel = same.length > 1 &&
++          same.every(other => labelOf(other) === labelOf(el));
++      return {
++        selector: sameLabel ? own : selectorFor(el),
++        text: labelOf(el),
++        rel: el.getAttribute('rel') || '',
++      };
++    }
++
++    // The element that holds all images of the chapter: the lowest ancestor
++    // of the tapped image with the most chapter-sized images, stopping before
++    // it would include many other images (logos, avatars, banners).
++    function findContainer(img) {
++      const width = img.getBoundingClientRect().width || img.width || 1;
++      const isPage = (el) => {
++        const w = el.getBoundingClientRect().width;
++        return w >= Math.max(0.6 * width, 80) || (w === 0 && hasLazyHint(el));
++      };
++      let best = null;
++      let bestCount = 0;
++      for (let node = img.parentElement;
++           node && node !== document.body && node !== document.documentElement;
++           node = node.parentElement) {
++        const media = [...node.querySelectorAll(MEDIA)];
++        const pages = media.filter(isPage);
++        if (pages.length < 0.75 * media.length) {
++          break;
++        }
++        if (pages.length > bestCount) {
++          best = node;
++          bestCount = pages.length;
++        }
++      }
++      return best || img.parentElement || img;
++    }
++
++    function finishPicker() {
++      const result = picker.result;
++      const container = findContainer(result.image);
++      const cfg = {
++        version: 1,
++        next: navSpec(result.next),
++        prev: navSpec(result.prev),
++        container: selectorFor(container),
++        image: simpleSelector(result.image),
++      };
++      stopPicker('done', cfg);
++      openReader(cfg);
++    }
++
++    function stopPicker(state, cfg) {
++      if (!picker) {
++        return;
++      }
++      for (const [type, listener] of picker.listeners || []) {
++        window.removeEventListener(type, listener, true);
++      }
++      picker.ui.host.remove();
++      picker = null;
++      pickState = state;
++      pickResult = cfg || null;
++    }
++
++    // ---------------------------------------------------------------------
++    // Finding the chapter on a page
++
++    function findChapter(cfg) {
++      let container = queryAll(cfg.container)
++                          .find(el => el.querySelector(MEDIA)) || null;
++      if (!container && cfg.image && cfg.image.includes('.')) {
++        // The container changed: take the lowest element that holds all
++        // images that look like the saved one.
++        const images = queryAll(cfg.image);
++        if (images.length) {
++          container = findContainer(images[0]);
++        }
++      }
++      return container;
++    }
++
++    function findNav(spec) {
++      if (!spec) {
++        return null;
++      }
++      let found = queryAll(spec.selector);
++      if (found.length > 1 && spec.text) {
++        const same = found.filter(el => labelOf(el) === spec.text);
++        if (same.length) {
++          found = same;
++        }
++      }
++      if (!found.length && spec.text) {
++        found = queryAll('a[href], button, [role="button"]')
++                    .filter(el => labelOf(el) === spec.text);
++      }
++      if (!found.length && spec.rel) {
++        found = queryAll('a[rel~="' + CSS.escape(spec.rel) + '"]');
++      }
++      return found.find(el => !isDisabled(el)) || null;
++    }
++
++    // Calls back with the chapter container once it is there, for up to
++    // WAIT_MS: many sites add their images with a script after loading.
++    function waitAndRead(cfg, auto) {
++      if (!cfg || !cfg.container) {
++        return 'no-config';
++      }
++      const ready = () => {
++        const container = findChapter(cfg);
++        if (!container) {
++          return false;
++        }
++        // After a page load, only open on chapter pages: the site's home
++        // page may also match the container.
++        if (auto && (cfg.next || cfg.prev) && !findNav(cfg.next) &&
++            !findNav(cfg.prev)) {
++          return false;
++        }
++        return true;
++      };
++      if (ready()) {
++        openReader(cfg);
++        return 'reading';
++      }
++      const check = throttle(() => {
++        if (waiter && ready()) {
++          stopWaiting();
++          openReader(cfg);
++        }
++      }, 200);
++      const observer = new MutationObserver(check);
++      observer.observe(document.documentElement, {childList: true, subtree: true});
++      waiter = {
++        observer,
++        interval: setInterval(check, 500),
++        timeout: setTimeout(stopWaiting, WAIT_MS),
++      };
++      return 'waiting';
++    }
++
++    function stopWaiting() {
++      if (!waiter) {
++        return;
++      }
++      waiter.observer.disconnect();
++      clearInterval(waiter.interval);
++      clearTimeout(waiter.timeout);
++      waiter = null;
++    }
++
++    // ---------------------------------------------------------------------
++    // Reader
++
++    const BLOCK_STYLE = {
++      display: 'block',
++      position: 'static',
++      float: 'none',
++      margin: '0',
++      padding: '0',
++      border: '0',
++      width: 'auto',
++      'min-width': '0',
++      'max-width': 'none',
++      height: 'auto',
++      'min-height': '0',
++      'max-height': 'none',
++      overflow: 'visible',
++      transform: 'none',
++      'box-shadow': 'none',
++      background: '#000',
++    };
++    const WRAPPER_STYLE = {
++      margin: '0',
++      padding: '0',
++      border: '0',
++      width: 'auto',
++      'max-width': 'none',
++      float: 'none',
++      transform: 'none',
++      background: 'transparent',
++    };
++
++    const READER_CSS = `
++      .bar { position: fixed; display: flex; gap: 6px;
++        top: max(8px, env(safe-area-inset-top)); transition: opacity 0.2s; }
++      .left { left: 8px; }
++      .right { right: 8px; }
++      .hidden .bar { opacity: 0; pointer-events: none; }
++      button { width: 36px; height: 36px; padding: 0; border-radius: 50%;
++        border: 1px solid rgba(255, 255, 255, 0.22);
++        background: rgba(18, 18, 22, 0.6); color: #fff; display: grid;
++        place-items: center; }
++      button:active { background: ${ACCENT}; }
++      button[hidden] { display: none; }
++      button.off { opacity: 0.35; }
++      svg { width: 22px; height: 22px; fill: currentColor; }
++      .toast { position: fixed; left: 50%; bottom: 32px;
++        transform: translateX(-50%); background: rgba(18, 18, 22, 0.9);
++        color: #fff; padding: 8px 14px; border-radius: 999px;
++        font: 14px system-ui, sans-serif; white-space: nowrap;
++        transition: opacity 0.2s; }
++      .toast:empty { opacity: 0; }
++    `;
++
++    function openReader(cfg) {
++      if (reader) {
++        stopReader();
++      }
++      const container = findChapter(cfg);
++      if (!container) {
++        return false;
++      }
++      const ui = createHost(READER_CSS);
++      const wrap = element('div', '', ui.root);
++      const left = element('div', 'bar left', wrap);
++      const prev = element('button', '', left);
++      prev.setAttribute('aria-label', t.prev || 'Previous chapter');
++      icon(prev, ICON_PREV);
++      const next = element('button', '', left);
++      next.setAttribute('aria-label', t.next || 'Next chapter');
++      icon(next, ICON_NEXT);
++      const right = element('div', 'bar right', wrap);
++      const close = element('button', '', right);
++      close.setAttribute('aria-label', t.close || 'Close manga mode');
++      icon(close, ICON_CLOSE);
++      const toast = element('div', 'toast', wrap);
++      toast.setAttribute('role', 'status');
++
++      reader = {
++        cfg,
++        container,
++        ui,
++        wrap,
++        toast,
++        prev,
++        next,
++        saved: new Map(),
++        missing: 0,
++      };
++      prev.hidden = !cfg.prev;
++      next.hidden = !cfg.next;
++      prev.addEventListener('click', () => go('prev'));
++      next.addEventListener('click', () => go('next'));
++      close.addEventListener('click', () => {
++        dismissed = true;
++        stopReader();
++      });
++
++      // Taps on the chapter show and hide the buttons (and go full screen)
++      // instead of reaching the site, which often opens ads or the next page
++      // on a tap.
++      reader.onClick = (event) => {
++        if (!event.isTrusted || isOurs(event, ui.host)) {
++          return;
++        }
++        event.preventDefault();
++        event.stopImmediatePropagation();
++        if (!document.fullscreenElement) {
++          requestFullscreen();
++          wrap.classList.remove('hidden');
++        } else {
++          wrap.classList.toggle('hidden');
++        }
++      };
++      window.addEventListener('click', reader.onClick, true);
++      reader.onLoad = (event) => {
++        if (event.target instanceof Element && event.target.matches(MEDIA)) {
++          styleMedia(event.target);
++        }
++      };
++      document.addEventListener('load', reader.onLoad, true);
++      reader.onScroll = throttle(loadNearbyImages, 250);
++      window.addEventListener('scroll', reader.onScroll, {passive: true});
++
++      // Keep the page isolated while the site adds or replaces elements.
++      reader.observer = new MutationObserver(throttle(() => {
++        if (reader) {
++          isolate();
++        }
++      }, 300));
++      reader.observer.observe(document.documentElement,
++                              {childList: true, subtree: true});
++
++      isolate();
++      updateNavButtons();
++      window.scrollTo(0, 0);
++      loadNearbyImages();
++      return true;
++    }
++
++    function stopReader() {
++      if (!reader) {
++        return;
++      }
++      reader.observer.disconnect();
++      window.removeEventListener('click', reader.onClick, true);
++      document.removeEventListener('load', reader.onLoad, true);
++      window.removeEventListener('scroll', reader.onScroll);
++      for (const [el, cssText] of reader.saved) {
++        if (cssText === null) {
++          el.removeAttribute('style');
++        } else {
++          el.style.cssText = cssText;
++        }
++      }
++      reader.ui.host.remove();
++      reader = null;
++      if (document.fullscreenElement) {
++        document.exitFullscreen().catch(() => {});
++      }
++    }
++
++    function setStyles(el, styles) {
++      if (!reader.saved.has(el)) {
++        reader.saved.set(el, el.hasAttribute('style') ? el.style.cssText : null);
++      }
++      for (const [name, value] of Object.entries(styles)) {
++        if (el.style.getPropertyValue(name) !== value ||
++            el.style.getPropertyPriority(name) !== 'important') {
++          el.style.setProperty(name, value, 'important');
++        }
++      }
++    }
++
++    // Hides everything but the chapter, and lays the chapter out at full
++    // width.
++    function isolate() {
++      if (!reader.container.isConnected) {
++        const container = findChapter(reader.cfg);
++        if (!container) {
++          // The chapter is gone (for example after a navigation inside the
++          // site): close, and open again when a chapter appears.
++          const cfg = reader.cfg;
++          stopReader();
++          waitAndRead(cfg, true);
++          return;
++        }
++        reader.container = container;
++        updateNavButtons();
++      }
++      const container = reader.container;
++      const keep = new Set();
++      for (let node = container; node && node !== document.documentElement;
++           node = node.parentElement) {
++        keep.add(node);
++      }
++      for (let node = container; node && node !== document.body;
++           node = node.parentElement) {
++        const parent = node.parentElement;
++        if (!parent) {
++          break;
++        }
++        for (const sibling of parent.children) {
++          if (!keep.has(sibling) && !NOT_RENDERED.has(sibling.tagName)) {
++            setStyles(sibling, {display: 'none'});
++          }
++        }
++        if (node !== container) {
++          setStyles(node, BLOCK_STYLE);
++        }
++      }
++      setStyles(document.documentElement,
++                {background: '#000', overflow: 'visible', height: 'auto'});
++      setStyles(document.body, BLOCK_STYLE);
++      setStyles(container, Object.assign({}, BLOCK_STYLE, {
++        'text-align': 'center',
++        'line-height': '0',
++        'font-size': '0',
++      }));
++      for (const media of container.querySelectorAll(MEDIA)) {
++        styleMedia(media);
++        for (let node = media.parentElement; node && node !== container;
++             node = node.parentElement) {
++          setStyles(node, WRAPPER_STYLE);
++        }
++      }
++    }
++
++    function styleMedia(media) {
++      if (!reader || !reader.container.contains(media)) {
++        return;
++      }
++      setStyles(media, {
++        display: 'block',
++        position: 'static',
++        float: 'none',
++        width: '100%',
++        'max-width': '100%',
++        height: 'auto',
++        'max-height': 'none',
++        margin: '0 auto',
++        padding: '0',
++        border: '0',
++        transform: 'none',
++        // Keeps the images that are still loading apart, so that the site
++        // loads them one after another while scrolling.
++        'min-height': isPlaceholder(media) ? '60vh' : '0',
++      });
++    }
++
++    // Starts loading the images near the screen whose site script has not
++    // done it yet (their address is still in a data attribute).
++    function loadNearbyImages() {
++      if (!reader) {
++        return;
++      }
++      const limit = window.innerHeight * 2.5;
++      for (const img of reader.container.querySelectorAll('img')) {
++        if (!isPlaceholder(img)) {
++          continue;
++        }
++        const r = img.getBoundingClientRect();
++        if (r.bottom < -window.innerHeight || r.top > limit) {
++          continue;
++        }
++        const name = LAZY_ATTRIBUTES.find(n => img.getAttribute(n));
++        const source = name && img.getAttribute(name).trim();
++        if (source && img.getAttribute('src') !== source &&
++            !img.hasAttribute('data-cromiko-loading')) {
++          img.setAttribute('data-cromiko-loading', '');
++          if (img.getAttribute('data-srcset')) {
++            img.setAttribute('srcset', img.getAttribute('data-srcset'));
++          }
++          img.src = source;
++        }
++      }
++    }
++
++    function updateNavButtons() {
++      for (const key of ['prev', 'next']) {
++        if (reader.cfg[key]) {
++          reader[key].classList.toggle('off', !findNav(reader.cfg[key]));
++        }
++      }
++    }
++
++    function go(key) {
++      const el = findNav(reader.cfg[key]);
++      if (!el) {
++        showToast(key === 'next' ? (t.noNext || 'No next chapter') :
++                                   (t.noPrev || 'No previous chapter'));
++        return;
++      }
++      const href = el.tagName === 'A' ? el.getAttribute('href') || '' : '';
++      if (href && !href.startsWith('#') && !/^javascript:/i.test(href)) {
++        location.href = el.href;
++      } else {
++        // Untrusted, so our own click listener lets it through.
++        el.click();
++      }
++      window.scrollTo(0, 0);
++    }
++
++    function showToast(text) {
++      reader.toast.textContent = text;
++      clearTimeout(reader.toastTimer);
++      reader.toastTimer = setTimeout(() => {
++        if (reader) {
++          reader.toast.textContent = '';
++        }
++      }, 2000);
++    }
++
++    function requestFullscreen() {
++      if (!document.fullscreenElement && document.fullscreenEnabled) {
++        document.documentElement.requestFullscreen({navigationUI: 'hide'})
++            .catch(() => {});
++      }
++    }
++
++    function throttle(fn, ms) {
++      let timer = null;
++      return () => {
++        if (timer === null) {
++          timer = setTimeout(() => {
++            timer = null;
++            fn();
++          }, ms);
++        }
++      };
++    }
++
++    return {run};
++  }
++})(__CROMIKO_ARGS__);
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -199,6 +199,7 @@ found in the LICENSE file.
+     <item type="id" name="copy_link_menu_id" />
+     <item type="id" name="create_new_tab_group_menu_id" />
+     <item type="id" name="cromiko_fire_button_menu_id" />
++    <item type="id" name="cromiko_manga_mode_menu_id" />
+     <item type="id" name="default_browser_promo_menu_id" />
+     <item type="id" name="direct_share_menu_id" />
+     <item type="id" name="disable_price_tracking_menu_id" />
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -128,6 +128,7 @@ import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulator;
+ import org.chromium.chrome.browser.contextmenu.ChromeContextMenuPopulatorFactory;
+ import org.chromium.chrome.browser.cookies.CookiesFetcher;
+ import org.chromium.chrome.browser.cromiko.CromikoFireButton;
++import org.chromium.chrome.browser.cromiko.CromikoMangaMode;
+ import org.chromium.chrome.browser.crypto.CipherFactory;
+ import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+ import org.chromium.chrome.browser.data_sharing.DataSharingIntentUtils;
+@@ -650,6 +651,7 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+     private TabModelSelectorBase mTabModelSelector;
+     private TabModelSelectorObserver mTabModelSelectorObserver;
+     private TabModelSelectorTabObserver mNavigationFinishedObserver;
++    private @Nullable TabModelSelectorTabObserver mCromikoMangaObserver;
+     private TabModelSelectorTabModelObserver mTabModelObserver;
+     private HistoricalTabModelObserver mHistoricalTabModelObserver;
+     private UndoRefocusHelper mUndoRefocusHelper;
+@@ -3863,6 +3865,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                         }
+                     }
+                 };
++        // CromIKO: opens the manga reader on the sites where manga mode is on.
++        mCromikoMangaObserver = CromikoMangaMode.observeTabs(mTabModelSelector);
+         if (startIncognito) mTabModelSelector.selectModel(true);
+     }
+ 
+@@ -4663,6 +4667,8 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+                     getProfileProviderSupplier().get().getOriginalProfile(),
+                     getTabModelSelectorSupplier().get(),
+                     getTabCreator(/* incognito= */ false));
++        } else if (id == R.id.cromiko_manga_mode_menu_id) {
++            CromikoMangaMode.onMenuItemSelected(this, currentTab);
+         } else if (id == R.id.ntp_customization_id) {
+             openCustomizeChrome();
+         } else if (id == R.id.menu_item_content_filter_help_center_id) {
+@@ -5295,6 +5301,10 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             mCallbackController = null;
+         }
+ 
++        if (mCromikoMangaObserver != null) {
++            mCromikoMangaObserver.destroy();
++            mCromikoMangaObserver = null;
++        }
+         if (mNavigationFinishedObserver != null) {
+             mNavigationFinishedObserver.destroy();
+             mNavigationFinishedObserver = null;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java
+@@ -0,0 +1,235 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.app.Activity;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.os.SystemClock;
++
++import androidx.appcompat.app.AlertDialog;
++
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Callback;
++import org.chromium.base.ContextUtils;
++import org.chromium.base.FileUtils;
++import org.chromium.base.Log;
++import org.chromium.base.task.PostTask;
++import org.chromium.base.task.TaskTraits;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.tab.Tab;
++import org.chromium.chrome.browser.tabmodel.TabModelSelector;
++import org.chromium.chrome.browser.tabmodel.TabModelSelectorTabObserver;
++import org.chromium.components.embedder_support.util.UrlConstants;
++import org.chromium.content_public.browser.WebContents;
++import org.chromium.ui.widget.Toast;
++import org.chromium.url.GURL;
++
++import java.io.IOException;
++import java.io.InputStream;
++import java.nio.charset.StandardCharsets;
++
++/**
++ * CromIKO: manga mode. On the sites where the user turned it on, chapters open in a full screen
++ * reader with buttons for the next and the previous chapter. To turn it on, the user taps the
++ * next chapter button, the previous chapter button and a page of a chapter; the page script
++ * (res/raw/cromiko_manga.js) finds them again on the other chapters.
++ */
++@NullMarked
++public final class CromikoMangaMode {
++    private static final String TAG = "CromikoManga";
++    // One entry per site (host name): the configuration made by the page script, as JSON.
++    private static final String PREFS_NAME = "cromiko_manga_mode";
++    private static final String ARGS_PLACEHOLDER = "__CROMIKO_ARGS__";
++    private static final String POLL_SCRIPT =
++            "JSON.stringify(window.__cromikoManga ? window.__cromikoManga.run('poll')"
++                    + " : {state: 'none'})";
++    private static final long POLL_INTERVAL_MS = 500;
++    // The user may need a while to find the buttons on the page.
++    private static final long POLL_TIMEOUT_MS = 10 * 60 * 1000;
++
++    private static @Nullable String sScript;
++
++    private CromikoMangaMode() {}
++
++    /** Handles the "Manga mode" item of the app menu on |tab|. */
++    public static void onMenuItemSelected(Activity activity, @Nullable Tab tab) {
++        Context context = ContextUtils.getApplicationContext();
++        WebContents webContents = tab != null ? tab.getWebContents() : null;
++        String site = tab != null ? siteOf(tab.getUrl()) : null;
++        if (tab == null || webContents == null || site == null) {
++            Toast.makeText(context, R.string.cromiko_manga_mode_no_page, Toast.LENGTH_SHORT)
++                    .show();
++            return;
++        }
++        String config = getConfig(site);
++        if (config == null) {
++            startPicker(tab, webContents, site);
++            return;
++        }
++        new AlertDialog.Builder(activity, R.style.ThemeOverlay_BrowserUI_AlertDialog)
++                .setTitle(R.string.cromiko_manga_mode_menu)
++                .setMessage(activity.getString(R.string.cromiko_manga_mode_on_for_site, site))
++                .setPositiveButton(
++                        R.string.cromiko_manga_mode_read,
++                        (dialog, which) -> run(webContents, "read", config, null))
++                .setNeutralButton(
++                        R.string.cromiko_manga_mode_set_up_again,
++                        (dialog, which) -> startPicker(tab, webContents, site))
++                .setNegativeButton(
++                        R.string.cromiko_manga_mode_turn_off,
++                        (dialog, which) -> {
++                            prefs().edit().remove(site).apply();
++                            run(webContents, "stop", null, null);
++                        })
++                .show();
++    }
++
++    /**
++     * Opens the reader on chapter pages of the sites where manga mode is on, after they load.
++     *
++     * @return The observer, to destroy with the activity.
++     */
++    public static TabModelSelectorTabObserver observeTabs(TabModelSelector tabModelSelector) {
++        return new TabModelSelectorTabObserver(tabModelSelector) {
++            @Override
++            public void onPageLoadFinished(Tab tab, GURL url) {
++                String site = siteOf(url);
++                String config = site != null ? getConfig(site) : null;
++                WebContents webContents = tab.getWebContents();
++                if (config != null && webContents != null) {
++                    run(webContents, "auto", config, null);
++                }
++            }
++        };
++    }
++
++    private static void startPicker(Tab tab, WebContents webContents, String site) {
++        long startTime = SystemClock.elapsedRealtime();
++        run(webContents, "pick", null, result -> poll(tab, webContents, site, startTime));
++    }
++
++    // The page script cannot call back: ask it until the user has tapped the three elements.
++    private static void poll(Tab tab, WebContents webContents, String site, long startTime) {
++        if (tab.isDestroyed()
++                || tab.getWebContents() != webContents
++                || SystemClock.elapsedRealtime() - startTime > POLL_TIMEOUT_MS) {
++            return;
++        }
++        CromikoPageScripts.execute(
++                webContents,
++                POLL_SCRIPT,
++                result -> {
++                    JSONObject state = parse(result);
++                    String name = state != null ? state.optString("state") : "";
++                    if ("picking".equals(name)) {
++                        PostTask.postDelayedTask(
++                                TaskTraits.UI_DEFAULT,
++                                () -> poll(tab, webContents, site, startTime),
++                                POLL_INTERVAL_MS);
++                    } else if ("done".equals(name)) {
++                        JSONObject config = state.optJSONObject("config");
++                        if (config != null) {
++                            prefs().edit().putString(site, config.toString()).apply();
++                            Context context = ContextUtils.getApplicationContext();
++                            Toast.makeText(
++                                            context,
++                                            context.getString(
++                                                    R.string.cromiko_manga_mode_on_for_site,
++                                                    site),
++                                            Toast.LENGTH_SHORT)
++                                    .show();
++                        }
++                    }
++                });
++    }
++
++    private static void run(
++            WebContents webContents,
++            String command,
++            @Nullable String config,
++            @Nullable Callback<String> callback) {
++        String script = getScript();
++        if (script == null) return;
++        String args =
++                JSONObject.quote(command)
++                        + ", "
++                        + (config != null ? config : "null")
++                        + ", "
++                        + texts();
++        CromikoPageScripts.execute(
++                webContents,
++                script.replace(ARGS_PLACEHOLDER, args),
++                callback != null ? callback : result -> {});
++    }
++
++    /** The site of |url| (its host name) if manga mode can work there. */
++    private static @Nullable String siteOf(@Nullable GURL url) {
++        if (url == null || !url.isValid()) return null;
++        String scheme = url.getScheme();
++        if (!UrlConstants.HTTP_SCHEME.equals(scheme) && !UrlConstants.HTTPS_SCHEME.equals(scheme)) {
++            return null;
++        }
++        String host = url.getHost();
++        return host.isEmpty() ? null : host;
++    }
++
++    private static SharedPreferences prefs() {
++        return ContextUtils.getApplicationContext()
++                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
++    }
++
++    /** The saved configuration of |site|, as a JSON object literal for the page script. */
++    private static @Nullable String getConfig(String site) {
++        JSONObject config = parse(prefs().getString(site, null));
++        return config != null ? config.toString() : null;
++    }
++
++    private static @Nullable JSONObject parse(@Nullable String json) {
++        if (json == null || json.isEmpty()) return null;
++        try {
++            return new JSONObject(json);
++        } catch (JSONException e) {
++            return null;
++        }
++    }
++
++    private static @Nullable String getScript() {
++        if (sScript == null) {
++            Context context = ContextUtils.getApplicationContext();
++            try (InputStream stream = context.getResources().openRawResource(R.raw.cromiko_manga)) {
++                sScript = new String(FileUtils.readStream(stream), StandardCharsets.UTF_8);
++            } catch (IOException e) {
++                Log.e(TAG, "Cannot read the manga mode script", e);
++            }
++        }
++        return sScript;
++    }
++
++    /** The texts of the page script, in the language of the app. */
++    private static String texts() {
++        Context context = ContextUtils.getApplicationContext();
++        JSONObject texts = new JSONObject();
++        try {
++            texts.put("stepNext", context.getString(R.string.cromiko_manga_mode_step_next));
++            texts.put("stepPrev", context.getString(R.string.cromiko_manga_mode_step_prev));
++            texts.put("stepImage", context.getString(R.string.cromiko_manga_mode_step_image));
++            texts.put("skip", context.getString(R.string.cromiko_manga_mode_skip));
++            texts.put("cancel", context.getString(R.string.cancel));
++            texts.put("notImage", context.getString(R.string.cromiko_manga_mode_not_image));
++            texts.put("prev", context.getString(R.string.cromiko_manga_mode_prev));
++            texts.put("next", context.getString(R.string.cromiko_manga_mode_next));
++            texts.put("close", context.getString(R.string.cromiko_manga_mode_close));
++            texts.put("noPrev", context.getString(R.string.cromiko_manga_mode_no_prev));
++            texts.put("noNext", context.getString(R.string.cromiko_manga_mode_no_next));
++        } catch (JSONException e) {
++            // Not reached: the names and values are never null.
++        }
++        return texts.toString();
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -507,6 +507,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+ 
+         // Find in page
+         if (shouldShowFindInPageItem(currentTab)) modelList.add(buildFindInPageItem(currentTab));
++        if (shouldShowMangaModeItem(currentTab)) modelList.add(buildMangaModeItem());
+ 
+         // Lens Overlay
+         if (shouldShowLensOverlayItem(currentTab)) modelList.add(buildLensOverlayItem(currentTab));
+@@ -741,6 +742,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+ 
+         // Find in page
+         if (shouldShowFindInPageItem(currentTab)) modelList.add(buildFindInPageItem(currentTab));
++        if (shouldShowMangaModeItem(currentTab)) modelList.add(buildMangaModeItem());
+ 
+         // Lens Overlay
+         if (shouldShowLensOverlayItem(currentTab)) modelList.add(buildLensOverlayItem(currentTab));
+@@ -1679,6 +1681,27 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         isMenuIconAtStart()));
+     }
+ 
++    // CromIKO: manga mode, on web pages.
++    private boolean shouldShowMangaModeItem(@Nullable Tab currentTab) {
++        if (currentTab == null || currentTab.isNativePage()) return false;
++        String scheme = currentTab.getUrl().getScheme();
++        return UrlConstants.HTTP_SCHEME.equals(scheme) || UrlConstants.HTTPS_SCHEME.equals(scheme);
++    }
++
++    private ListItem buildMangaModeItem() {
++        return new ListItem(
++                AppMenuHandler.AppMenuItemType.STANDARD,
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.cromiko_manga_mode_menu_id,
++                        R.string.cromiko_manga_mode_menu,
++                        shouldShowIconBeforeItem()
++                                ? R.drawable.cromiko_ic_manga_24dp
++                                : Resources.ID_NULL,
++                        isMenuIconAtStart()));
++    }
++
+     private boolean shouldShowLensOverlayItem(@Nullable Tab currentTab) {
+         return LensOverlayTabHelper.shouldShowLensOverlay(currentTab);
+     }
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1691,6 +1691,7 @@ source_set("core") {
+       "//chrome/browser/facilitated_payments",
+       "//chrome/browser/feed",
+       "//chrome/browser/flags:flags_android",
++      "//chrome/browser/cromiko:android",
+       "//chrome/browser/password_entry_edit/android",
+       "//chrome/browser/incognito:jni_headers",
+       "//chrome/browser/notifications/chime/android",
+diff --git a/chrome/browser/cromiko/BUILD.gn b/chrome/browser/cromiko/BUILD.gn
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromiko/BUILD.gn
+@@ -0,0 +1,30 @@
++# Copyright 2026 The CromIKO Authors
++# License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++import("//build/config/android/rules.gni")
++import("//third_party/jni_zero/jni_zero.gni")
++
++android_library("java") {
++  sources = [ "android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java" ]
++  deps = [
++    "//base:base_java",
++    "//build/android:build_java",
++    "//content/public/android:content_java",
++    "//third_party/jni_zero:jni_zero_java",
++  ]
++  srcjar_deps = [ ":jni_headers" ]
++}
++
++generate_jni("jni_headers") {
++  sources = [ "android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java" ]
++}
++
++source_set("android") {
++  sources = [ "android/cromiko_page_scripts.cc" ]
++  deps = [
++    ":jni_headers",
++    "//base",
++    "//chrome/common",
++    "//content/public/browser",
++  ]
++}
+diff --git a/chrome/browser/cromiko/android/cromiko_page_scripts.cc b/chrome/browser/cromiko/android/cromiko_page_scripts.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromiko/android/cromiko_page_scripts.cc
+@@ -0,0 +1,59 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++#include <string>
++#include <utility>
++
++#include "base/android/callback_android.h"
++#include "base/android/jni_android.h"
++#include "base/android/jni_string.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/functional/bind.h"
++#include "base/json/json_writer.h"
++#include "base/values.h"
++#include "chrome/common/chrome_isolated_world_ids.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/browser/cromiko/jni_headers/CromikoPageScripts_jni.h"
++
++using base::android::JavaRef;
++using base::android::ScopedJavaGlobalRef;
++
++namespace {
++
++void OnScriptResult(const ScopedJavaGlobalRef<jobject>& callback,
++                    base::Value result) {
++  std::string text;
++  if (result.is_string()) {
++    text = result.GetString();
++  } else if (!result.is_none()) {
++    text = base::WriteJson(result).value_or(std::string());
++  }
++  base::android::RunStringCallbackAndroid(callback, text);
++}
++
++}  // namespace
++
++static void JNI_CromikoPageScripts_Execute(
++    JNIEnv* env,
++    const JavaRef<jobject>& j_web_contents,
++    const JavaRef<jstring>& j_script,
++    const JavaRef<jobject>& j_callback) {
++  ScopedJavaGlobalRef<jobject> callback(env, j_callback);
++  content::WebContents* web_contents =
++      content::WebContents::FromJavaWebContents(j_web_contents);
++  content::RenderFrameHost* frame =
++      web_contents ? web_contents->GetPrimaryMainFrame() : nullptr;
++  if (!frame || !frame->IsRenderFrameLive()) {
++    base::android::RunStringCallbackAndroid(callback, std::string());
++    return;
++  }
++  frame->ExecuteJavaScriptInIsolatedWorld(
++      base::android::ConvertJavaStringToUTF16(env, j_script),
++      base::BindOnce(&OnScriptResult, std::move(callback)),
++      ISOLATED_WORLD_ID_CHROME_INTERNAL);
++}
++
++DEFINE_JNI(CromikoPageScripts)
+diff --git a/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java
+@@ -0,0 +1,36 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.Callback;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.content_public.browser.WebContents;
++
++/**
++ * CromIKO: runs scripts of CromIKO features in the main frame of a page. They run in an isolated
++ * world, so the page cannot see or change their variables, but they share the DOM with it.
++ */
++@NullMarked
++public final class CromikoPageScripts {
++    private CromikoPageScripts() {}
++
++    /**
++     * Runs a script in the main frame of a page.
++     *
++     * @param webContents The page.
++     * @param script The script.
++     * @param callback Called with the value of the script: a string as it is, any other value as
++     *     JSON, or an empty string if the script could not run.
++     */
++    public static void execute(WebContents webContents, String script, Callback<String> callback) {
++        CromikoPageScriptsJni.get().execute(webContents, script, callback);
++    }
++
++    @NativeMethods
++    interface Natives {
++        void execute(WebContents webContents, String script, Callback<String> callback);
++    }
++}
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Mode.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Mode.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Manga-Mode.grdp
+@@ -0,0 +1,51 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_MANGA_MODE_MENU" desc="App menu item that opens the manga reader on the current site, or sets it up. [CHAR_LIMIT=27]">
++        Manga mode
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_NO_PAGE" desc="Shown when manga mode is chosen on a page that is not a website.">
++        Open a chapter on a manga site first
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_ON_FOR_SITE" desc="Shown when manga mode is on for a website: its chapters open in the manga reader.">
++        Manga mode is on for <ph name="SITE">%1$s<ex>example.com</ex></ph>
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_READ" desc="Button that opens the manga reader on the current page. [CHAR_LIMIT=20]">
++        Read
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_SET_UP_AGAIN" desc="Button that asks again for the chapter buttons and the pages of the site. [CHAR_LIMIT=20]">
++        Set up again
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_TURN_OFF" desc="Button that turns manga mode off for the current site. [CHAR_LIMIT=20]">
++        Turn off
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_STEP_NEXT" desc="Step 1 of setting up manga mode on a site.">
++        Tap the NEXT chapter button
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_STEP_PREV" desc="Step 2 of setting up manga mode on a site.">
++        Tap the PREVIOUS chapter button
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_STEP_IMAGE" desc="Step 3 of setting up manga mode on a site: tap one of the images of the chapter.">
++        Tap a page of the chapter
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_SKIP" desc="Skips a step of setting up manga mode, when the page has no such button. [CHAR_LIMIT=12]">
++        Skip
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_NOT_IMAGE" desc="Shown when the user taps something that is not an image in the last step of setting up manga mode.">
++        That is not a picture, try again
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_PREV" desc="Accessibility label of the button that opens the previous chapter in the manga reader.">
++        Previous chapter
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_NEXT" desc="Accessibility label of the button that opens the next chapter in the manga reader.">
++        Next chapter
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_CLOSE" desc="Accessibility label of the button that closes the manga reader.">
++        Close manga mode
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_NO_PREV" desc="Shown in the manga reader when the page has no previous chapter button.">
++        No previous chapter
++    </message>
++    <message name="IDS_CROMIKO_MANGA_MODE_NO_NEXT" desc="Shown in the manga reader when the page has no next chapter button.">
++        No next chapter
++    </message>
++</grit-part>
+diff --git a/components/browser_ui/theme/android/BUILD.gn b/components/browser_ui/theme/android/BUILD.gn
+--- a/components/browser_ui/theme/android/BUILD.gn
++++ b/components/browser_ui/theme/android/BUILD.gn
+@@ -13,6 +13,7 @@ android_resources("java_resources") {
+   sources = [
+     "java/res/drawable/cromiko_ic_fire_24dp.xml",
+     "java/res/drawable/cromiko_ic_incognito_tile.xml",
++    "java/res/drawable/cromiko_ic_manga_24dp.xml",
+     "java/res/drawable/cromiko_splash_icon.xml",
+     "java/res/drawable/cromiko_welcome_mascot.xml",
+     "java/res/values-night/colors.xml",
+diff --git a/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_manga_24dp.xml b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_manga_24dp.xml
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_manga_24dp.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++The manga mode icon (Material "import_contacts", an open book).
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="@macro/default_icon_color">
++  <path
++      android:fillColor="@android:color/white"
++      android:pathData="M21,5c-1.11,-0.35 -2.33,-0.5 -3.5,-0.5c-1.95,0 -4.05,0.4 -5.5,1.5c-1.45,-1.1 -3.55,-1.5 -5.5,-1.5S2.45,4.9 1,6v14.65c0,0.25 0.25,0.5 0.5,0.5c0.1,0 0.15,-0.05 0.25,-0.05C3.1,20.45 5.05,20 6.5,20c1.95,0 4.05,0.4 5.5,1.5c1.35,-0.85 3.8,-1.5 5.5,-1.5c1.65,0 3.35,0.3 4.75,1.05c0.1,0.05 0.15,0.05 0.25,0.05c0.25,0 0.5,-0.25 0.5,-0.5V6C22.4,5.55 21.75,5.25 21,5zM21,18.5c-1.1,-0.35 -2.3,-0.5 -3.5,-0.5c-1.7,0 -4.15,0.65 -5.5,1.5V8c1.35,-0.85 3.8,-1.5 5.5,-1.5c1.2,0 2.4,0.15 3.5,0.5V18.5z"/>
++</vector>
+--

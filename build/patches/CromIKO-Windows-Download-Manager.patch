@@ -1,0 +1,709 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Tue, 20 Oct 2026 16:00:00 +0000
+Subject: CromIKO for Windows: download manager
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The CromIKO download manager of the Android app (CromIKO-Download-
+Manager.patch) on the desktop. Its queue is shared C++, so it now runs on
+every platform:
+
+- Big files download over several connections at once: parallel
+  downloading is turned on, with 4 connections per file by default (1 to
+  8).
+- Only 3 downloads run at the same time by default (1 to 5, or no
+  limit); the others wait in a queue and start when one ends. A waiting
+  download that the user resumes starts right away.
+- "Pause on metered connections": downloads wait while Windows says the
+  connection is metered, and continue on an unmetered one.
+
+The downloads say why they wait instead of "Paused", in chrome://downloads
+and in the download bubble: "In queue" or "Waiting for an unmetered
+connection". A download that uses more than one connection says how many:
+"2.4 MB/s - 12 MB of 300 MB, 2 mins left • 4 connections".
+
+The settings are in Settings > Downloads, in a "CromIKO download manager"
+card below Chromium's: a tinted top with the downloads icon of the logo,
+"Connections per file" and "Downloads at the same time" with a preview
+next to each that follows the choice (one file split into a part for each
+connection, a row of files that run or wait), and "Pause on metered
+connections". They are the same profile prefs as on Android.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ .../chrome_download_manager_delegate.cc       |   2 -
+ .../download/cromiko_download_queue.cc        |  31 ++++
+ .../browser/download/cromiko_download_queue.h |  17 ++-
+ .../browser/download/download_item_model.cc   |  16 +-
+ chrome/browser/download/download_ui_model.cc  |  11 +-
+ .../api/settings_private/prefs_util.cc        |   8 +
+ .../downloads_page/downloads_page.css         | 142 ++++++++++++++++++
+ .../downloads_page/downloads_page.html.ts     |  59 ++++++++
+ .../settings/downloads_page/downloads_page.ts |  82 ++++++++++
+ .../settings_localized_strings_provider.cc    |  19 +++
+ .../CromIKO-Windows-Download-Manager.grdp     |  53 +++++++
+ .../public/common/download_features.cc        |  10 +-
+ 12 files changed, 429 insertions(+), 21 deletions(-)
+ create mode 100644 components/cromite_components_strings_grd/CromIKO-Windows-Download-Manager.grdp
+
+diff --git a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -701,10 +701,8 @@ void ChromeDownloadManagerDelegate::SetDownloadManager(DownloadManager* dm) {
+ 
+   if (download_manager_) {
+     download_manager_->AddObserver(this);
+-#if BUILDFLAG(IS_ANDROID)
+     cromiko_download_queue_ = std::make_unique<CromikoDownloadQueue>(
+         download_manager_, profile_->GetPrefs(), profile_->IsOffTheRecord());
+-#endif
+   }
+ }
+ 
+diff --git a/chrome/browser/download/cromiko_download_queue.cc b/chrome/browser/download/cromiko_download_queue.cc
+--- a/chrome/browser/download/cromiko_download_queue.cc
++++ b/chrome/browser/download/cromiko_download_queue.cc
+@@ -10,11 +10,15 @@
+ 
+ #include "base/auto_reset.h"
+ #include "base/functional/bind.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/values.h"
++#include "chrome/grit/generated_resources.h"
+ #include "components/download/public/common/parallel_download_configs.h"
+ #include "components/pref_registry/pref_registry_syncable.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/prefs/scoped_user_pref_update.h"
++#include "components/strings/grit/components_strings.h"
++#include "ui/base/l10n/l10n_util.h"
+ 
+ namespace {
+ 
+@@ -165,6 +169,33 @@ int CromikoDownloadQueue::GetConnectionCount(
+   return std::max(1, unfinished_slices);
+ }
+ 
++// static
++std::u16string CromikoDownloadQueue::GetPausedText(
++    const download::DownloadItem* item) {
++  switch (item ? GetWaitReason(item) : WaitReason::kNone) {
++    case WaitReason::kQueue:
++      return l10n_util::GetStringUTF16(IDS_CROMIKO_DOWNLOADS_IN_QUEUE);
++    case WaitReason::kWifi:
++      return l10n_util::GetStringUTF16(IDS_CROMIKO_DOWNLOADS_WAITING_UNMETERED);
++    case WaitReason::kNone:
++      break;
++  }
++  return l10n_util::GetStringUTF16(IDS_DOWNLOAD_PROGRESS_PAUSED);
++}
++
++// static
++std::u16string CromikoDownloadQueue::AddConnections(
++    const download::DownloadItem* item,
++    std::u16string progress) {
++  const int connections = item ? GetConnectionCount(item) : 0;
++  if (connections < 2) {
++    return progress;
++  }
++  return l10n_util::GetStringFUTF16(IDS_CROMIKO_DOWNLOADS_WITH_CONNECTIONS,
++                                    progress,
++                                    base::NumberToString16(connections));
++}
++
+ void CromikoDownloadQueue::OnDownloadCreated(content::DownloadManager* manager,
+                                              download::DownloadItem* item) {
+   Observe(item);
+diff --git a/chrome/browser/download/cromiko_download_queue.h b/chrome/browser/download/cromiko_download_queue.h
+--- a/chrome/browser/download/cromiko_download_queue.h
++++ b/chrome/browser/download/cromiko_download_queue.h
+@@ -23,10 +23,12 @@ class PrefRegistrySyncable;
+ 
+ // CromIKO: the queue of the CromIKO download manager. It lets only a number of
+ // downloads run at the same time and pauses the others until it is their turn,
+-// keeps downloads waiting while the user is on mobile data if they turned on
+-// "Wi-Fi only", and sets the number of connections of parallel downloads. A
++// keeps downloads waiting while the user is on mobile data or a metered
++// connection if they turned on "Wi-Fi only" (on the desktop "Pause on metered
++// connections"), and sets the number of connections of parallel downloads. A
+ // waiting download that the user resumes runs right away. The settings are
+-// profile prefs, changed in CromikoDownloadSettings.java.
++// profile prefs, changed in CromikoDownloadSettings.java on Android and in
++// Settings > Downloads on the desktop.
+ class CromikoDownloadQueue
+     : public content::DownloadManager::Observer,
+       public download::DownloadItem::Observer,
+@@ -56,6 +58,15 @@ class CromikoDownloadQueue
+   // The number of connections that |item| uses now.
+   static int GetConnectionCount(const download::DownloadItem* item);
+ 
++  // What a paused |item| says it does: why it waits ("In queue", "Waiting for
++  // an unmetered connection"), else "Paused". |item| may be null.
++  static std::u16string GetPausedText(const download::DownloadItem* item);
++
++  // |progress| (the progress of |item|) with the number of connections of a
++  // download that uses more than one: "<progress> • 4 connections".
++  static std::u16string AddConnections(const download::DownloadItem* item,
++                                       std::u16string progress);
++
+   // content::DownloadManager::Observer:
+   void OnDownloadCreated(content::DownloadManager* manager,
+                          download::DownloadItem* item) override;
+diff --git a/chrome/browser/download/download_item_model.cc b/chrome/browser/download/download_item_model.cc
+--- a/chrome/browser/download/download_item_model.cc
++++ b/chrome/browser/download/download_item_model.cc
+@@ -23,6 +23,7 @@
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
+ #include "chrome/browser/download/chrome_download_manager_delegate.h"
++#include "chrome/browser/download/cromiko_download_queue.h"
+ #include "chrome/browser/download/download_commands.h"
+ #include "chrome/browser/download/download_core_service.h"
+ #include "chrome/browser/download/download_core_service_factory.h"
+@@ -275,20 +276,25 @@ std::u16string DownloadItemModel::GetTabProgressStatusText() const {
+   base::TimeDelta remaining;
+   std::u16string time_remaining;
+   if (download_->IsPaused()) {
+-    time_remaining = l10n_util::GetStringUTF16(IDS_DOWNLOAD_PROGRESS_PAUSED);
++    // CromIKO: or why it waits in the CromIKO download manager ("In queue").
++    time_remaining = CromikoDownloadQueue::GetPausedText(download_);
+   } else if (download_->TimeRemaining(&remaining)) {
+     time_remaining =
+         ui::TimeFormat::Simple(ui::TimeFormat::FORMAT_REMAINING,
+                                ui::TimeFormat::LENGTH_SHORT, remaining);
+   }
+ 
++  // CromIKO: with the connections of a parallel download.
+   if (time_remaining.empty()) {
+     base::i18n::AdjustStringForLocaleDirection(&amount);
+-    return l10n_util::GetStringFUTF16(
+-        IDS_DOWNLOAD_TAB_PROGRESS_STATUS_TIME_UNKNOWN, speed_text, amount);
++    return CromikoDownloadQueue::AddConnections(
++        download_,
++        l10n_util::GetStringFUTF16(
++            IDS_DOWNLOAD_TAB_PROGRESS_STATUS_TIME_UNKNOWN, speed_text, amount));
+   }
+-  return l10n_util::GetStringFUTF16(IDS_DOWNLOAD_TAB_PROGRESS_STATUS,
+-                                    speed_text, amount, time_remaining);
++  return CromikoDownloadQueue::AddConnections(
++      download_, l10n_util::GetStringFUTF16(IDS_DOWNLOAD_TAB_PROGRESS_STATUS,
++                                            speed_text, amount, time_remaining));
+ }
+ 
+ int64_t DownloadItemModel::GetCompletedBytes() const {
+diff --git a/chrome/browser/download/download_ui_model.cc b/chrome/browser/download/download_ui_model.cc
+--- a/chrome/browser/download/download_ui_model.cc
++++ b/chrome/browser/download/download_ui_model.cc
+@@ -14,6 +14,7 @@
+ #include "base/time/time.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
++#include "chrome/browser/download/cromiko_download_queue.h"
+ #include "chrome/browser/download/download_commands.h"
+ #include "chrome/browser/download/download_item_warning_data.h"
+ #include "chrome/browser/download/download_ui_enterprise_util.h"
+@@ -814,11 +815,12 @@ std::u16string DownloadUIModel::StatusTextBuilder::GetInProgressStatusText()
+     return l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_CRX_INSTALL_RUNNING);
+   }
+ 
+-  // A paused download: "100/120 MB, Paused"
++  // A paused download: "100/120 MB, Paused" (CromIKO: or why it waits in the
++  // CromIKO download manager, "100/120 MB, In queue").
+   if (model_->IsPaused()) {
+     return l10n_util::GetStringFUTF16(
+         IDS_DOWNLOAD_STATUS_IN_PROGRESS, size_ratio,
+-        l10n_util::GetStringUTF16(IDS_DOWNLOAD_PROGRESS_PAUSED));
++        CromikoDownloadQueue::GetPausedText(model_->GetDownloadItem()));
+   }
+ 
+   // A download scheduled to be opened when complete: "Opening in 10 secs"
+@@ -1044,10 +1046,11 @@ DownloadUIModel::BubbleStatusTextBuilder::GetInProgressStatusText() const {
+         l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_CRX_INSTALL_RUNNING));
+   }
+ 
+-  // A paused download: "100/120 MB • Paused"
++  // A paused download: "100/120 MB • Paused" (CromIKO: or "100/120 MB • In
++  // queue").
+   if (model_->IsPaused()) {
+     return get_size_ratio_string(
+-        l10n_util::GetStringUTF16(IDS_DOWNLOAD_PROGRESS_PAUSED));
++        CromikoDownloadQueue::GetPausedText(model_->GetDownloadItem()));
+   }
+ 
+   // A download scheduled to be opened when complete: "↓ 100/120 MB • Opening in
+diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+--- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
++++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
+@@ -384,6 +384,14 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+       settings_api::PrefType::kString;
+   (*s_allowlist)[::prefs::kPromptForDownload] =
+       settings_api::PrefType::kBoolean;
++  // CromIKO: the settings of the CromIKO download manager, in
++  // chrome/browser/download/cromiko_download_queue.cc.
++  (*s_allowlist)["cromiko.downloads.connections"] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)["cromiko.downloads.max_active"] =
++      settings_api::PrefType::kNumber;
++  (*s_allowlist)["cromiko.downloads.wifi_only"] =
++      settings_api::PrefType::kBoolean;
+   (*s_allowlist)[drive::prefs::kDisableDrive] =
+       settings_api::PrefType::kBoolean;
+ #if BUILDFLAG(IS_CHROMEOS)
+diff --git a/chrome/browser/resources/settings/downloads_page/downloads_page.css b/chrome/browser/resources/settings/downloads_page/downloads_page.css
+--- a/chrome/browser/resources/settings/downloads_page/downloads_page.css
++++ b/chrome/browser/resources/settings/downloads_page/downloads_page.css
+@@ -12,3 +12,145 @@
+ #defaultDownloadPath {
+   word-break: break-word;
+ }
++
++/* CromIKO: the top of the CromIKO download manager, tinted with the accent
++   color like CromIKO DNS. */
++#cromikoHeader {
++  align-items: center;
++  background: linear-gradient(135deg,
++      color-mix(in srgb, var(--color-sys-primary, var(--cr-checked-color)) 14%,
++          var(--cr-card-background-color, white)),
++      color-mix(in srgb, var(--color-sys-primary, var(--cr-checked-color)) 4%,
++          var(--cr-card-background-color, white)));
++  border-radius: 16px;
++  display: flex;
++  gap: 16px;
++  margin: 8px var(--cr-section-padding);
++  padding: 14px 18px;
++}
++
++#cromikoIcon {
++  align-items: center;
++  background: var(--color-sys-primary, var(--cr-checked-color));
++  border-radius: 50%;
++  display: flex;
++  flex: none;
++  height: 44px;
++  justify-content: center;
++  width: 44px;
++}
++
++#cromikoIcon svg {
++  height: 26px;
++  width: 26px;
++}
++
++#cromikoIcon .stroke {
++  fill: none;
++  stroke: var(--color-sys-on-primary, white);
++  stroke-linecap: round;
++  stroke-linejoin: round;
++  stroke-width: 2.6px;
++}
++
++#cromikoIcon .star {
++  fill: var(--color-sys-on-primary, white);
++}
++
++#cromikoHeaderText {
++  color: var(--cr-primary-text-color);
++  line-height: 20px;
++}
++
++/* CromIKO: the previews next to the settings, which follow the choices. */
++.cromiko-preview {
++  align-items: center;
++  display: flex;
++  flex: none;
++  gap: 4px;
++  margin-inline: 16px;
++  width: 112px;
++}
++
++/* One file as a bar, split into a part for each connection. */
++#connectionsPreview {
++  border-radius: 5px;
++  gap: 2px;
++  height: 10px;
++  overflow: hidden;
++}
++
++#connectionsPreview .part {
++  background: color-mix(in srgb,
++      var(--color-sys-primary, var(--cr-checked-color)) 18%,
++      var(--cr-card-background-color, white));
++  flex: 1;
++  height: 100%;
++}
++
++#connectionsPreview .fill {
++  background: var(--color-sys-primary, var(--cr-checked-color));
++  height: 100%;
++  overflow: hidden;
++  position: relative;
++  transition: width 300ms ease-out;
++  width: calc(var(--fill) * 100%);
++}
++
++/* A light that runs over the parts that download. */
++#connectionsPreview .fill::after {
++  animation: cromiko-shine 2.4s ease-in-out infinite;
++  background: linear-gradient(90deg, transparent,
++      color-mix(in srgb, var(--color-sys-on-primary, white) 45%, transparent),
++      transparent);
++  content: '';
++  inset: 0;
++  position: absolute;
++  transform: translateX(-100%);
++}
++
++@keyframes cromiko-shine {
++  60%,
++  100% {
++    transform: translateX(100%);
++  }
++}
++
++@media (prefers-reduced-motion: reduce) {
++  #connectionsPreview .fill::after {
++    display: none;
++  }
++}
++
++#queuePreview {
++  gap: 5px;
++  justify-content: flex-end;
++}
++
++#queuePreview .file {
++  height: 18px;
++  stroke-linejoin: round;
++  stroke-width: 1.5px;
++  transition: fill 200ms, stroke 200ms;
++  width: 14px;
++}
++
++#queuePreview .file.running {
++  fill: var(--color-sys-primary, var(--cr-checked-color));
++  stroke: var(--color-sys-primary, var(--cr-checked-color));
++}
++
++#queuePreview .file.running .corner {
++  fill: none;
++  stroke: var(--color-sys-on-primary, white);
++}
++
++#queuePreview .file.waiting {
++  fill: none;
++  stroke: var(--cr-secondary-text-color);
++  stroke-dasharray: 2.5 2;
++}
++
++#queuePreview .file.waiting .corner {
++  stroke-dasharray: none;
++}
+diff --git a/chrome/browser/resources/settings/downloads_page/downloads_page.html.ts b/chrome/browser/resources/settings/downloads_page/downloads_page.html.ts
+--- a/chrome/browser/resources/settings/downloads_page/downloads_page.html.ts
++++ b/chrome/browser/resources/settings/downloads_page/downloads_page.html.ts
+@@ -56,5 +56,64 @@ export function getHtml(this: SettingsDownloadsPageElement) {
+     </settings-toggle-button>
+   ` : ''}
+ </settings-section>
++<settings-section id="cromikoDownloads" page-title="$i18n{cromikoDownloadsTitle}"
++    class="cr-centered-card-container">
++  <div id="cromikoHeader">
++    <div id="cromikoIcon" aria-hidden="true">
++      <svg viewBox="0 0 24 24">
++        <path class="stroke" d="M11,3.6 V13.6"></path>
++        <path class="stroke" d="M6.8,9.6 L11,13.8 L15.2,9.6"></path>
++        <path class="stroke"
++            d="M4,16.4 V18.2 C4,19.3 4.9,20.2 6,20.2 H16 C17.1,20.2 18,19.3 18,18.2 V16.4">
++        </path>
++        <path class="star"
++            d="M19.59,1.93C19.72,2.06 20.16,3.38 20.33,3.67C20.78,4.42 22.01,4.74 22.80,4.94C20.60,5.59 20.25,5.88 19.64,8.07C18.79,5.80 18.89,5.60 16.40,4.97C18.58,4.29 18.93,4.14 19.59,1.93Z">
++        </path>
++      </svg>
++    </div>
++    <div id="cromikoHeaderText">$i18n{cromikoDownloadsHeader}</div>
++  </div>
++  <div class="cr-row">
++    <div class="flex cr-padded-text" aria-hidden="true">
++      <div id="connectionsLabel">$i18n{cromikoDownloadsConnections}</div>
++      <div class="secondary">$i18n{cromikoDownloadsConnectionsDetail}</div>
++    </div>
++    <div id="connectionsPreview" class="cromiko-preview" aria-hidden="true">
++      ${this.getConnectionFills_().map(fill => html`
++        <div class="part"><div class="fill" style="--fill: ${fill}"></div></div>
++      `)}
++    </div>
++    <settings-dropdown-menu id="connections"
++        pref-key="cromiko.downloads.connections"
++        .menuOptions="${this.connectionOptions_}"
++        label="$i18n{cromikoDownloadsConnections}">
++    </settings-dropdown-menu>
++  </div>
++  <div class="cr-row">
++    <div class="flex cr-padded-text" aria-hidden="true">
++      <div>$i18n{cromikoDownloadsAtOnce}</div>
++      <div class="secondary">$i18n{cromikoDownloadsAtOnceDetail}</div>
++    </div>
++    <div id="queuePreview" class="cromiko-preview" aria-hidden="true">
++      ${this.getQueuePreview_().map(running => html`
++        <svg class="file ${running ? 'running' : 'waiting'}" viewBox="0 0 14 18">
++          <path d="M2.5,0.75 H8.6 L13.25,5.4 V15.5 C13.25,16.47 12.47,17.25 11.5,17.25 H2.5 C1.53,17.25 0.75,16.47 0.75,15.5 V2.5 C0.75,1.53 1.53,0.75 2.5,0.75 Z"></path>
++          <path class="corner" d="M8.6,0.75 V4.4 C8.6,4.95 9.05,5.4 9.6,5.4 H13.25"></path>
++        </svg>
++      `)}
++    </div>
++    <settings-dropdown-menu id="maxActive"
++        pref-key="cromiko.downloads.max_active"
++        .menuOptions="${this.maxActiveOptions_}"
++        label="$i18n{cromikoDownloadsAtOnce}">
++    </settings-dropdown-menu>
++  </div>
++  <settings-toggle-button id="pauseOnMetered"
++      class="hr"
++      pref-key="cromiko.downloads.wifi_only"
++      label="$i18n{cromikoDownloadsMetered}"
++      sub-label="$i18n{cromikoDownloadsMeteredDetail}">
++  </settings-toggle-button>
++</settings-section>
+ <!--_html_template_end_-->`;
+ }
+diff --git a/chrome/browser/resources/settings/downloads_page/downloads_page.ts b/chrome/browser/resources/settings/downloads_page/downloads_page.ts
+--- a/chrome/browser/resources/settings/downloads_page/downloads_page.ts
++++ b/chrome/browser/resources/settings/downloads_page/downloads_page.ts
+@@ -9,12 +9,14 @@
+  */
+ import 'chrome://resources/cr_elements/cr_button/cr_button.js';
+ import '../controls/controlled_button.js';
++import '../controls/settings_dropdown_menu.js';
+ import '../controls/settings_toggle_button.js';
+ import '../settings_page/settings_section.js';
+ 
+ import {WebUiListenerMixinLit} from 'chrome://resources/cr_elements/web_ui_listener_mixin_lit.js';
+ import {CrLitElement} from 'chrome://resources/lit/v3_0/lit.rollup.js';
+ 
++import type {DropdownMenuOptionList} from '../controls/settings_dropdown_menu.js';
+ import {loadTimeData} from '../i18n_setup.js';
+ import {getSearchManager} from '../search_settings.js';
+ import {PrefServiceObserverMixinLit} from '../settings.js';
+@@ -25,6 +27,38 @@ import {DownloadsBrowserProxyImpl} from './downloads_browser_proxy.js';
+ import {getCss} from './downloads_page.css.js';
+ import {getHtml} from './downloads_page.html.js';
+ 
++/**
++ * CromIKO: the names of the choices of the CromIKO download manager, with
++ * "(default)" after the default ones (4 connections, 3 downloads at the same
++ * time). 0 downloads at the same time is no limit.
++ */
++function withDefault(name: string, isDefault: boolean): string {
++  return isDefault ? loadTimeData.getStringF('cromikoDownloadsDefault', name) :
++                     name;
++}
++
++function getConnectionsName(count: number): string {
++  return withDefault(
++      count === 1 ?
++          loadTimeData.getString('cromikoDownloadsOneConnection') :
++          loadTimeData.getStringF('cromikoDownloadsConnectionCount', count),
++      count === 4);
++}
++
++function getMaxActiveName(count: number): string {
++  return count === 0 ? loadTimeData.getString('cromikoDownloadsNoLimit') :
++                       withDefault(count.toString(), count === 3);
++}
++
++/**
++ * CromIKO: how far each connection of the preview of one file has come, so
++ * that the parts look like they download side by side.
++ */
++const CONNECTION_FILLS = [0.86, 0.62, 0.94, 0.7, 0.8, 0.56, 0.9, 0.66];
++
++/** CromIKO: the number of downloads in the preview of the queue. */
++const QUEUE_PREVIEW_SIZE = 6;
++
+ const SettingsDownloadsPageElementBase =
+     PrefServiceObserverMixinLit(WebUiListenerMixinLit(CrLitElement));
+ 
+@@ -60,6 +94,15 @@ export class SettingsDownloadsPageElement extends
+        * they're done.
+        */
+       downloadBubblePartialViewControlledByPref_: {type: Boolean},
++
++      // CromIKO: the settings of the CromIKO download manager, for the
++      // previews next to them.
++      connectionsPref_: {type: Object},
++      maxActivePref_: {type: Object},
++
++      // CromIKO: the choices of the CromIKO download manager.
++      connectionOptions_: {type: Array},
++      maxActiveOptions_: {type: Array},
+     };
+   }
+ 
+@@ -74,6 +117,23 @@ export class SettingsDownloadsPageElement extends
+   protected accessor downloadBubblePartialViewControlledByPref_: boolean =
+       loadTimeData.getBoolean('downloadBubblePartialViewControlledByPref');
+ 
++  protected accessor connectionsPref_:
++      chrome.settingsPrivate.PrefObject<number>|undefined = undefined;
++  protected accessor maxActivePref_:
++      chrome.settingsPrivate.PrefObject<number>|undefined = undefined;
++
++  // CromIKO: the choices of the CromIKO download manager, as on Android.
++  protected accessor connectionOptions_: DropdownMenuOptionList =
++      [1, 2, 3, 4, 6, 8].map(count => ({
++                               value: count,
++                               name: getConnectionsName(count),
++                             }));
++  protected accessor maxActiveOptions_: DropdownMenuOptionList =
++      [1, 2, 3, 4, 5, 0].map(count => ({
++                               value: count,
++                               name: getMaxActiveName(count),
++                             }));
++
+   private browserProxy_: DownloadsBrowserProxy =
+       DownloadsBrowserProxyImpl.getInstance();
+ 
+@@ -82,6 +142,8 @@ export class SettingsDownloadsPageElement extends
+ 
+     this.mirrorPref(
+         'download.default_directory', 'downloadDefaultDirectoryPref_');
++    this.mirrorPref('cromiko.downloads.connections', 'connectionsPref_');
++    this.mirrorPref('cromiko.downloads.max_active', 'maxActivePref_');
+ 
+     // <if expr="is_chromeos">
+     this.addPrefObserver<string>('download.default_directory', pref => {
+@@ -109,6 +171,26 @@ export class SettingsDownloadsPageElement extends
+     this.browserProxy_.resetAutoOpenFileTypes();
+   }
+ 
++  /**
++   * CromIKO: the parts of the preview of one file, one per connection, with
++   * how far each one has come.
++   */
++  protected getConnectionFills_(): number[] {
++    const count = this.connectionsPref_?.value ?? 4;
++    return count === 1 ? [0.72] : CONNECTION_FILLS.slice(0, count);
++  }
++
++  /**
++   * CromIKO: the downloads of the preview of the queue, true for the ones
++   * that run and false for the ones that wait.
++   */
++  protected getQueuePreview_(): boolean[] {
++    const maxActive = this.maxActivePref_?.value ?? 3;
++    return Array.from(
++        {length: QUEUE_PREVIEW_SIZE},
++        (_, i) => maxActive === 0 || i < maxActive);
++  }
++
+   // SettingsPlugin implementation
+   async searchContents(query: string) {
+     const searchRequest = await getSearchManager().search(query, this);
+diff --git a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+--- a/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ b/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -841,6 +841,25 @@ void AddDownloadsStrings(content::WebUIDataSource* html_source) {
+       {"openFileTypesAutomatically",
+        IDS_SETTINGS_OPEN_FILE_TYPES_AUTOMATICALLY},
+       {"showDownloadsWhenFinished", IDS_SETTINGS_DOWNLOADS_SHOW_WHEN_FINISHED},
++      // CromIKO: the CromIKO download manager.
++      {"cromikoDownloadsTitle", IDS_CROMIKO_SETTINGS_DOWNLOADS_TITLE},
++      {"cromikoDownloadsHeader", IDS_CROMIKO_SETTINGS_DOWNLOADS_HEADER},
++      {"cromikoDownloadsConnections",
++       IDS_CROMIKO_SETTINGS_DOWNLOADS_CONNECTIONS},
++      {"cromikoDownloadsConnectionsDetail",
++       IDS_CROMIKO_SETTINGS_DOWNLOADS_CONNECTIONS_DETAIL},
++      {"cromikoDownloadsOneConnection",
++       IDS_CROMIKO_SETTINGS_DOWNLOADS_ONE_CONNECTION},
++      {"cromikoDownloadsConnectionCount",
++       IDS_CROMIKO_SETTINGS_DOWNLOADS_CONNECTION_COUNT},
++      {"cromikoDownloadsAtOnce", IDS_CROMIKO_SETTINGS_DOWNLOADS_AT_ONCE},
++      {"cromikoDownloadsAtOnceDetail",
++       IDS_CROMIKO_SETTINGS_DOWNLOADS_AT_ONCE_DETAIL},
++      {"cromikoDownloadsNoLimit", IDS_CROMIKO_SETTINGS_DOWNLOADS_NO_LIMIT},
++      {"cromikoDownloadsDefault", IDS_CROMIKO_SETTINGS_DOWNLOADS_DEFAULT},
++      {"cromikoDownloadsMetered", IDS_CROMIKO_SETTINGS_DOWNLOADS_METERED},
++      {"cromikoDownloadsMeteredDetail",
++       IDS_CROMIKO_SETTINGS_DOWNLOADS_METERED_DETAIL},
+   };
+   html_source->AddLocalizedStrings(kLocalizedStrings);
+ }
+diff --git a/components/cromite_components_strings_grd/CromIKO-Windows-Download-Manager.grdp b/components/cromite_components_strings_grd/CromIKO-Windows-Download-Manager.grdp
+new file mode 100644
+--- /dev/null
++++ b/components/cromite_components_strings_grd/CromIKO-Windows-Download-Manager.grdp
+@@ -0,0 +1,53 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- The CromIKO download manager on the desktop. The texts of the downloads are
++     in the shared C++, compiled on Android too; the Android app has its own
++     strings for its screens. -->
++<grit-part>
++  <message name="IDS_CROMIKO_DOWNLOADS_IN_QUEUE" desc="Status of a download that waits in the queue of the CromIKO download manager until another download ends, instead of 'Paused'.">
++    In queue
++  </message>
++  <message name="IDS_CROMIKO_DOWNLOADS_WAITING_UNMETERED" desc="Status of a download that waits while the connection is metered (the user turned on 'Pause on metered connections'), instead of 'Paused'.">
++    Waiting for an unmetered connection
++  </message>
++  <message name="IDS_CROMIKO_DOWNLOADS_WITH_CONNECTIONS" desc="The progress of a running download, with the number of connections it uses (2 or more).">
++    <ph name="PROGRESS">$1<ex>2.4 MB/s - 12 MB of 300 MB, 2 mins left</ex></ph> • <ph name="COUNT">$2<ex>4</ex></ph> connections
++  </message>
++  <if expr="not is_android">
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_TITLE" desc="Title of the settings of the CromIKO download manager in Settings > Downloads.">
++      CromIKO download manager
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_HEADER" desc="Explanation at the top of the settings of the CromIKO download manager.">
++      Big files download faster over several connections at once. Downloads over the limit wait in a queue: resume one to start it right away.
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_CONNECTIONS" desc="Setting: how many connections a download uses.">
++      Connections per file
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_CONNECTIONS_DETAIL" desc="Explanation of the setting of the connections per file.">
++      More connections download big files faster, when the site allows it
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_ONE_CONNECTION" desc="Choice of the connections per file: one.">
++      1 connection
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_CONNECTION_COUNT" desc="Choice of the connections per file: more than one.">
++      <ph name="COUNT">$1<ex>4</ex></ph> connections
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_AT_ONCE" desc="Setting: how many downloads run at the same time.">
++      Downloads at the same time
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_AT_ONCE_DETAIL" desc="Explanation of the setting of the downloads at the same time.">
++      The others wait in a queue and start when one ends
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_NO_LIMIT" desc="Choice of the downloads at the same time: any number.">
++      No limit
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_DEFAULT" desc="A choice of a setting that is the default.">
++      <ph name="CHOICE">$1<ex>4 connections</ex></ph> (default)
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_METERED" desc="Setting: downloads wait while the connection is metered.">
++      Pause on metered connections
++    </message>
++    <message name="IDS_CROMIKO_SETTINGS_DOWNLOADS_METERED_DETAIL" desc="Explanation of the setting that pauses downloads on metered connections.">
++      Downloads wait while your connection is metered or mobile, and continue on an unmetered one
++    </message>
++  </if>
++</grit-part>
+diff --git a/components/download/public/common/download_features.cc b/components/download/public/common/download_features.cc
+--- a/components/download/public/common/download_features.cc
++++ b/components/download/public/common/download_features.cc
+@@ -10,13 +10,9 @@
+ namespace download {
+ namespace features {
+ 
+-BASE_FEATURE(kParallelDownloading,
+-#if BUILDFLAG(IS_ANDROID)
+-             base::FEATURE_ENABLED_BY_DEFAULT
+-#else
+-             base::FEATURE_DISABLED_BY_DEFAULT
+-#endif
+-);
++// CromIKO: on every platform, for the connections of the CromIKO download
++// manager.
++BASE_FEATURE(kParallelDownloading, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+ BASE_FEATURE(kBackoffInDownloading, base::FEATURE_DISABLED_BY_DEFAULT);
+--

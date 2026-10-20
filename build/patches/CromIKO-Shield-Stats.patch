@@ -1,0 +1,428 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sat, 17 Oct 2026 14:00:00 +0000
+Subject: CromIKO Shield Stats
+
+Show a card with the CromIKO mascot on the new tab page, below the
+search box and its shortcuts: the number of ads and trackers that the
+ad blocker blocked this week (since Monday). Tapping it opens the ad
+blocker settings.
+
+The count comes from the subresource filter: each document reports its
+blocked requests when it finishes loading, and they are added up in two
+profile prefs (the week and the count). Incognito tabs are not counted.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/chrome_java_resources.gni      |  2 +
+ chrome/android/chrome_java_sources.gni        |  1 +
+ .../cromiko_shield_stats_background.xml       | 12 +++
+ .../java/res/layout/cromiko_shield_stats.xml  | 51 ++++++++++++
+ .../java/res/layout/new_tab_page_layout.xml   |  3 +
+ .../cromiko/CromikoShieldStatsView.java       | 77 +++++++++++++++++++
+ ...resource_filter_profile_context_factory.cc |  8 ++
+ ...bresource_filter_profile_context_factory.h |  6 ++
+ .../CromIKO-Shield-Stats.grdp                 |  6 ++
+ .../content/browser/BUILD.gn                  |  3 +
+ ...ent_subresource_filter_throttle_manager.cc |  5 ++
+ .../content/browser/cromiko_shield_stats.cc   | 53 +++++++++++++
+ .../content/browser/cromiko_shield_stats.h    | 31 ++++++++
+ 13 files changed, 258 insertions(+)
+ create mode 100644 chrome/android/java/res/drawable/cromiko_shield_stats_background.xml
+ create mode 100644 chrome/android/java/res/layout/cromiko_shield_stats.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Stats.grdp
+ create mode 100644 components/subresource_filter/content/browser/cromiko_shield_stats.cc
+ create mode 100644 components/subresource_filter/content/browser/cromiko_shield_stats.h
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -278,6 +278,7 @@ chrome_java_resources = [
+   "java/res/drawable/chrome_logo_on_circular_background.xml",
+   "java/res/drawable/clear_text.xml",
+   "java/res/drawable/computer_black_24dp.xml",
++  "java/res/drawable/cromiko_shield_stats_background.xml",
+   "java/res/drawable/custom_tabs_handle_view_shape.xml",
+   "java/res/drawable/custom_tabs_url_bar_omnibox_bg.xml",
+   "java/res/drawable/default_browser_promo_fre_logo_illustration.xml",
+@@ -504,6 +505,7 @@ chrome_java_resources = [
+   "java/res/layout/contextual_search_quick_action_icon_view.xml",
+   "java/res/layout/contextual_search_related_searches_view.xml",
+   "java/res/layout/contextual_search_term_view.xml",
++  "java/res/layout/cromiko_shield_stats.xml",
+   "java/res/layout/custom_tab_close_button.xml",
+   "java/res/layout/custom_tab_desktop_popup_header_layout.xml",
+   "java/res/layout/custom_tab_desktop_popup_main_layout.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -479,6 +479,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/crash/MinidumpUploadServiceImpl.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoFireButton.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabColorProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabIntentDataProvider.java",
+   "java/src/org/chromium/chrome/browser/customtabs/BaseCustomTabActivity.java",
+diff --git a/chrome/android/java/res/drawable/cromiko_shield_stats_background.xml b/chrome/android/java/res/drawable/cromiko_shield_stats_background.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/drawable/cromiko_shield_stats_background.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The shield card on the new tab page: the CromIKO accent color at 12% opacity. -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:shape="rectangle">
++    <solid android:color="#1F5C7CFC" />
++    <corners android:radius="24dp" />
++</shape>
+diff --git a/chrome/android/java/res/layout/cromiko_shield_stats.xml b/chrome/android/java/res/layout/cromiko_shield_stats.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/layout/cromiko_shield_stats.xml
+@@ -0,0 +1,51 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The shield card on the new tab page, see CromikoShieldStatsView. -->
++<org.chromium.chrome.browser.cromiko.CromikoShieldStatsView
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:id="@+id/cromiko_shield_stats"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:layout_marginTop="@dimen/ntp_section_top_margin"
++    android:layout_marginLeft="@dimen/mvt_container_lateral_margin"
++    android:layout_marginRight="@dimen/mvt_container_lateral_margin"
++    android:background="@drawable/cromiko_shield_stats_background"
++    android:foreground="?attr/selectableItemBackground"
++    android:gravity="center_vertical"
++    android:orientation="horizontal"
++    android:paddingStart="12dp"
++    android:paddingTop="10dp"
++    android:paddingEnd="16dp"
++    android:paddingBottom="10dp">
++
++    <ImageView
++        android:layout_width="48dp"
++        android:layout_height="40dp"
++        android:importantForAccessibility="no"
++        android:scaleType="fitCenter"
++        android:src="@drawable/cromiko_welcome_mascot" />
++
++    <LinearLayout
++        android:layout_width="0dp"
++        android:layout_height="wrap_content"
++        android:layout_marginStart="12dp"
++        android:layout_weight="1"
++        android:orientation="vertical">
++
++        <TextView
++            android:id="@+id/cromiko_shield_stats_count"
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:textAppearance="@style/TextAppearance.Headline.Primary" />
++
++        <TextView
++            android:layout_width="wrap_content"
++            android:layout_height="wrap_content"
++            android:text="@string/cromiko_shield_stats_label"
++            android:textAppearance="@style/TextAppearance.TextMedium.Secondary" />
++    </LinearLayout>
++</org.chromium.chrome.browser.cromiko.CromikoShieldStatsView>
+diff --git a/chrome/android/java/res/layout/new_tab_page_layout.xml b/chrome/android/java/res/layout/new_tab_page_layout.xml
+--- a/chrome/android/java/res/layout/new_tab_page_layout.xml
++++ b/chrome/android/java/res/layout/new_tab_page_layout.xml
+@@ -49,6 +49,9 @@ found in the LICENSE file.
+         android:inflatedId="@+id/shortcuts"
+         android:layout="@layout/ntp_shortcuts" />
+ 
++    <!-- CromIKO: blocked ads and trackers -->
++    <include layout="@layout/cromiko_shield_stats" />
++
+     <ViewStub
+         android:id="@+id/mv_tiles_layout_stub"
+         android:inflatedId="@+id/mv_tiles_container"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java
+@@ -0,0 +1,77 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.content.Context;
++import android.util.AttributeSet;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.profiles.ProfileManager;
++import org.chromium.chrome.browser.settings.AdBlockPreferences;
++import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
++import org.chromium.components.prefs.PrefService;
++import org.chromium.components.user_prefs.UserPrefs;
++
++import java.text.NumberFormat;
++import java.time.DayOfWeek;
++import java.time.LocalDate;
++import java.time.temporal.TemporalAdjusters;
++
++/**
++ * CromIKO: the shield card on the new tab page. It shows how many requests the ad blocker blocked
++ * this week, as counted by components/subresource_filter/content/browser/cromiko_shield_stats.cc.
++ * Tapping it opens the ad blocker settings.
++ */
++@NullMarked
++public class CromikoShieldStatsView extends LinearLayout {
++    // Profile prefs written by cromiko_shield_stats.cc: the week of the count, as the day number of
++    // its Monday, and the count.
++    private static final String WEEK_PREF = "cromiko.shield_stats.week";
++    private static final String BLOCKED_PREF = "cromiko.shield_stats.blocked";
++
++    private @Nullable TextView mCount;
++
++    /** Constructor for inflating from XML. */
++    public CromikoShieldStatsView(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++    }
++
++    @Override
++    protected void onFinishInflate() {
++        super.onFinishInflate();
++        mCount = findViewById(R.id.cromiko_shield_stats_count);
++        setOnClickListener(
++                view ->
++                        SettingsNavigationFactory.createSettingsNavigation()
++                                .startSettings(getContext(), AdBlockPreferences.class));
++    }
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        updateCount();
++    }
++
++    @Override
++    protected void onWindowVisibilityChanged(int visibility) {
++        super.onWindowVisibilityChanged(visibility);
++        if (visibility == VISIBLE) updateCount();
++    }
++
++    private void updateCount() {
++        if (mCount == null || !ProfileManager.isInitialized()) return;
++        PrefService prefs = UserPrefs.get(ProfileManager.getLastUsedRegularProfile());
++        int week =
++                (int)
++                        LocalDate.now()
++                                .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
++                                .toEpochDay();
++        int blocked = prefs.getInteger(WEEK_PREF) == week ? prefs.getInteger(BLOCKED_PREF) : 0;
++        mCount.setText(NumberFormat.getIntegerInstance().format(blocked));
++    }
++}
+diff --git a/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.cc b/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.cc
+--- a/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.cc
++++ b/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.cc
+@@ -12,7 +12,9 @@
+ #include "chrome/browser/subresource_filter/subresource_filter_history_observer.h"
+ #include "components/content_settings/core/browser/cookie_settings.h"
+ #include "components/keyed_service/core/keyed_service.h"
++#include "components/pref_registry/pref_registry_syncable.h"
+ #include "components/safe_browsing/buildflags.h"
++#include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
+ #include "components/subresource_filter/content/browser/subresource_filter_profile_context.h"
+ 
+ #if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+@@ -87,3 +89,9 @@ SubresourceFilterProfileContextFactory::BuildServiceInstanceForBrowserContext(
+ 
+   return subresource_filter_profile_context;
+ }
++
++void SubresourceFilterProfileContextFactory::RegisterProfilePrefs(
++    user_prefs::PrefRegistrySyncable* registry) {
++  // CromIKO: the weekly count of blocked requests.
++  subresource_filter::cromiko_shield_stats::RegisterProfilePrefs(registry);
++}
+diff --git a/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h b/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h
+--- a/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h
++++ b/chrome/browser/subresource_filter/subresource_filter_profile_context_factory.h
+@@ -14,6 +14,10 @@ namespace subresource_filter {
+ class SubresourceFilterProfileContext;
+ }
+ 
++namespace user_prefs {
++class PrefRegistrySyncable;
++}
++
+ // This class is responsible for instantiating a profile-scoped context for
+ // subresource filtering.
+ class SubresourceFilterProfileContextFactory
+@@ -34,6 +38,8 @@ class SubresourceFilterProfileContextFactory
+  private:
+   std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
+       content::BrowserContext* context) const override;
++  void RegisterProfilePrefs(
++      user_prefs::PrefRegistrySyncable* registry) override;
+ };
+ 
+ #endif  // CHROME_BROWSER_SUBRESOURCE_FILTER_SUBRESOURCE_FILTER_PROFILE_CONTEXT_FACTORY_H_
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Stats.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Stats.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Stats.grdp
+@@ -0,0 +1,6 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_SHIELD_STATS_LABEL" desc="Shown on the new tab page under the number of ads and trackers that the ad blocker blocked since Monday.">
++        Ads and trackers blocked this week
++    </message>
++</grit-part>
+diff --git a/components/subresource_filter/content/browser/BUILD.gn b/components/subresource_filter/content/browser/BUILD.gn
+--- a/components/subresource_filter/content/browser/BUILD.gn
++++ b/components/subresource_filter/content/browser/BUILD.gn
+@@ -20,6 +20,8 @@ static_library("browser") {
+     "content_subresource_filter_throttle_manager.h",
+     "content_subresource_filter_web_contents_helper.cc",
+     "content_subresource_filter_web_contents_helper.h",
++    "cromiko_shield_stats.cc",
++    "cromiko_shield_stats.h",
+     "devtools_interaction_tracker.cc",
+     "devtools_interaction_tracker.h",
+     "navigation_console_logger.cc",
+@@ -67,6 +69,7 @@ static_library("browser") {
+     "//components/safe_browsing/core/common",
+     "//components/subresource_filter/content/common",
+     "//components/ukm",
++    "//components/user_prefs",
+     "//content/public/browser",
+     "//content/public/common",
+     "//ipc",
+diff --git a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
+--- a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
++++ b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
+@@ -23,6 +23,7 @@
+ #include "components/subresource_filter/content/browser/subresource_filter_profile_context.h"
+ #include "components/subresource_filter/content/browser/ad_tagging_utils.h"
+ #include "components/subresource_filter/content/browser/content_subresource_filter_web_contents_helper.h"
++#include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
+ #include "components/subresource_filter/content/browser/page_load_statistics.h"
+ #include "components/subresource_filter/content/browser/profile_interaction_manager.h"
+ #include "components/subresource_filter/content/browser/safe_browsing_child_navigation_throttle.h"
+@@ -860,6 +861,10 @@ void ContentSubresourceFilterThrottleManager::FrameIsAd() {
+ 
+ void ContentSubresourceFilterThrottleManager::SetDocumentLoadStatistics(
+     mojom::DocumentLoadStatisticsPtr statistics) {
++  // CromIKO: count the blocked requests for the shield card on the new tab page.
++  cromiko_shield_stats::RecordBlockedRequests(
++      receiver_.CurrentTargetFrame().GetBrowserContext(),
++      statistics->num_loads_disallowed);
+   if (statistics_) {
+     statistics_->OnDocumentLoadStatistics(*statistics);
+   }
+diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.cc b/components/subresource_filter/content/browser/cromiko_shield_stats.cc
+new file mode 100644
+--- /dev/null
++++ b/components/subresource_filter/content/browser/cromiko_shield_stats.cc
+@@ -0,0 +1,53 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++#include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
++
++#include "base/numerics/clamped_math.h"
++#include "base/time/time.h"
++#include "components/prefs/pref_registry_simple.h"
++#include "components/prefs/pref_service.h"
++#include "components/user_prefs/user_prefs.h"
++#include "content/public/browser/browser_context.h"
++
++namespace subresource_filter::cromiko_shield_stats {
++
++namespace {
++
++int CurrentWeek() {
++  base::Time::Exploded now;
++  base::Time::Now().LocalExplode(&now);
++  base::Time::Exploded today = {};
++  today.year = now.year;
++  today.month = now.month;
++  today.day_of_month = now.day_of_month;
++  base::Time today_midnight;
++  if (!base::Time::FromUTCExploded(today, &today_midnight)) {
++    return 0;
++  }
++  // day_of_week is 0 on Sunday, weeks start on Monday.
++  return (today_midnight - base::Time::UnixEpoch()).InDays() -
++         (now.day_of_week + 6) % 7;
++}
++
++}  // namespace
++
++void RegisterProfilePrefs(PrefRegistrySimple* registry) {
++  registry->RegisterIntegerPref(kWeekPref, 0);
++  registry->RegisterIntegerPref(kBlockedPref, 0);
++}
++
++void RecordBlockedRequests(content::BrowserContext* context, int count) {
++  // Nothing is recorded for incognito tabs.
++  if (count <= 0 || !context || context->IsOffTheRecord()) {
++    return;
++  }
++  PrefService* prefs = user_prefs::UserPrefs::Get(context);
++  const int week = CurrentWeek();
++  const int blocked =
++      prefs->GetInteger(kWeekPref) == week ? prefs->GetInteger(kBlockedPref) : 0;
++  prefs->SetInteger(kWeekPref, week);
++  prefs->SetInteger(kBlockedPref, base::ClampAdd(blocked, count));
++}
++
++}  // namespace subresource_filter::cromiko_shield_stats
+diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.h b/components/subresource_filter/content/browser/cromiko_shield_stats.h
+new file mode 100644
+--- /dev/null
++++ b/components/subresource_filter/content/browser/cromiko_shield_stats.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++#ifndef COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CROMIKO_SHIELD_STATS_H_
++#define COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CROMIKO_SHIELD_STATS_H_
++
++class PrefRegistrySimple;
++
++namespace content {
++class BrowserContext;
++}  // namespace content
++
++// CromIKO: counts the requests that the ad blocker blocked in the current week,
++// for the shield card on the new tab page. CromikoShieldStatsView.java reads
++// the same prefs.
++namespace subresource_filter::cromiko_shield_stats {
++
++// The week of the count: the day number (days since 1970-01-01) of its Monday,
++// in local time.
++inline constexpr char kWeekPref[] = "cromiko.shield_stats.week";
++// The number of requests blocked in that week.
++inline constexpr char kBlockedPref[] = "cromiko.shield_stats.blocked";
++
++void RegisterProfilePrefs(PrefRegistrySimple* registry);
++
++// Adds `count` blocked requests to the count of the current week.
++void RecordBlockedRequests(content::BrowserContext* context, int count);
++
++}  // namespace subresource_filter::cromiko_shield_stats
++
++#endif  // COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CROMIKO_SHIELD_STATS_H_
+--

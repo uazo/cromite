@@ -1,0 +1,628 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 14:00:00 +0000
+Subject: CromIKO Incognito Lock
+
+Build on Chromium's incognito lock (fingerprint, face or PIN to get
+back to incognito tabs after leaving the app):
+
+- It is on by default (it only works on devices with a screen lock;
+  it can still be turned off in Settings > Privacy).
+- "When to lock Incognito tabs" in the same settings: as soon as the
+  user leaves CromIKO (the default), or 1, 5 or 15 minutes after. While
+  the lock is on, changing it needs the screen lock, like turning the
+  lock off. Tabs that were locked before the user left stay locked.
+- "Lock Incognito tabs" in the app menu of incognito tabs and of the
+  incognito tab switcher locks them right away.
+- The lock screen shows the CromIKO mascot with a lock and "Your
+  Incognito tabs are locked" instead of the incognito icon.
+- Incognito tabs are hidden in the recent apps screen. Chromium already
+  does this unless screenshots in incognito are allowed (the
+  incognito-screenshot flag); with the lock on, CromIKO now hides them
+  there even then (Android 13 and newer).
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/java/res/values/ids.xml        |  1 +
+ .../res/xml/privacy_preferences_cromite.xml   |  6 ++
+ .../chrome/browser/ChromeTabbedActivity.java  |  5 ++
+ .../IncognitoSnapshotController.java          | 13 +++-
+ .../settings/IncognitoLockSettings.java       | 59 +++++++++++++++++++
+ .../privacy/settings/PrivacySettings.java     |  5 ++
+ .../TabbedAppMenuPropertiesDelegate.java      | 27 +++++++++
+ chrome/browser/incognito/BUILD.gn             |  3 +
+ .../java/res/layout/incognito_reauth_view.xml | 44 +++++++++++---
+ .../reauth/IncognitoReauthController.java     |  6 ++
+ .../reauth/IncognitoReauthControllerImpl.java | 31 ++++++++++
+ .../reauth/IncognitoReauthManager.java        | 27 +++++++++
+ chrome/browser/prefs/incognito_mode_prefs.cc  |  4 +-
+ .../CromIKO-Incognito-Lock.grdp               | 21 +++++++
+ components/browser_ui/theme/android/BUILD.gn  |  3 +
+ .../res/drawable/cromiko_ic_lock_24dp.xml     | 16 +++++
+ .../drawable/cromiko_incognito_lock_badge.xml | 24 ++++++++
+ .../drawable/cromiko_incognito_lock_plate.xml | 11 ++++
+ 18 files changed, 296 insertions(+), 10 deletions(-)
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Lock.grdp
+ create mode 100644 components/browser_ui/theme/android/java/res/drawable/cromiko_ic_lock_24dp.xml
+ create mode 100644 components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_badge.xml
+ create mode 100644 components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_plate.xml
+
+diff --git a/chrome/android/java/res/values/ids.xml b/chrome/android/java/res/values/ids.xml
+--- a/chrome/android/java/res/values/ids.xml
++++ b/chrome/android/java/res/values/ids.xml
+@@ -201,6 +201,7 @@ found in the LICENSE file.
+     <item type="id" name="cromiko_fire_button_menu_id" />
+     <item type="id" name="cromiko_manga_mode_menu_id" />
+     <item type="id" name="cromiko_video_player_menu_id" />
++    <item type="id" name="cromiko_lock_incognito_menu_id" />
+     <item type="id" name="default_browser_promo_menu_id" />
+     <item type="id" name="direct_share_menu_id" />
+     <item type="id" name="disable_price_tracking_menu_id" />
+diff --git a/chrome/android/java/res/xml/privacy_preferences_cromite.xml b/chrome/android/java/res/xml/privacy_preferences_cromite.xml
+--- a/chrome/android/java/res/xml/privacy_preferences_cromite.xml
++++ b/chrome/android/java/res/xml/privacy_preferences_cromite.xml
+@@ -102,6 +102,12 @@ found in the LICENSE file.
+         android:title="@string/settings_incognito_tab_lock_title"
+         android:summary="@string/settings_incognito_tab_lock_summary_android_setting_off"
+         android:persistent="false" />
++    <!-- CromIKO: how long the user can leave the app before the incognito tabs lock. -->
++    <ListPreference
++        android:key="cromiko_incognito_lock_delay"
++        android:persistent="false"
++        android:title="@string/cromiko_incognito_lock_delay_title"
++        android:dialogTitle="@string/cromiko_incognito_lock_delay_title" />
+     <Preference
+         android:key="incognito_settings"
+         android:title="@string/incognito_settings_title"
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/ChromeTabbedActivity.java
+@@ -180,6 +180,7 @@ import org.chromium.chrome.browser.incognito.IncognitoTabLauncher;
+ import org.chromium.chrome.browser.incognito.IncognitoTabbedSnapshotController;
+ import org.chromium.chrome.browser.incognito.IncognitoUtils;
+ import org.chromium.chrome.browser.incognito.IncognitoWindowNightModeStateProvider;
++import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthController;
+ import org.chromium.chrome.browser.incognito_window.PreAttachIntentObserver;
+ import org.chromium.chrome.browser.init.ActivityProfileProvider;
+ import org.chromium.chrome.browser.latency_injection.StartupLatencyInjector;
+@@ -4675,6 +4676,10 @@ public class ChromeTabbedActivity extends ChromeActivity implements PreAttachInt
+             CromikoMangaMode.onMenuItemSelected(this, currentTab);
+         } else if (id == R.id.cromiko_video_player_menu_id) {
+             CromikoVideoPlayer.onMenuItemSelected(currentTab);
++        } else if (id == R.id.cromiko_lock_incognito_menu_id) {
++            IncognitoReauthController incognitoReauthController =
++                    mRootUiCoordinator.getIncognitoReauthControllerSupplier().get();
++            if (incognitoReauthController != null) incognitoReauthController.lockIncognitoTabs();
+         } else if (id == R.id.ntp_customization_id) {
+             openCustomizeChrome();
+         } else if (id == R.id.menu_item_content_filter_help_center_id) {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/incognito/IncognitoSnapshotController.java b/chrome/android/java/src/org/chromium/chrome/browser/incognito/IncognitoSnapshotController.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/incognito/IncognitoSnapshotController.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/incognito/IncognitoSnapshotController.java
+@@ -11,6 +11,8 @@ import android.view.WindowManager;
+ 
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
++import org.chromium.chrome.browser.profiles.ProfileManager;
+ 
+ import java.util.function.Supplier;
+ 
+@@ -49,7 +51,10 @@ public abstract class IncognitoSnapshotController {
+         boolean expectedSecureState = mIsShowingIncognitoSupplier.get();
+         if (ChromeFeatureList.sIncognitoScreenshot.isEnabled()) {
+             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+-                mActivity.setRecentsScreenshotEnabled(true);
++                // CromIKO: with the incognito lock on, incognito tabs stay hidden in the recent
++                // apps screen even when screenshots are allowed.
++                mActivity.setRecentsScreenshotEnabled(
++                        !(expectedSecureState && isIncognitoLockOn()));
+             }
+             expectedSecureState = false;
+         }
+@@ -61,4 +66,10 @@ public abstract class IncognitoSnapshotController {
+             mWindow.clearFlags(WindowManager.LayoutParams.FLAG_SECURE);
+         }
+     }
++
++    private static boolean isIncognitoLockOn() {
++        return ProfileManager.isInitialized()
++                && IncognitoReauthManager.isIncognitoReauthEnabled(
++                        ProfileManager.getLastUsedRegularProfile());
++    }
+ }
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoLockSettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoLockSettings.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoLockSettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/IncognitoLockSettings.java
+@@ -5,8 +5,10 @@
+ package org.chromium.chrome.browser.privacy.settings;
+ 
+ import android.app.Activity;
++import android.text.format.DateUtils;
+ 
+ import androidx.annotation.IntDef;
++import androidx.preference.ListPreference;
+ 
+ import org.chromium.base.metrics.RecordHistogram;
+ import org.chromium.build.annotations.NullMarked;
+@@ -113,6 +115,63 @@ public class IncognitoLockSettings {
+     }
+ 
+     /** Performs cleanup. Should be called when the owning activity/fragment is destroyed. */
++    /**
++     * CromIKO: sets up the choice of how long the user can leave the app before the incognito tabs
++     * lock. While the lock is on, changing it needs the screen lock, like turning the lock off.
++     */
++    public void setUpLockDelayPreference(Activity activity, ListPreference preference) {
++        if (!IncognitoReauthManager.isIncognitoReauthFeatureAvailable()) {
++            preference.setVisible(false);
++            return;
++        }
++        long[] delays = IncognitoReauthManager.LOCK_DELAYS_MS;
++        String[] entries = new String[delays.length];
++        String[] values = new String[delays.length];
++        for (int i = 0; i < delays.length; i++) {
++            int minutes = (int) (delays[i] / DateUtils.MINUTE_IN_MILLIS);
++            values[i] = String.valueOf(delays[i]);
++            if (minutes == 0) {
++                entries[i] = activity.getString(R.string.cromiko_incognito_lock_immediately);
++            } else if (minutes == 1) {
++                entries[i] = activity.getString(R.string.cromiko_incognito_lock_after_one_minute);
++            } else {
++                entries[i] =
++                        activity.getString(R.string.cromiko_incognito_lock_after_minutes, minutes);
++            }
++        }
++        preference.setEntries(entries);
++        preference.setEntryValues(values);
++        preference.setValue(String.valueOf(IncognitoReauthManager.getLockDelayMs()));
++        preference.setSummaryProvider(ListPreference.SimpleSummaryProvider.getInstance());
++        preference.setOnPreferenceChangeListener(
++                (changed, newValue) -> {
++                    long delayMs = Long.parseLong((String) newValue);
++                    if (!IncognitoReauthManager.isIncognitoReauthEnabled(mProfile)) {
++                        IncognitoReauthManager.setLockDelayMs(delayMs);
++                        return true;
++                    }
++                    if (mIncognitoReauthManager == null) {
++                        mIncognitoReauthManager = new IncognitoReauthManager(activity, mProfile);
++                    }
++                    mIncognitoReauthManager.startReauthenticationFlow(
++                            new IncognitoReauthManager.IncognitoReauthCallback() {
++                                @Override
++                                public void onIncognitoReauthNotPossible() {}
++
++                                @Override
++                                public void onIncognitoReauthSuccess() {
++                                    IncognitoReauthManager.setLockDelayMs(delayMs);
++                                    preference.setValue(String.valueOf(delayMs));
++                                }
++
++                                @Override
++                                public void onIncognitoReauthFailure() {}
++                            });
++                    // The value changes after the user unlocked.
++                    return false;
++                });
++    }
++
+     public void destroy() {
+         if (mIncognitoReauthManager != null) {
+             mIncognitoReauthManager.destroy();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/privacy/settings/PrivacySettings.java
+@@ -22,6 +22,7 @@ import android.view.MenuItem;
+ import android.view.View;
+ 
+ import androidx.annotation.VisibleForTesting;
++import androidx.preference.ListPreference;
+ import androidx.preference.Preference;
+ 
+ import org.chromium.base.ApiCompatibilityUtils;
+@@ -139,6 +140,8 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+     private static final String PREF_PRIVACY_GUIDE = "privacy_guide";
+     private static final String PREF_PROXY_OPTIONS = "proxy";
+     private static final String PREF_INCOGNITO_LOCK = "incognito_lock";
++    // CromIKO: how long the user can leave the app before the incognito tabs lock.
++    private static final String PREF_INCOGNITO_LOCK_DELAY = "cromiko_incognito_lock_delay";
+     private static final String PREF_JAVASCRIPT_OPTIMIZER = "javascript_optimizer";
+     @VisibleForTesting static final String PREF_DO_NOT_TRACK = "do_not_track";
+     // moved from SyncAndServicesSettings.java
+@@ -250,6 +253,8 @@ public class PrivacySettings extends ChromeBaseSettingsFragment
+                 (IncognitoReauthSettingSwitchPreference) findPreference(PREF_INCOGNITO_LOCK);
+         mIncognitoLockSettings = new IncognitoLockSettings(incognitoReauthPreference, getProfile());
+         mIncognitoLockSettings.setUpIncognitoReauthPreference(getActivity());
++        mIncognitoLockSettings.setUpLockDelayPreference(
++                getActivity(), (ListPreference) findPreference(PREF_INCOGNITO_LOCK_DELAY));
+ 
+         maybeShowAdvancedProtectionSection();
+ 
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/tabbed_mode/TabbedAppMenuPropertiesDelegate.java
+@@ -50,6 +50,7 @@ import org.chromium.chrome.browser.hub.PaneId;
+ import org.chromium.chrome.browser.image_descriptions.ImageDescriptionsController;
+ import org.chromium.chrome.browser.incognito.IncognitoUtils;
+ import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthController;
++import org.chromium.chrome.browser.incognito.reauth.IncognitoReauthManager;
+ import org.chromium.chrome.browser.layouts.LayoutStateProvider;
+ import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.PersistedInstanceType;
+ import org.chromium.chrome.browser.multiwindow.MultiWindowModeStateDispatcher;
+@@ -414,6 +415,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+ 
+         // CromIKO: Fire button
+         modelList.add(buildFireButtonItem());
++        if (shouldShowLockIncognitoItem()) modelList.add(buildLockIncognitoItem());
+ 
+         // Quick Delete
+         if (shouldShowQuickDeleteItem()) {
+@@ -681,6 +683,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+ 
+         // CromIKO: Fire button
+         modelList.add(buildFireButtonItem());
++        if (shouldShowLockIncognitoItem()) modelList.add(buildLockIncognitoItem());
+ 
+         // Delete browsing data
+         if (shouldShowQuickDeleteItem()) {
+@@ -882,6 +885,7 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                                         : 0,
+                                 isMenuIconAtStart())));
+         modelList.add(buildFireButtonItem());
++        if (shouldShowLockIncognitoItem()) modelList.add(buildLockIncognitoItem());
+         if (shouldShowQuickDeleteItem()) modelList.add(buildQuickDeleteItem());
+         modelList.add(buildSettingsItem());
+     }
+@@ -1644,6 +1648,29 @@ public class TabbedAppMenuPropertiesDelegate extends AppMenuPropertiesDelegateIm
+                         isMenuIconAtStart()));
+     }
+ 
++    // CromIKO: locks the incognito tabs now, when the incognito lock is on.
++    private boolean shouldShowLockIncognitoItem() {
++        return isIncognitoShowing()
++                && mIncognitoReauthController != null
++                && !mIncognitoReauthController.isReauthPageShowing()
++                && mTabModelSelector.getModel(/* incognito= */ true).getCount() > 0
++                && IncognitoReauthManager.isIncognitoReauthEnabled(getProfileFromTabModel());
++    }
++
++    private ListItem buildLockIncognitoItem() {
++        return new ListItem(
++                AppMenuHandler.AppMenuItemType.STANDARD,
++                AppMenuItemUtils.buildModelForStandardMenuItem(
++                        mContext,
++                        getAppMenuItemTheme(),
++                        R.id.cromiko_lock_incognito_menu_id,
++                        R.string.cromiko_lock_incognito_menu,
++                        shouldShowIconBeforeItem()
++                                ? R.drawable.cromiko_ic_lock_24dp
++                                : Resources.ID_NULL,
++                        isMenuIconAtStart()));
++    }
++
+     @Override
+     public boolean shouldShowIconRow() {
+         boolean shouldShowIconRow = true;
+diff --git a/chrome/browser/incognito/BUILD.gn b/chrome/browser/incognito/BUILD.gn
+--- a/chrome/browser/incognito/BUILD.gn
++++ b/chrome/browser/incognito/BUILD.gn
+@@ -77,6 +77,9 @@ android_resources("java_resources") {
+     "//chrome/browser/ui/android/strings:ui_strings_grd",
+     "//components/browser_ui/settings/android:java_resources",
+     "//components/browser_ui/strings/android:browser_ui_strings_grd",
++
++    # CromIKO: the mascot on the lock screen.
++    "//components/browser_ui/theme/android:java_resources",
+   ]
+ }
+ 
+diff --git a/chrome/browser/incognito/android/java/res/layout/incognito_reauth_view.xml b/chrome/browser/incognito/android/java/res/layout/incognito_reauth_view.xml
+--- a/chrome/browser/incognito/android/java/res/layout/incognito_reauth_view.xml
++++ b/chrome/browser/incognito/android/java/res/layout/incognito_reauth_view.xml
+@@ -31,14 +31,42 @@ found in the LICENSE file.
+         android:layout_weight="1" >
+     </Space>
+ 
+-    <ImageView
+-        android:id="@+id/incognito_reauth_icon"
+-        android:layout_width="72dp"
+-        android:layout_height="72dp"
+-        android:layout_gravity="center"
+-        android:importantForAccessibility="no"
+-        app:srcCompat="@drawable/incognito_splash"
+-        app:tint="@color/ntp_incognito_icon_color" />
++    <!-- CromIKO: the mascot with a lock instead of the incognito icon. -->
++    <FrameLayout
++        android:layout_width="128dp"
++        android:layout_height="128dp"
++        android:layout_gravity="center">
++
++        <ImageView
++            android:id="@+id/incognito_reauth_icon"
++            android:layout_width="120dp"
++            android:layout_height="120dp"
++            android:layout_gravity="center"
++            android:background="@drawable/cromiko_incognito_lock_plate"
++            android:importantForAccessibility="no"
++            android:padding="20dp"
++            android:scaleType="fitCenter"
++            app:srcCompat="@drawable/cromiko_welcome_mascot" />
++
++        <ImageView
++            android:layout_width="40dp"
++            android:layout_height="40dp"
++            android:layout_gravity="bottom|end"
++            android:importantForAccessibility="no"
++            app:srcCompat="@drawable/cromiko_incognito_lock_badge" />
++    </FrameLayout>
++
++    <TextView
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_gravity="center_horizontal"
++        android:layout_marginTop="20dp"
++        android:layout_marginStart="24dp"
++        android:layout_marginEnd="24dp"
++        android:gravity="center"
++        android:text="@string/cromiko_incognito_locked"
++        android:textColor="#E8EAED"
++        android:textSize="18sp" />
+ 
+     <Space
+         android:layout_width="0dp"
+diff --git a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthController.java b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthController.java
+--- a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthController.java
++++ b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthController.java
+@@ -43,6 +43,12 @@ public interface IncognitoReauthController {
+     void removeIncognitoReauthCallback(
+             IncognitoReauthManager.IncognitoReauthCallback incognitoReauthCallback);
+ 
++    /**
++     * CromIKO: locks the incognito tabs now, if the incognito lock is on and there are incognito
++     * tabs. The user unlocks them as after leaving the app.
++     */
++    default void lockIncognitoTabs() {}
++
+     /**
+      * TODO(crbug.com/40056462): This method is ill-placed. Find a better design to restrict
+      * non-intended clients to call this method.
+diff --git a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java
+--- a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java
++++ b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthControllerImpl.java
+@@ -8,6 +8,7 @@ import static org.chromium.build.NullUtil.assumeNonNull;
+ 
+ import android.os.Bundle;
+ import android.os.PersistableBundle;
++import android.os.SystemClock;
+ 
+ import androidx.activity.OnBackPressedCallback;
+ 
+@@ -195,6 +196,10 @@ public class IncognitoReauthControllerImpl
+     private @Nullable Profile mProfile;
+     private boolean mIsStartupMetricsRecorded;
+     private boolean mIncognitoReauthPending;
++    // CromIKO: when the user left the app (0 when they are in it), and whether the incognito tabs
++    // were locked already then. Coming back within the lock delay leaves them as they were.
++    private long mLeftAtMs;
++    private boolean mIncognitoReauthPendingWhenLeft;
+ 
+     /**
+      * @param tabModelSelector The {@link TabModelSelector} in order to interact with the
+@@ -324,8 +329,17 @@ public class IncognitoReauthControllerImpl
+      * Override from {@link StartStopWithNativeObserver}. This relays the signal that Chrome was
+      * brought to foreground.
+      */
++    /** Override from {@link IncognitoReauthController}. */
++    @Override
++    public void lockIncognitoTabs() {
++        if (mTabModelSelector.getModel(/* incognito= */ true).getCount() == 0) return;
++        mIncognitoReauthPending = true;
++        showDialogIfRequired();
++    }
++
+     @Override
+     public void onStartWithNative() {
++        onBackInApp();
+         showDialogIfRequired();
+     }
+ 
+@@ -366,8 +380,25 @@ public class IncognitoReauthControllerImpl
+     public void onTaskVisibilityChanged(int taskId, boolean isVisible) {
+         if (taskId != mTaskId) return;
+         if (!isVisible) {
++            if (mLeftAtMs == 0) {
++                mLeftAtMs = SystemClock.elapsedRealtime();
++                mIncognitoReauthPendingWhenLeft = mIncognitoReauthPending;
++            }
+             mIncognitoReauthPending =
+                     mTabModelSelector.getModel(/* incognito= */ true).getCount() > 0;
++        } else {
++            onBackInApp();
++        }
++    }
++
++    // CromIKO: the user came back to the app. Within the lock delay, the incognito tabs stay as
++    // they were when the user left.
++    private void onBackInApp() {
++        if (mLeftAtMs == 0) return;
++        long awayMs = SystemClock.elapsedRealtime() - mLeftAtMs;
++        mLeftAtMs = 0;
++        if (awayMs < IncognitoReauthManager.getLockDelayMs()) {
++            mIncognitoReauthPending = mIncognitoReauthPendingWhenLeft;
+         }
+     }
+ 
+diff --git a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java
+--- a/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java
++++ b/chrome/browser/incognito/android/java/src/org/chromium/chrome/browser/incognito/reauth/IncognitoReauthManager.java
+@@ -6,9 +6,11 @@ package org.chromium.chrome.browser.incognito.reauth;
+ 
+ import android.app.Activity;
+ import android.os.Build;
++import android.text.format.DateUtils;
+ 
+ import androidx.annotation.VisibleForTesting;
+ 
++import org.chromium.base.ContextUtils;
+ import org.chromium.base.ResettersForTesting;
+ import org.chromium.base.TriState;
+ import org.chromium.base.TriStateUtils;
+@@ -23,6 +25,18 @@ import org.chromium.components.user_prefs.UserPrefs;
+ /** This class is responsible for managing the Incognito re-authentication flow. */
+ @NullMarked
+ public class IncognitoReauthManager {
++    // CromIKO: the app preference with how long the user can be away before the incognito tabs
++    // lock, in milliseconds.
++    private static final String LOCK_DELAY_PREF = "cromiko_incognito_lock_delay_ms";
++
++    /** CromIKO: the lock delays the user can choose, the first one being the default. */
++    public static final long[] LOCK_DELAYS_MS = {
++        0,
++        DateUtils.MINUTE_IN_MILLIS,
++        5 * DateUtils.MINUTE_IN_MILLIS,
++        15 * DateUtils.MINUTE_IN_MILLIS
++    };
++
+     private static @TriState int sIsIncognitoReauthFeatureAvailableForTesting;
+     private final ReauthenticatorBridge mReauthenticatorBridge;
+ 
+@@ -115,6 +129,19 @@ public class IncognitoReauthManager {
+                 () -> sIsIncognitoReauthFeatureAvailableForTesting = TriState.NOT_SET);
+     }
+ 
++    /**
++     * CromIKO: how long the user can leave the app before the incognito tabs lock: they stay
++     * unlocked if the user comes back sooner.
++     */
++    public static long getLockDelayMs() {
++        return ContextUtils.getAppSharedPreferences().getLong(LOCK_DELAY_PREF, LOCK_DELAYS_MS[0]);
++    }
++
++    /** CromIKO: sets the lock delay, see {@link #getLockDelayMs()}. */
++    public static void setLockDelayMs(long delayMs) {
++        ContextUtils.getAppSharedPreferences().edit().putLong(LOCK_DELAY_PREF, delayMs).apply();
++    }
++
+     private static boolean isIncognitoReauthSettingEnabled(Profile profile) {
+         return UserPrefs.get(profile).getBoolean(Pref.INCOGNITO_REAUTHENTICATION_FOR_ANDROID);
+     }
+diff --git a/chrome/browser/prefs/incognito_mode_prefs.cc b/chrome/browser/prefs/incognito_mode_prefs.cc
+--- a/chrome/browser/prefs/incognito_mode_prefs.cc
++++ b/chrome/browser/prefs/incognito_mode_prefs.cc
+@@ -67,8 +67,10 @@ void IncognitoModePrefs::RegisterProfilePrefs(
+       policy::policy_prefs::kIncognitoModeAvailability,
+       static_cast<int>(kDefaultAvailability));
+ #if BUILDFLAG(IS_ANDROID)
++  // CromIKO: incognito tabs are locked by default when the user leaves the app
++  // (if the device has a screen lock).
+   registry->RegisterBooleanPref(prefs::kIncognitoReauthenticationForAndroid,
+-                                false);
++                                true);
+ #endif
+ }
+ 
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Lock.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Lock.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Incognito-Lock.grdp
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_INCOGNITO_LOCK_DELAY_TITLE" desc="Title of the privacy setting for how long the user can leave the app before the incognito tabs lock.">
++        When to lock Incognito tabs
++    </message>
++    <message name="IDS_CROMIKO_INCOGNITO_LOCK_IMMEDIATELY" desc="Choice of the setting for when to lock Incognito tabs.">
++        As soon as you leave CromIKO
++    </message>
++    <message name="IDS_CROMIKO_INCOGNITO_LOCK_AFTER_ONE_MINUTE" desc="Choice of the setting for when to lock Incognito tabs.">
++        1 minute after you leave CromIKO
++    </message>
++    <message name="IDS_CROMIKO_INCOGNITO_LOCK_AFTER_MINUTES" desc="Choice of the setting for when to lock Incognito tabs.">
++        <ph name="MINUTES">%1$d<ex>5</ex></ph> minutes after you leave CromIKO
++    </message>
++    <message name="IDS_CROMIKO_LOCK_INCOGNITO_MENU" desc="App menu item in Incognito that locks the Incognito tabs right away; the user unlocks them with the screen lock.">
++        Lock Incognito tabs
++    </message>
++    <message name="IDS_CROMIKO_INCOGNITO_LOCKED" desc="Shown under the mascot on the screen that hides locked Incognito tabs, above the Unlock button.">
++        Your Incognito tabs are locked
++    </message>
++</grit-part>
+diff --git a/components/browser_ui/theme/android/BUILD.gn b/components/browser_ui/theme/android/BUILD.gn
+--- a/components/browser_ui/theme/android/BUILD.gn
++++ b/components/browser_ui/theme/android/BUILD.gn
+@@ -13,6 +13,9 @@ android_resources("java_resources") {
+   sources = [
+     "java/res/drawable/cromiko_ic_fire_24dp.xml",
+     "java/res/drawable/cromiko_ic_incognito_tile.xml",
++    "java/res/drawable/cromiko_ic_lock_24dp.xml",
++    "java/res/drawable/cromiko_incognito_lock_badge.xml",
++    "java/res/drawable/cromiko_incognito_lock_plate.xml",
+     "java/res/drawable/cromiko_ic_manga_24dp.xml",
+     "java/res/drawable/cromiko_ic_player_24dp.xml",
+     "java/res/drawable/cromiko_splash_icon.xml",
+diff --git a/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_lock_24dp.xml b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_lock_24dp.xml
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/theme/android/java/res/drawable/cromiko_ic_lock_24dp.xml
+@@ -0,0 +1,16 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++The "Lock incognito tabs" icon (Material "lock").
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="24dp"
++    android:height="24dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24"
++    android:tint="@macro/default_icon_color">
++  <path
++      android:fillColor="@android:color/white"
++      android:pathData="M18,8h-1V6c0,-2.76 -2.24,-5 -5,-5S7,3.24 7,6v2H6c-1.1,0 -2,0.9 -2,2v10c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2V10C20,8.9 19.1,8 18,8zM12,17c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2S13.1,17 12,17zM15.1,8H8.9V6c0,-1.71 1.39,-3.1 3.1,-3.1s3.1,1.39 3.1,3.1V8z"/>
++</vector>
+diff --git a/components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_badge.xml b/components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_badge.xml
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_badge.xml
+@@ -0,0 +1,24 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++The lock badge of the mascot on the incognito lock screen: a white lock on the CromIKO accent color.
++-->
++<vector xmlns:android="http://schemas.android.com/apk/res/android"
++    android:width="36dp"
++    android:height="36dp"
++    android:viewportWidth="24"
++    android:viewportHeight="24">
++  <path
++      android:fillColor="@color/cromiko_accent_color"
++      android:pathData="M12,0A12,12 0,1 1,12 24A12,12 0,1 1,12 0z"/>
++  <group
++      android:translateX="5.4"
++      android:translateY="5.4"
++      android:scaleX="0.55"
++      android:scaleY="0.55">
++    <path
++        android:fillColor="@android:color/white"
++        android:pathData="M18,8h-1V6c0,-2.76 -2.24,-5 -5,-5S7,3.24 7,6v2H6c-1.1,0 -2,0.9 -2,2v10c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2V10C20,8.9 19.1,8 18,8zM12,17c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2S13.1,17 12,17zM15.1,8H8.9V6c0,-1.71 1.39,-3.1 3.1,-3.1s3.1,1.39 3.1,3.1V8z"/>
++  </group>
++</vector>
+diff --git a/components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_plate.xml b/components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_plate.xml
+new file mode 100644
+--- /dev/null
++++ b/components/browser_ui/theme/android/java/res/drawable/cromiko_incognito_lock_plate.xml
+@@ -0,0 +1,11 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The light circle behind the mascot on the dark incognito lock screen. -->
++<shape xmlns:android="http://schemas.android.com/apk/res/android"
++    android:shape="oval">
++    <solid android:color="#E6EAFF" />
++</shape>
+--

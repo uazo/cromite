@@ -1,0 +1,1236 @@
+From: PupJune2 <PupJune2@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:00:00 +0000
+Subject: CromIKO weekly shield report
+
+Tapping the shield card of the new tab page (now with a "Weekly
+report" link) opens the weekly shield report, with the mascot:
+
+- the ads and trackers blocked this week,
+- how it compares with the same days of last week (Monday to
+  yesterday, so a half-finished today never skews it), and last
+  week's total,
+- a bar for each day from Monday to Sunday, today in the CromIKO
+  accent color,
+- the 5 sites where CromIKO blocked the most,
+- the 5 trackers and ad servers blocked the most (the eyeo ad blocker
+  tells which addresses it blocked; Cromite's filter only counts),
+- early in the week, while this week is still empty, last week's
+  lists,
+- a link to the ad blocker settings.
+
+cromiko_shield_stats.cc now also keeps the counts of the last 14 days,
+of the sites and of the trackers of the week, and the top 10 sites and
+trackers of last week. The lists keep the 300 largest when they pass
+400 entries. Incognito tabs are still not counted, and nothing leaves
+the device. Since the sites are a form of history, deleting browsing
+history (also with the Fire button) removes them, for the deleted
+sites; the counts stay.
+
+License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+---
+ chrome/android/chrome_java_resources.gni      |   2 +
+ chrome/android/chrome_java_sources.gni        |   3 +
+ .../layout/cromiko_shield_report_header.xml   |  81 +++++++
+ .../java/res/layout/cromiko_shield_stats.xml  |  11 +
+ .../xml/cromiko_shield_report_preferences.xml |  33 +++
+ .../browser/cromiko/CromikoShieldReport.java  | 203 ++++++++++++++++
+ .../cromiko/CromikoShieldReportChart.java     | 116 +++++++++
+ .../cromiko/CromikoShieldReportHeader.java    |  76 ++++++
+ .../cromiko/CromikoShieldStatsView.java       |   6 +-
+ .../chrome_browsing_data_remover_delegate.cc  |   7 +
+ chrome/browser/cromiko/BUILD.gn               |  18 +-
+ .../android/cromiko_shield_report_bridge.cc   |  22 ++
+ .../cromiko/CromikoShieldReportBridge.java    |  35 +++
+ .../CromIKO-Shield-Report.grdp                |  51 ++++
+ .../resource_classification_runner_impl.cc    |   5 +-
+ ...ent_subresource_filter_throttle_manager.cc |   7 +-
+ .../content/browser/cromiko_shield_stats.cc   | 223 ++++++++++++++++--
+ .../content/browser/cromiko_shield_stats.h    |  40 +++-
+ 18 files changed, 907 insertions(+), 32 deletions(-)
+ create mode 100644 chrome/android/java/res/layout/cromiko_shield_report_header.xml
+ create mode 100644 chrome/android/java/res/xml/cromiko_shield_report_preferences.xml
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReport.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportChart.java
+ create mode 100644 chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportHeader.java
+ create mode 100644 chrome/browser/cromiko/android/cromiko_shield_report_bridge.cc
+ create mode 100644 chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java
+ create mode 100644 chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Report.grdp
+
+diff --git a/chrome/android/chrome_java_resources.gni b/chrome/android/chrome_java_resources.gni
+--- a/chrome/android/chrome_java_resources.gni
++++ b/chrome/android/chrome_java_resources.gni
+@@ -518,6 +518,7 @@ chrome_java_resources = [
+   "java/res/layout/cromiko_home_edit.xml",
+   "java/res/layout/cromiko_home_edit_button.xml",
+   "java/res/layout/cromiko_home_edit_item.xml",
++  "java/res/layout/cromiko_shield_report_header.xml",
+   "java/res/layout/cromiko_shield_stats.xml",
+   "java/res/layout/custom_tab_close_button.xml",
+   "java/res/layout/custom_tab_desktop_popup_header_layout.xml",
+@@ -704,6 +705,7 @@ chrome_java_resources = [
+   "java/res/xml/clear_browsing_data_preferences.xml",
+   "java/res/xml/contextual_search_preferences.xml",
+   "java/res/xml/cromiko_download_preferences.xml",
++  "java/res/xml/cromiko_shield_report_preferences.xml",
+   "java/res/xml/developer_preferences.xml",
+   "java/res/xml/do_not_track_preferences.xml",
+   "java/res/xml/gpc_preferences.xml",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -486,6 +486,9 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoIncognitoTileService.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaMode.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoMangaReading.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReport.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportChart.java",
++  "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportHeader.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java",
+   "java/src/org/chromium/chrome/browser/cromiko/CromikoVideoPlayer.java",
+   "java/src/org/chromium/chrome/browser/customtabs/AuthTabColorProvider.java",
+diff --git a/chrome/android/java/res/layout/cromiko_shield_report_header.xml b/chrome/android/java/res/layout/cromiko_shield_report_header.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/layout/cromiko_shield_report_header.xml
+@@ -0,0 +1,81 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The top of the weekly shield report, see CromikoShieldReportHeader. -->
++<LinearLayout
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:layout_marginStart="16dp"
++    android:layout_marginTop="8dp"
++    android:layout_marginEnd="16dp"
++    android:layout_marginBottom="8dp"
++    android:background="@drawable/cromiko_shield_stats_background"
++    android:orientation="vertical"
++    android:paddingStart="16dp"
++    android:paddingTop="16dp"
++    android:paddingEnd="16dp"
++    android:paddingBottom="12dp">
++
++    <LinearLayout
++        android:layout_width="match_parent"
++        android:layout_height="wrap_content"
++        android:gravity="center_vertical"
++        android:orientation="horizontal">
++
++        <ImageView
++            android:layout_width="64dp"
++            android:layout_height="56dp"
++            android:importantForAccessibility="no"
++            android:scaleType="fitCenter"
++            android:src="@drawable/cromiko_welcome_mascot" />
++
++        <LinearLayout
++            android:layout_width="0dp"
++            android:layout_height="wrap_content"
++            android:layout_marginStart="12dp"
++            android:layout_weight="1"
++            android:orientation="vertical">
++
++            <TextView
++                android:id="@+id/cromiko_shield_report_count"
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:textAppearance="@style/TextAppearance.Headline.Primary" />
++
++            <TextView
++                android:layout_width="wrap_content"
++                android:layout_height="wrap_content"
++                android:text="@string/cromiko_shield_stats_label"
++                android:textAppearance="@style/TextAppearance.TextMedium.Secondary" />
++        </LinearLayout>
++    </LinearLayout>
++
++    <TextView
++        android:id="@+id/cromiko_shield_report_comparison"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginTop="12dp"
++        android:textAppearance="@style/TextAppearance.TextMediumThick.Primary"
++        android:textColor="@color/cromiko_accent_color"
++        android:visibility="gone" />
++
++    <TextView
++        android:id="@+id/cromiko_shield_report_last_week"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginTop="2dp"
++        android:textAppearance="@style/TextAppearance.TextMedium.Secondary"
++        android:visibility="gone" />
++
++    <org.chromium.chrome.browser.cromiko.CromikoShieldReportChart
++        android:id="@+id/cromiko_shield_report_chart"
++        android:layout_width="match_parent"
++        android:layout_height="120dp"
++        android:layout_marginTop="12dp"
++        android:focusable="true"
++        android:importantForAccessibility="yes" />
++</LinearLayout>
+diff --git a/chrome/android/java/res/layout/cromiko_shield_stats.xml b/chrome/android/java/res/layout/cromiko_shield_stats.xml
+--- a/chrome/android/java/res/layout/cromiko_shield_stats.xml
++++ b/chrome/android/java/res/layout/cromiko_shield_stats.xml
+@@ -51,4 +51,15 @@ License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
+             android:text="@string/cromiko_shield_stats_label"
+             android:textAppearance="@style/TextAppearance.TextMedium.Secondary" />
+     </LinearLayout>
++
++    <!-- The card opens the weekly shield report. -->
++    <TextView
++        android:id="@+id/cromiko_shield_stats_report"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:layout_marginStart="8dp"
++        android:importantForAccessibility="no"
++        android:text="@string/cromiko_shield_stats_see_report"
++        android:textAppearance="@style/TextAppearance.TextSmall.Primary"
++        android:textColor="@color/cromiko_accent_color" />
+ </org.chromium.chrome.browser.cromiko.CromikoShieldStatsView>
+diff --git a/chrome/android/java/res/xml/cromiko_shield_report_preferences.xml b/chrome/android/java/res/xml/cromiko_shield_report_preferences.xml
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/res/xml/cromiko_shield_report_preferences.xml
+@@ -0,0 +1,33 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++Copyright 2026 The CromIKO Authors
++License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++-->
++
++<!-- The weekly shield report, see CromikoShieldReport. -->
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
++    <org.chromium.chrome.browser.cromiko.CromikoShieldReportHeader
++        android:key="header" />
++
++    <PreferenceCategory
++        android:key="sites"
++        android:title="@string/cromiko_shield_report_sites" />
++
++    <PreferenceCategory
++        android:key="trackers"
++        android:title="@string/cromiko_shield_report_trackers" />
++
++    <PreferenceCategory
++        android:key="more"
++        android:title="@string/cromiko_shield_report_more_section">
++        <Preference
++            android:key="ad_blocker"
++            android:title="@string/cromiko_shield_report_ad_blocker"
++            android:fragment="org.chromium.chrome.browser.settings.AdBlockPreferences" />
++
++        <Preference
++            android:key="note"
++            android:selectable="false"
++            android:summary="@string/cromiko_shield_report_note" />
++    </PreferenceCategory>
++</PreferenceScreen>
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReport.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReport.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReport.java
+@@ -0,0 +1,203 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.os.Bundle;
++
++import androidx.annotation.VisibleForTesting;
++import androidx.preference.Preference;
++import androidx.preference.PreferenceCategory;
++
++import org.json.JSONException;
++import org.json.JSONObject;
++
++import org.chromium.base.Log;
++import org.chromium.base.supplier.MonotonicObservableSupplier;
++import org.chromium.base.supplier.ObservableSuppliers;
++import org.chromium.base.supplier.SettableMonotonicObservableSupplier;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.chrome.browser.settings.ChromeBaseSettingsFragment;
++import org.chromium.components.browser_ui.settings.SettingsUtils;
++
++import java.text.NumberFormat;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++/**
++ * CromIKO: the weekly shield report, opened from the shield card of the new tab page. It shows
++ * how many ads and trackers the ad blocker blocked this week, day by day and compared with last
++ * week, the sites where it blocked the most, and the trackers it blocked the most. The counts come
++ * from components/subresource_filter/content/browser/cromiko_shield_stats.cc.
++ */
++@NullMarked
++public class CromikoShieldReport extends ChromeBaseSettingsFragment {
++    private static final String TAG = "CromikoShield";
++
++    // The keys of the preferences in cromiko_shield_report_preferences.xml.
++    private static final String PREF_HEADER = "header";
++    private static final String PREF_SITES = "sites";
++    private static final String PREF_TRACKERS = "trackers";
++
++    // The sites and trackers listed.
++    private static final int TOP = 5;
++    // Changes smaller than this are "about the same".
++    private static final double SAME = 0.05;
++
++    private final SettableMonotonicObservableSupplier<String> mPageTitle =
++            ObservableSuppliers.createMonotonic();
++
++    @Override
++    public void onCreatePreferences(@Nullable Bundle savedInstanceState, @Nullable String rootKey) {
++        mPageTitle.set(getString(R.string.cromiko_shield_report_title));
++        SettingsUtils.addPreferencesFromResource(this, R.xml.cromiko_shield_report_preferences);
++        JSONObject report;
++        try {
++            report = new JSONObject(CromikoShieldReportBridge.getReport(getProfile()));
++        } catch (JSONException e) {
++            Log.e(TAG, "Bad report", e);
++            report = new JSONObject();
++        }
++        showReport(report);
++    }
++
++    private void showReport(JSONObject report) {
++        int today = report.optInt("today");
++        int week = report.optInt("week");
++        int blocked = report.optInt("blocked");
++        JSONObject days = optObject(report, "days");
++        JSONObject lastWeek = report.optJSONObject("last_week");
++
++        // The days of this week and of last week, and the sums of the days before today, which
++        // are complete, to compare the same days.
++        int[] thisWeek = new int[7];
++        int thisWeekDays = 0;
++        int lastWeekDays = 0;
++        int thisWeekBeforeToday = 0;
++        int lastWeekBeforeToday = 0;
++        for (int i = 0; i < 7; i++) {
++            thisWeek[i] = days.optInt(String.valueOf(week + i));
++            int lastWeekDay = days.optInt(String.valueOf(week - 7 + i));
++            thisWeekDays += thisWeek[i];
++            lastWeekDays += lastWeekDay;
++            if (week + i < today) {
++                thisWeekBeforeToday += thisWeek[i];
++                lastWeekBeforeToday += lastWeekDay;
++            }
++        }
++
++        String comparison = null;
++        String lastWeekText = null;
++        if (lastWeek != null) {
++            int lastWeekBlocked = lastWeek.optInt("blocked");
++            lastWeekText =
++                    getString(
++                            R.string.cromiko_shield_report_last_week,
++                            NumberFormat.getIntegerInstance().format(lastWeekBlocked));
++            // Only when the days of both weeks are all there: older versions only kept the
++            // totals.
++            if (thisWeekDays == blocked
++                    && lastWeekDays == lastWeekBlocked
++                    && lastWeekBeforeToday > 0) {
++                comparison = getComparison(thisWeekBeforeToday, lastWeekBeforeToday);
++            }
++        }
++        CromikoShieldReportHeader header = (CromikoShieldReportHeader) findPreference(PREF_HEADER);
++        header.setReport(blocked, comparison, lastWeekText, thisWeek, today - week);
++
++        // Early in the week, the lists of last week say more.
++        JSONObject sites = optObject(report, "sites");
++        JSONObject trackers = optObject(report, "trackers");
++        boolean showLastWeek = sites.length() == 0 && lastWeek != null;
++        if (showLastWeek) {
++            sites = optObject(lastWeek, "sites");
++            trackers = optObject(lastWeek, "trackers");
++        }
++        fillList(
++                PREF_SITES,
++                showLastWeek
++                        ? R.string.cromiko_shield_report_sites_last_week
++                        : R.string.cromiko_shield_report_sites,
++                sites,
++                /* emptyText= */ R.string.cromiko_shield_report_empty);
++        fillList(
++                PREF_TRACKERS,
++                showLastWeek
++                        ? R.string.cromiko_shield_report_trackers_last_week
++                        : R.string.cromiko_shield_report_trackers,
++                trackers,
++                /* emptyText= */ 0);
++    }
++
++    private String getComparison(int thisWeek, int lastWeek) {
++        double change = (thisWeek - lastWeek) / (double) lastWeek;
++        if (Math.abs(change) < SAME) return getString(R.string.cromiko_shield_report_same);
++        String percent = NumberFormat.getPercentInstance().format(Math.abs(change));
++        return getString(
++                change > 0
++                        ? R.string.cromiko_shield_report_more
++                        : R.string.cromiko_shield_report_fewer,
++                percent);
++    }
++
++    // Lists the sites or trackers with the largest counts, or hides the list when it is empty
++    // and has no text for that.
++    private void fillList(String key, int title, JSONObject counts, int emptyText) {
++        PreferenceCategory category = (PreferenceCategory) findPreference(key);
++        category.setTitle(title);
++        List<String> top = getTop(counts, TOP);
++        if (top.isEmpty() && emptyText == 0) {
++            category.setVisible(false);
++            return;
++        }
++        if (top.isEmpty()) {
++            Preference empty = new Preference(getPreferenceManager().getContext());
++            empty.setSummary(emptyText);
++            empty.setSelectable(false);
++            category.addPreference(empty);
++            return;
++        }
++        NumberFormat format = NumberFormat.getIntegerInstance();
++        for (String domain : top) {
++            Preference row = new Preference(getPreferenceManager().getContext());
++            row.setTitle(domain);
++            row.setSummary(
++                    getString(
++                            R.string.cromiko_shield_report_blocked,
++                            format.format(counts.optInt(domain))));
++            row.setSelectable(false);
++            category.addPreference(row);
++        }
++    }
++
++    /** Returns the keys of |counts| with the largest counts, the largest first. */
++    @VisibleForTesting
++    static List<String> getTop(JSONObject counts, int max) {
++        List<String> keys = new ArrayList<>();
++        for (Iterator<String> it = counts.keys(); it.hasNext(); ) keys.add(it.next());
++        keys.sort(
++                (a, b) -> {
++                    int byCount = Integer.compare(counts.optInt(b), counts.optInt(a));
++                    return byCount != 0 ? byCount : a.compareTo(b);
++                });
++        return keys.size() > max ? new ArrayList<>(keys.subList(0, max)) : keys;
++    }
++
++    private static JSONObject optObject(JSONObject object, String key) {
++        JSONObject value = object.optJSONObject(key);
++        return value != null ? value : new JSONObject();
++    }
++
++    @Override
++    public MonotonicObservableSupplier<String> getPageTitle() {
++        return mPageTitle;
++    }
++
++    @Override
++    public @AnimationType int getAnimationType() {
++        return AnimationType.PROPERTY;
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportChart.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportChart.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportChart.java
+@@ -0,0 +1,116 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Paint;
++import android.graphics.RectF;
++import android.graphics.Typeface;
++import android.util.AttributeSet;
++import android.util.TypedValue;
++import android.view.View;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++import org.chromium.components.browser_ui.styles.SemanticColorUtils;
++
++import java.text.NumberFormat;
++import java.time.DayOfWeek;
++import java.time.format.TextStyle;
++import java.util.Locale;
++
++/**
++ * CromIKO: the bars of the weekly shield report, one per day from Monday to Sunday, with the
++ * number of ads and trackers blocked that day. Today is in the CromIKO accent color, the days
++ * before it lighter, and the days to come are empty.
++ */
++@NullMarked
++public class CromikoShieldReportChart extends View {
++    private static final int DAYS = 7;
++
++    private final Paint mBarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint mLabelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF mBar = new RectF();
++    private final String[] mLabels = new String[DAYS];
++    private final float mDensity;
++    private final int mAccentColor;
++    private int[] mCounts = new int[DAYS];
++    // The index of today, from 0 for Monday.
++    private int mToday = -1;
++
++    /** Constructor for inflating from XML. */
++    public CromikoShieldReportChart(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        mDensity = getResources().getDisplayMetrics().density;
++        mAccentColor = context.getColor(R.color.cromiko_accent_color);
++        mLabelPaint.setTextAlign(Paint.Align.CENTER);
++        mLabelPaint.setTextSize(
++                TypedValue.applyDimension(
++                        TypedValue.COMPLEX_UNIT_SP, 12, getResources().getDisplayMetrics()));
++        mLabelPaint.setColor(SemanticColorUtils.getDefaultTextColorSecondary(context));
++        for (int i = 0; i < DAYS; i++) {
++            mLabels[i] =
++                    DayOfWeek.of(i + 1).getDisplayName(TextStyle.NARROW, Locale.getDefault());
++        }
++    }
++
++    /**
++     * @param counts The counts of the days, from Monday.
++     * @param today The index of today, from 0 for Monday.
++     */
++    public void setDays(int[] counts, int today) {
++        mCounts = counts.clone();
++        mToday = today;
++        // TalkBack reads the counts of the days until today.
++        StringBuilder description = new StringBuilder();
++        NumberFormat format = NumberFormat.getIntegerInstance();
++        for (int i = 0; i <= today && i < DAYS; i++) {
++            if (description.length() > 0) description.append(", ");
++            description.append(
++                    getContext()
++                            .getString(
++                                    R.string.cromiko_shield_report_chart_day,
++                                    DayOfWeek.of(i + 1)
++                                            .getDisplayName(TextStyle.FULL, Locale.getDefault()),
++                                    format.format(mCounts[i])));
++        }
++        setContentDescription(description.toString());
++        invalidate();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        super.onDraw(canvas);
++        float labelHeight = mLabelPaint.getTextSize() + 8 * mDensity;
++        float top = getPaddingTop();
++        float bottom = getHeight() - getPaddingBottom() - labelHeight;
++        float slot = (getWidth() - getPaddingLeft() - getPaddingRight()) / (float) DAYS;
++        float barWidth = Math.min(slot * 0.5f, 28 * mDensity);
++        float radius = Math.min(barWidth / 2, 8 * mDensity);
++        int max = 1;
++        for (int count : mCounts) max = Math.max(max, count);
++
++        for (int i = 0; i < DAYS; i++) {
++            // Right to left languages start the week on the right.
++            int position = getLayoutDirection() == LAYOUT_DIRECTION_RTL ? DAYS - 1 - i : i;
++            float center = getPaddingLeft() + slot * (position + 0.5f);
++            boolean future = i > mToday;
++            // Days without blocks still show a small bar, to see the week.
++            float height =
++                    future
++                            ? 0
++                            : Math.max(4 * mDensity, (bottom - top) * mCounts[i] / (float) max);
++            if (height > 0) {
++                mBarPaint.setColor(mAccentColor);
++                mBarPaint.setAlpha(i == mToday ? 255 : 110);
++                mBar.set(center - barWidth / 2, bottom - height, center + barWidth / 2, bottom);
++                canvas.drawRoundRect(mBar, radius, radius, mBarPaint);
++            }
++            mLabelPaint.setTypeface(i == mToday ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
++            canvas.drawText(mLabels[i], center, getHeight() - getPaddingBottom(), mLabelPaint);
++        }
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportHeader.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportHeader.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportHeader.java
+@@ -0,0 +1,76 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import android.content.Context;
++import android.util.AttributeSet;
++import android.view.View;
++import android.widget.TextView;
++
++import androidx.preference.Preference;
++import androidx.preference.PreferenceViewHolder;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.R;
++
++import java.text.NumberFormat;
++
++/**
++ * CromIKO: the top of the weekly shield report: the mascot, the number of ads and trackers blocked
++ * this week, how it compares with last week, and the bars of the days.
++ */
++@NullMarked
++public class CromikoShieldReportHeader extends Preference {
++    private int mBlocked;
++    private @Nullable String mComparison;
++    private @Nullable String mLastWeek;
++    private int[] mDays = new int[7];
++    private int mToday;
++
++    /** Constructor for inflating from XML. */
++    public CromikoShieldReportHeader(Context context, @Nullable AttributeSet attrs) {
++        super(context, attrs);
++        setLayoutResource(R.layout.cromiko_shield_report_header);
++        setSelectable(false);
++    }
++
++    /**
++     * @param blocked The number of ads and trackers blocked this week.
++     * @param comparison How it compares with the same days of last week, or null.
++     * @param lastWeek The number blocked last week, as text, or null.
++     * @param days The counts of the days of this week, from Monday.
++     * @param today The index of today, from 0 for Monday.
++     */
++    public void setReport(
++            int blocked,
++            @Nullable String comparison,
++            @Nullable String lastWeek,
++            int[] days,
++            int today) {
++        mBlocked = blocked;
++        mComparison = comparison;
++        mLastWeek = lastWeek;
++        mDays = days.clone();
++        mToday = today;
++        notifyChanged();
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++        TextView count = (TextView) holder.findViewById(R.id.cromiko_shield_report_count);
++        count.setText(NumberFormat.getIntegerInstance().format(mBlocked));
++        setText((TextView) holder.findViewById(R.id.cromiko_shield_report_comparison), mComparison);
++        setText((TextView) holder.findViewById(R.id.cromiko_shield_report_last_week), mLastWeek);
++        CromikoShieldReportChart chart =
++                (CromikoShieldReportChart) holder.findViewById(R.id.cromiko_shield_report_chart);
++        chart.setDays(mDays, mToday);
++    }
++
++    private static void setText(TextView view, @Nullable String text) {
++        view.setText(text);
++        view.setVisibility(text == null ? View.GONE : View.VISIBLE);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldStatsView.java
+@@ -15,7 +15,6 @@ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+ import org.chromium.chrome.R;
+ import org.chromium.chrome.browser.profiles.ProfileManager;
+-import org.chromium.chrome.browser.settings.AdBlockPreferences;
+ import org.chromium.chrome.browser.settings.SettingsNavigationFactory;
+ import org.chromium.components.prefs.PrefService;
+ import org.chromium.components.user_prefs.UserPrefs;
+@@ -28,7 +27,7 @@ import java.time.temporal.TemporalAdjusters;
+ /**
+  * CromIKO: the shield card on the new tab page. It shows how many requests the ad blocker blocked
+  * this week, as counted by components/subresource_filter/content/browser/cromiko_shield_stats.cc.
+- * Tapping it opens the ad blocker settings. Its small size, on the home screen, is one line.
++ * Tapping it opens the weekly shield report. Its small size, on the home screen, is one line.
+  */
+ @NullMarked
+ public class CromikoShieldStatsView extends LinearLayout implements CromikoHomeScreen.WidgetView {
+@@ -52,7 +51,7 @@ public class CromikoShieldStatsView extends LinearLayout implements CromikoHomeS
+         setOnClickListener(
+                 view ->
+                         SettingsNavigationFactory.createSettingsNavigation()
+-                                .startSettings(getContext(), AdBlockPreferences.class));
++                                .startSettings(getContext(), CromikoShieldReport.class));
+     }
+ 
+     @Override
+@@ -77,6 +76,7 @@ public class CromikoShieldStatsView extends LinearLayout implements CromikoHomeS
+         label.setLayoutParams(labelParams);
+         label.setMaxLines(compact ? 1 : Integer.MAX_VALUE);
+         label.setEllipsize(compact ? TextUtils.TruncateAt.END : null);
++        findViewById(R.id.cromiko_shield_stats_report).setVisibility(compact ? GONE : VISIBLE);
+         if (mCount != null) {
+             mCount.setTextAppearance(
+                     compact
+diff --git a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.cc b/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.cc
+--- a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.cc
++++ b/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.cc
+@@ -142,6 +142,7 @@
+ #include "components/signin/public/identity_manager/identity_manager.h"
+ #include "components/signin/public/identity_manager/identity_utils.h"
+ #include "components/strike_database/strike_database.h"
++#include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
+ #include "components/sync/service/sync_service.h"
+ #include "components/sync/service/sync_user_settings.h"
+ #include "components/web_cache/browser/web_cache_manager.h"
+@@ -432,6 +433,12 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
+     if (ClipboardRecentContent::GetInstance())
+       ClipboardRecentContent::GetInstance()->SuppressClipboardContent();
+ 
++    // CromIKO: the weekly shield report lists the sites where the ad blocker
++    // blocked the most, which is a form of history. Like the host cache below,
++    // it has no times, so the time range is not honored.
++    subresource_filter::cromiko_shield_stats::ClearSites(profile_->GetPrefs(),
++                                                         filter);
++
+     language::UrlLanguageHistogram* language_histogram =
+         UrlLanguageHistogramFactory::GetForBrowserContext(profile_);
+     if (language_histogram) {
+diff --git a/chrome/browser/cromiko/BUILD.gn b/chrome/browser/cromiko/BUILD.gn
+--- a/chrome/browser/cromiko/BUILD.gn
++++ b/chrome/browser/cromiko/BUILD.gn
+@@ -5,10 +5,14 @@ import("//build/config/android/rules.gni")
+ import("//third_party/jni_zero/jni_zero.gni")
+ 
+ android_library("java") {
+-  sources = [ "android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java" ]
++  sources = [
++    "android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java",
++    "android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java",
++  ]
+   deps = [
+     "//base:base_java",
+     "//build/android:build_java",
++    "//chrome/browser/profiles/android:java",
+     "//content/public/android:content_java",
+     "//third_party/jni_zero:jni_zero_java",
+   ]
+@@ -16,15 +20,23 @@ android_library("java") {
+ }
+ 
+ generate_jni("jni_headers") {
+-  sources = [ "android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java" ]
++  sources = [
++    "android/java/src/org/chromium/chrome/browser/cromiko/CromikoPageScripts.java",
++    "android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java",
++  ]
+ }
+ 
+ source_set("android") {
+-  sources = [ "android/cromiko_page_scripts.cc" ]
++  sources = [
++    "android/cromiko_page_scripts.cc",
++    "android/cromiko_shield_report_bridge.cc",
++  ]
+   deps = [
+     ":jni_headers",
+     "//base",
++    "//chrome/browser/profiles:profile",
+     "//chrome/common",
++    "//components/subresource_filter/content/browser",
+     "//content/public/browser",
+   ]
+ }
+diff --git a/chrome/browser/cromiko/android/cromiko_shield_report_bridge.cc b/chrome/browser/cromiko/android/cromiko_shield_report_bridge.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromiko/android/cromiko_shield_report_bridge.cc
+@@ -0,0 +1,22 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++#include <string>
++
++#include "base/android/jni_string.h"
++#include "base/json/json_writer.h"
++#include "chrome/browser/profiles/profile.h"
++#include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
++
++// Must come after all headers that specialize FromJniType() / ToJniType().
++#include "chrome/browser/cromiko/jni_headers/CromikoShieldReportBridge_jni.h"
++
++static std::string JNI_CromikoShieldReportBridge_GetReport(JNIEnv* env,
++                                                           Profile* profile) {
++  // The report is only counted for the regular profile.
++  return base::WriteJson(subresource_filter::cromiko_shield_stats::GetReport(
++                             profile->GetOriginalProfile()->GetPrefs()))
++      .value_or("{}");
++}
++
++DEFINE_JNI(CromikoShieldReportBridge)
+diff --git a/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/cromiko/android/java/src/org/chromium/chrome/browser/cromiko/CromikoShieldReportBridge.java
+@@ -0,0 +1,35 @@
++// Copyright 2026 The CromIKO Authors
++// License: GPL-3.0-only - https://spdx.org/licenses/GPL-3.0-only.html
++
++package org.chromium.chrome.browser.cromiko;
++
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.chrome.browser.profiles.Profile;
++
++/**
++ * CromIKO: reads the weekly shield report that
++ * components/subresource_filter/content/browser/cromiko_shield_stats.cc keeps in the profile.
++ */
++@NullMarked
++public final class CromikoShieldReportBridge {
++    private CromikoShieldReportBridge() {}
++
++    /**
++     * Returns the report of the current week as JSON: "today" and "week" (day numbers, the week
++     * is the one of its Monday), "blocked", "days", "sites", "trackers" (counts by day number or
++     * by domain), and "last_week" with "blocked", "sites" and "trackers" when the week before has
++     * counts.
++     */
++    public static String getReport(Profile profile) {
++        return CromikoShieldReportBridgeJni.get().getReport(profile);
++    }
++
++    @NativeMethods
++    interface Natives {
++        @JniType("std::string")
++        String getReport(@JniType("Profile*") Profile profile);
++    }
++}
+diff --git a/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Report.grdp b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Report.grdp
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/ui/android/strings/cromite_android_chrome_strings_grd/CromIKO-Shield-Report.grdp
+@@ -0,0 +1,51 @@
++<?xml version="1.0" encoding="utf-8"?>
++<grit-part>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_TITLE" desc="Title of the page that shows how many ads and trackers the ad blocker blocked this week, and where.">
++        Weekly shield report
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_STATS_SEE_REPORT" desc="Link on the shield card of the new tab page that opens the weekly shield report.">
++        Weekly report
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_MORE" desc="In the weekly shield report: from Monday to yesterday, the ad blocker blocked more than on the same days of last week.">
++        <ph name="PERCENT">%1$s<ex>23 percent</ex></ph> more than the same days last week
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_FEWER" desc="In the weekly shield report: from Monday to yesterday, the ad blocker blocked less than on the same days of last week.">
++        <ph name="PERCENT">%1$s<ex>15 percent</ex></ph> fewer than the same days last week
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_SAME" desc="In the weekly shield report: from Monday to yesterday, the ad blocker blocked about as much as on the same days of last week.">
++        About as many as the same days last week
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_LAST_WEEK" desc="In the weekly shield report: how many ads and trackers the ad blocker blocked in all of last week.">
++        Last week: <ph name="COUNT">%1$s<ex>4,567</ex></ph> blocked
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_CHART_DAY" desc="Accessibility text of a bar of the chart in the weekly shield report: a day and how many ads and trackers were blocked that day.">
++        <ph name="DAY">%1$s<ex>Monday</ex></ph>: <ph name="COUNT">%2$s<ex>120</ex></ph> blocked
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_SITES" desc="Title of the list of the websites where the ad blocker blocked the most ads and trackers this week.">
++        Sites where CromIKO blocked the most
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_SITES_LAST_WEEK" desc="Title of the list of the websites where the ad blocker blocked the most ads and trackers last week, shown early in the week.">
++        Last week: sites where CromIKO blocked the most
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_TRACKERS" desc="Title of the list of the trackers and ad servers that the ad blocker blocked the most this week.">
++        Most blocked trackers and ad servers
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_TRACKERS_LAST_WEEK" desc="Title of the list of the trackers and ad servers that the ad blocker blocked the most last week, shown early in the week.">
++        Last week: most blocked trackers and ad servers
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_BLOCKED" desc="Under a website or tracker in the weekly shield report: how many requests the ad blocker blocked.">
++        <ph name="COUNT">%1$s<ex>321</ex></ph> blocked
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_EMPTY" desc="In the weekly shield report, when the ad blocker has not blocked anything yet this week.">
++        Nothing blocked yet this week. Browse a bit, and CromIKO shows here where it blocked ads and trackers.
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_MORE_SECTION" desc="Title of the last section of the weekly shield report, with the ad blocker settings.">
++        Ad blocker
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_AD_BLOCKER" desc="In the weekly shield report: opens the settings of the ad blocker.">
++        Ad blocker settings
++    </message>
++    <message name="IDS_CROMIKO_SHIELD_REPORT_NOTE" desc="At the bottom of the weekly shield report: where the report is kept and how to delete it.">
++        The report stays on this device, and Incognito tabs are not counted. Deleting your browsing history removes its sites.
++    </message>
++</grit-part>
+diff --git a/components/adblock/content/browser/resource_classification_runner_impl.cc b/components/adblock/content/browser/resource_classification_runner_impl.cc
+--- a/components/adblock/content/browser/resource_classification_runner_impl.cc
++++ b/components/adblock/content/browser/resource_classification_runner_impl.cc
+@@ -355,10 +355,11 @@ void ResourceClassificationRunnerImpl::NotifyResourceMatched(
+   EyeoDocumentInfo* document_info =
+     EyeoDocumentInfo::GetOrCreateForCurrentDocument(render_frame_host);
+   document_info->SetFilterMatchResult(result, subscription, configuration_name);
+-  // CromIKO: count the blocked requests for the shield card on the new tab page.
++  // CromIKO: count the blocked requests for the shield card on the new tab page
++  // and the weekly shield report, with the blocked tracker or ad server.
+   if (result == FilterMatchResult::kBlockRule) {
+     subresource_filter::cromiko_shield_stats::RecordBlockedRequests(
+-        render_frame_host->GetBrowserContext(), 1);
++        render_frame_host, 1, url);
+   }
+   for (auto& observer : observers_) {
+     observer.OnRequestMatched(
+diff --git a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
+--- a/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
++++ b/components/subresource_filter/content/browser/content_subresource_filter_throttle_manager.cc
+@@ -861,10 +861,11 @@ void ContentSubresourceFilterThrottleManager::FrameIsAd() {
+ 
+ void ContentSubresourceFilterThrottleManager::SetDocumentLoadStatistics(
+     mojom::DocumentLoadStatisticsPtr statistics) {
+-  // CromIKO: count the blocked requests for the shield card on the new tab page.
++  // CromIKO: count the blocked requests for the shield card on the new tab page
++  // and the weekly shield report.
+   cromiko_shield_stats::RecordBlockedRequests(
+-      receiver_.CurrentTargetFrame().GetBrowserContext(),
+-      statistics->num_loads_disallowed);
++      &receiver_.CurrentTargetFrame(), statistics->num_loads_disallowed,
++      GURL());
+   if (statistics_) {
+     statistics_->OnDocumentLoadStatistics(*statistics);
+   }
+diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.cc b/components/subresource_filter/content/browser/cromiko_shield_stats.cc
+--- a/components/subresource_filter/content/browser/cromiko_shield_stats.cc
++++ b/components/subresource_filter/content/browser/cromiko_shield_stats.cc
+@@ -3,31 +3,140 @@
+ 
+ #include "components/subresource_filter/content/browser/cromiko_shield_stats.h"
+ 
++#include <algorithm>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/callback.h"
+ #include "base/numerics/clamped_math.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/time/time.h"
+ #include "components/prefs/pref_registry_simple.h"
+ #include "components/prefs/pref_service.h"
++#include "components/prefs/scoped_user_pref_update.h"
+ #include "components/user_prefs/user_prefs.h"
+ #include "content/public/browser/browser_context.h"
++#include "content/public/browser/render_frame_host.h"
++#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
++#include "url/gurl.h"
+ 
+ namespace subresource_filter::cromiko_shield_stats {
+ 
+ namespace {
+ 
+-int CurrentWeek() {
++// The days of kDaysPref, the current week and the one before.
++constexpr int kDaysKept = 14;
++// The sites and trackers of a week, and how many stay when there are too many.
++constexpr size_t kMaxSites = 400;
++constexpr size_t kSitesAfterTrim = 300;
++// The sites and trackers kept for the week before.
++constexpr size_t kTopSites = 10;
++
++// Adds counts without overflowing. ClampAdd() converts to any number type, so
++// it can't be passed to the overloads of base::DictValue::Set() as it is.
++int Add(int a, int b) {
++  return base::ClampAdd(a, b);
++}
++
++// The day number of today in local time, and the one of the Monday of its week.
++void GetToday(int* today, int* week) {
+   base::Time::Exploded now;
+   base::Time::Now().LocalExplode(&now);
+-  base::Time::Exploded today = {};
+-  today.year = now.year;
+-  today.month = now.month;
+-  today.day_of_month = now.day_of_month;
++  base::Time::Exploded midnight = {};
++  midnight.year = now.year;
++  midnight.month = now.month;
++  midnight.day_of_month = now.day_of_month;
+   base::Time today_midnight;
+-  if (!base::Time::FromUTCExploded(today, &today_midnight)) {
+-    return 0;
++  if (!base::Time::FromUTCExploded(midnight, &today_midnight)) {
++    *today = 0;
++    *week = 0;
++    return;
+   }
++  *today = (today_midnight - base::Time::UnixEpoch()).InDays();
+   // day_of_week is 0 on Sunday, weeks start on Monday.
+-  return (today_midnight - base::Time::UnixEpoch()).InDays() -
+-         (now.day_of_week + 6) % 7;
++  *week = *today - (now.day_of_week + 6) % 7;
++}
++
++// The registrable domain of `url`, like "example.co.uk", or its host.
++std::string SiteOf(const GURL& url) {
++  if (!url.SchemeIsHTTPOrHTTPS()) {
++    return std::string();
++  }
++  std::string site = net::registry_controlled_domains::GetDomainAndRegistry(
++      url, net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
++  return site.empty() ? std::string(url.host()) : site;
++}
++
++// The entries of `counts` with the largest counts first.
++std::vector<std::pair<std::string, int>> Sorted(const base::DictValue& counts) {
++  std::vector<std::pair<std::string, int>> sorted;
++  for (auto [key, value] : counts) {
++    if (value.is_int()) {
++      sorted.emplace_back(key, value.GetInt());
++    }
++  }
++  std::stable_sort(
++      sorted.begin(), sorted.end(),
++      [](const auto& a, const auto& b) { return a.second > b.second; });
++  return sorted;
++}
++
++base::DictValue Top(const base::DictValue& counts, size_t max) {
++  std::vector<std::pair<std::string, int>> sorted = Sorted(counts);
++  base::DictValue top;
++  for (size_t i = 0; i < sorted.size() && i < max; i++) {
++    top.Set(sorted[i].first, sorted[i].second);
++  }
++  return top;
++}
++
++void AddTo(PrefService* prefs, const char* pref, const std::string& key,
++           int count) {
++  if (key.empty()) {
++    return;
++  }
++  ScopedDictPrefUpdate update(prefs, pref);
++  update->Set(key, Add(update->FindInt(key).value_or(0), count));
++  if (update->size() > kMaxSites) {
++    // Forgets the sites with the smallest counts.
++    update.Get() = Top(*update, kSitesAfterTrim);
++  }
++}
++
++// Keeps the counts of the week before when a new week starts.
++void MaybeStartWeek(PrefService* prefs, int week) {
++  const int counted_week = prefs->GetInteger(kWeekPref);
++  if (counted_week == week) {
++    return;
++  }
++  if (prefs->GetInteger(kBlockedPref) > 0) {
++    base::DictValue last_week;
++    last_week.Set("week", counted_week);
++    last_week.Set("blocked", prefs->GetInteger(kBlockedPref));
++    last_week.Set("sites", Top(prefs->GetDict(kSitesPref), kTopSites));
++    last_week.Set("trackers", Top(prefs->GetDict(kTrackersPref), kTopSites));
++    prefs->SetDict(kLastWeekPref, std::move(last_week));
++  }
++  prefs->SetInteger(kWeekPref, week);
++  prefs->SetInteger(kBlockedPref, 0);
++  prefs->ClearPref(kSitesPref);
++  prefs->ClearPref(kTrackersPref);
++}
++
++void RemoveMatchingSites(
++    base::DictValue& sites,
++    const base::RepeatingCallback<bool(const GURL&)>& filter) {
++  std::vector<std::string> removed;
++  for (auto [site, value] : sites) {
++    if (filter.Run(GURL("https://" + site)) ||
++        filter.Run(GURL("http://" + site))) {
++      removed.push_back(site);
++    }
++  }
++  for (const std::string& site : removed) {
++    sites.Remove(site);
++  }
+ }
+ 
+ }  // namespace
+@@ -35,19 +144,101 @@ int CurrentWeek() {
+ void RegisterProfilePrefs(PrefRegistrySimple* registry) {
+   registry->RegisterIntegerPref(kWeekPref, 0);
+   registry->RegisterIntegerPref(kBlockedPref, 0);
++  registry->RegisterDictionaryPref(kDaysPref);
++  registry->RegisterDictionaryPref(kSitesPref);
++  registry->RegisterDictionaryPref(kTrackersPref);
++  registry->RegisterDictionaryPref(kLastWeekPref);
+ }
+ 
+-void RecordBlockedRequests(content::BrowserContext* context, int count) {
++void RecordBlockedRequests(content::RenderFrameHost* frame,
++                           int count,
++                           const GURL& blocked_url) {
++  if (count <= 0 || !frame) {
++    return;
++  }
+   // Nothing is recorded for incognito tabs.
+-  if (count <= 0 || !context || context->IsOffTheRecord()) {
++  content::BrowserContext* context = frame->GetBrowserContext();
++  if (!context || context->IsOffTheRecord()) {
+     return;
+   }
+   PrefService* prefs = user_prefs::UserPrefs::Get(context);
+-  const int week = CurrentWeek();
+-  const int blocked =
+-      prefs->GetInteger(kWeekPref) == week ? prefs->GetInteger(kBlockedPref) : 0;
+-  prefs->SetInteger(kWeekPref, week);
+-  prefs->SetInteger(kBlockedPref, base::ClampAdd(blocked, count));
++  int today;
++  int week;
++  GetToday(&today, &week);
++  MaybeStartWeek(prefs, week);
++  prefs->SetInteger(kBlockedPref, Add(prefs->GetInteger(kBlockedPref), count));
++
++  {
++    ScopedDictPrefUpdate days(prefs, kDaysPref);
++    const std::string key = base::NumberToString(today);
++    days->Set(key, Add(days->FindInt(key).value_or(0), count));
++    std::vector<std::string> old_days;
++    for (auto [day_key, value] : *days) {
++      int day;
++      if (!base::StringToInt(day_key, &day) || day <= today - kDaysKept ||
++          day > today) {
++        old_days.push_back(day_key);
++      }
++    }
++    for (const std::string& day_key : old_days) {
++      days->Remove(day_key);
++    }
++  }
++
++  AddTo(prefs, kSitesPref,
++        SiteOf(frame->GetOutermostMainFrame()->GetLastCommittedURL()), count);
++  if (blocked_url.is_valid()) {
++    AddTo(prefs, kTrackersPref, SiteOf(blocked_url), count);
++  }
++}
++
++base::DictValue GetReport(PrefService* prefs) {
++  int today;
++  int week;
++  GetToday(&today, &week);
++  base::DictValue report;
++  report.Set("today", today);
++  report.Set("week", week);
++  report.Set("days", prefs->GetDict(kDaysPref).Clone());
++
++  // The counts are of an older week when nothing was blocked since Monday.
++  const int counted_week = prefs->GetInteger(kWeekPref);
++  const bool counts_this_week = counted_week == week;
++  report.Set("blocked", counts_this_week ? prefs->GetInteger(kBlockedPref) : 0);
++  report.Set("sites", counts_this_week ? prefs->GetDict(kSitesPref).Clone()
++                                       : base::DictValue());
++  report.Set("trackers", counts_this_week
++                             ? prefs->GetDict(kTrackersPref).Clone()
++                             : base::DictValue());
++
++  base::DictValue last_week;
++  if (counts_this_week) {
++    const base::DictValue& kept = prefs->GetDict(kLastWeekPref);
++    if (kept.FindInt("week") == week - 7) {
++      last_week = kept.Clone();
++    }
++  } else if (counted_week == week - 7 && prefs->GetInteger(kBlockedPref) > 0) {
++    last_week.Set("week", counted_week);
++    last_week.Set("blocked", prefs->GetInteger(kBlockedPref));
++    last_week.Set("sites", Top(prefs->GetDict(kSitesPref), kTopSites));
++    last_week.Set("trackers", Top(prefs->GetDict(kTrackersPref), kTopSites));
++  }
++  if (!last_week.empty()) {
++    report.Set("last_week", std::move(last_week));
++  }
++  return report;
++}
++
++void ClearSites(PrefService* prefs,
++                const base::RepeatingCallback<bool(const GURL&)>& filter) {
++  RemoveMatchingSites(ScopedDictPrefUpdate(prefs, kSitesPref).Get(), filter);
++  RemoveMatchingSites(ScopedDictPrefUpdate(prefs, kTrackersPref).Get(), filter);
++  ScopedDictPrefUpdate last_week(prefs, kLastWeekPref);
++  for (const char* key : {"sites", "trackers"}) {
++    if (base::DictValue* sites = last_week->FindDict(key)) {
++      RemoveMatchingSites(*sites, filter);
++    }
++  }
+ }
+ 
+ }  // namespace subresource_filter::cromiko_shield_stats
+diff --git a/components/subresource_filter/content/browser/cromiko_shield_stats.h b/components/subresource_filter/content/browser/cromiko_shield_stats.h
+--- a/components/subresource_filter/content/browser/cromiko_shield_stats.h
++++ b/components/subresource_filter/content/browser/cromiko_shield_stats.h
+@@ -4,15 +4,21 @@
+ #ifndef COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CROMIKO_SHIELD_STATS_H_
+ #define COMPONENTS_SUBRESOURCE_FILTER_CONTENT_BROWSER_CROMIKO_SHIELD_STATS_H_
+ 
++#include "base/functional/callback_forward.h"
++#include "base/values.h"
++
++class GURL;
+ class PrefRegistrySimple;
++class PrefService;
+ 
+ namespace content {
+-class BrowserContext;
++class RenderFrameHost;
+ }  // namespace content
+ 
+ // CromIKO: counts the requests that the ad blocker blocked in the current week,
+-// for the shield card on the new tab page. CromikoShieldStatsView.java reads
+-// the same prefs.
++// for the shield card on the new tab page and the weekly shield report.
++// CromikoShieldStatsView.java reads the first two prefs, CromikoShieldReport
++// the report of GetReport().
+ namespace subresource_filter::cromiko_shield_stats {
+ 
+ // The week of the count: the day number (days since 1970-01-01) of its Monday,
+@@ -20,11 +26,35 @@ namespace subresource_filter::cromiko_shield_stats {
+ inline constexpr char kWeekPref[] = "cromiko.shield_stats.week";
+ // The number of requests blocked in that week.
+ inline constexpr char kBlockedPref[] = "cromiko.shield_stats.blocked";
++// The number of requests blocked on each of the last 14 days, by day number.
++inline constexpr char kDaysPref[] = "cromiko.shield_stats.days";
++// The number of requests blocked on the pages of each site in that week, by
++// registrable domain.
++inline constexpr char kSitesPref[] = "cromiko.shield_stats.sites";
++// The number of blocked requests to each tracker or ad server in that week, by
++// registrable domain. Only the eyeo ad blocker tells the blocked addresses.
++inline constexpr char kTrackersPref[] = "cromiko.shield_stats.trackers";
++// The week before, kept when a new week starts: "week", "blocked", and the top
++// "sites" and "trackers".
++inline constexpr char kLastWeekPref[] = "cromiko.shield_stats.last_week";
+ 
+ void RegisterProfilePrefs(PrefRegistrySimple* registry);
+ 
+-// Adds `count` blocked requests to the count of the current week.
+-void RecordBlockedRequests(content::BrowserContext* context, int count);
++// Adds `count` requests blocked in `frame` to the counts of the current week.
++// `blocked_url` is the blocked address when there is one request, or empty.
++void RecordBlockedRequests(content::RenderFrameHost* frame,
++                           int count,
++                           const GURL& blocked_url);
++
++// Returns the report of the current week: "today" and "week" (day numbers),
++// "blocked", "days", "sites", "trackers", and "last_week" when the week before
++// has counts.
++base::DictValue GetReport(PrefService* prefs);
++
++// Forgets the sites of the report, which are a form of history, for the sites
++// that `filter` matches. The counts stay.
++void ClearSites(PrefService* prefs,
++                const base::RepeatingCallback<bool(const GURL&)>& filter);
+ 
+ }  // namespace subresource_filter::cromiko_shield_stats
+ 
+--
