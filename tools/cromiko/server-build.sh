@@ -9,8 +9,9 @@
 # First it asks which version to build: the GitHub version (the Android APK
 # of the GitHub releases, as always), the Google Play version (an Android App
 # Bundle to upload to the Play Console, without the update check and without
-# background play on YouTube; see build/cromiko_play_patches_list.txt), or the
-# Windows version (a zip with CromIKO for Windows 10 and 11, 64-bit).
+# background play on YouTube; see build/cromiko_play_patches_list.txt), the
+# Windows version (a zip with CromIKO for Windows 10 and 11, 64-bit), or the
+# Linux version (a .tar.xz with CromIKO for Linux, 64-bit).
 #
 # It installs the basic tools, creates a "builder" user, clones the CromIKO
 # repository, and starts tools/cromiko/build.sh in a tmux session, so the
@@ -18,8 +19,8 @@
 # the checkout and builds again, reusing the Chromium download.
 #
 # Environment, all optional:
-#   CROMIKO_FLAVOR   github, play or windows: the version to build, without
-#                    asking
+#   CROMIKO_FLAVOR   github, play, windows or linux: the version to build,
+#                    without asking
 #   CROMIKO_PLAY_RELEASE
 #                    for play: the number of the upload for this Chromium
 #                    version, 0 to 9, without asking (see build.sh)
@@ -89,7 +90,7 @@ case "$TARGET_CPU" in
   arm64|arm|x64) ;;
   *) fail "Unknown CPU '$TARGET_CPU' (use arm64, arm or x64)." ;;
 esac
-[ "$(uname -m)" = x86_64 ] || fail "Chromium for Android can only be built on x86-64 machines."
+[ "$(uname -m)" = x86_64 ] || fail "Chromium can only be built on x86-64 machines."
 
 # Which version to build. The GitHub version is the one of the GitHub releases, unchanged;
 # the Google Play version gets the patches of build/cromiko_play_patches_list.txt.
@@ -104,27 +105,32 @@ Which version of CromIKO do you want to build?
                            Console: no update check (Google Play updates the
                            app) and no background play on YouTube
   3) Windows version       CromIKO for Windows 10 and 11 (64-bit), as a zip
+  4) Linux version         CromIKO for Linux (64-bit), as a .tar.xz
 
 EOF
     while [ -z "$FLAVOR" ]; do
-      ask "Your choice (1, 2 or 3): " choice
+      ask "Your choice (1, 2, 3 or 4): " choice
       case "$choice" in
         1|github|GitHub) FLAVOR=github label=GitHub ;;
         2|play|Play) FLAVOR=play label="Google Play" ;;
         3|windows|Windows) FLAVOR=windows label=Windows ;;
-        *) echo "Please type 1 (GitHub), 2 (Google Play) or 3 (Windows), then Enter." ;;
+        4|linux|Linux) FLAVOR=linux label=Linux ;;
+        *) echo "Please type 1 (GitHub), 2 (Google Play), 3 (Windows) or 4 (Linux), then Enter." ;;
       esac
     done
     echo "Building the $label version."
   else
     FLAVOR=github
-    echo "Building the GitHub version (set CROMIKO_FLAVOR=play or windows for the others)."
+    echo "Building the GitHub version (set CROMIKO_FLAVOR=play, windows or linux for the others)."
   fi
 fi
 case "$FLAVOR" in
-  github|play|windows) ;;
-  *) fail "Unknown CROMIKO_FLAVOR '$FLAVOR' (use github, play or windows)." ;;
+  github|play|windows|linux) ;;
+  *) fail "Unknown CROMIKO_FLAVOR '$FLAVOR' (use github, play, windows or linux)." ;;
 esac
+if [ "$FLAVOR" = linux ]; then
+  TARGET_CPU=x64
+fi
 if [ "$FLAVOR" = windows ]; then
   TARGET_CPU=x64
   if [ "${CROMIKO_ACCEPT_MSVC_LICENSE:-0}" != 1 ]; then
@@ -236,7 +242,8 @@ BUILD_SCRIPT=tools/cromiko/build.sh
 [ -f "$CHECKOUT/$BUILD_SCRIPT" ] \
   || fail "tools/cromiko/build.sh is not on branch $BRANCH of $REPO."
 if { [ "$FLAVOR" = play ] && ! grep -q CROMIKO_FLAVOR "$CHECKOUT/$BUILD_SCRIPT"; } \
-    || { [ "$FLAVOR" = windows ] && ! grep -q 'windows)' "$CHECKOUT/$BUILD_SCRIPT"; }; then
+    || { [ "$FLAVOR" = windows ] && ! grep -q 'windows)' "$CHECKOUT/$BUILD_SCRIPT"; } \
+    || { [ "$FLAVOR" = linux ] && ! grep -q 'linux)' "$CHECKOUT/$BUILD_SCRIPT"; }; then
   fail "Branch $BRANCH of $REPO can't build the $FLAVOR version yet. Build the branch with the
 newest CromIKO, for example: sudo CROMIKO_BRANCH=<branch> bash server-build.sh"
 fi
@@ -252,6 +259,8 @@ if [ "$FLAVOR" = play ]; then
 elif [ "$FLAVOR" = windows ]; then
   echo 'CROMIKO_ACCEPT_MSVC_LICENSE=1' >> "$ENV_FILE"
   echo "Windows version"
+elif [ "$FLAVOR" = linux ]; then
+  echo "Linux version"
 else
   echo "GitHub version"
 fi
@@ -264,7 +273,7 @@ if [ -n "${CROMIKO_KEYSTORE_PATH:-}" ]; then
     printf 'CROMIKO_KEYSTORE_PASSWORD=%q\n' "${CROMIKO_KEYSTORE_PASSWORD:-}"
   } >> "$ENV_FILE"
   echo "Signing with $CROMIKO_KEYSTORE_PATH"
-elif [ "$FLAVOR" != windows ]; then
+elif [ "$FLAVOR" != windows ] && [ "$FLAVOR" != linux ]; then
   echo "No CROMIKO_KEYSTORE_PATH: the build is signed with Chromium's public debug key (fine for testing)."
 fi
 if [ -n "${CROMITE_PREF_HASH_SEED_BIN:-}" ]; then
@@ -285,6 +294,12 @@ elif [ "$FLAVOR" = windows ]; then
   TEST_FILES=""
   NEXT_STEP="Then unpack it on your Windows PC and start chrome.exe in the CromIKO folder. Windows
 may warn about an unknown app the first time: More info > Run anyway."
+elif [ "$FLAVOR" = linux ]; then
+  RESULT=".tar.xz"
+  RESULT_FILES="*-linux64.tar.xz"
+  TEST_FILES=""
+  NEXT_STEP="Then unpack it on your Linux PC (tar -xJf CromIKO-*-linux64.tar.xz) and start ./cromiko
+in the cromiko folder. ./install.sh adds it to the apps of your desktop."
 else
   RESULT="APK"
   RESULT_FILES="*-$TARGET_CPU.apk"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds CromIKO: the Android APK of the GitHub releases, the Android App
-# Bundle for Google Play, or the Windows version.
+# Bundle for Google Play, the Windows version or the Linux version.
 #
 # Fetches Chromium at the version in build/RELEASE, applies every patch in
 # build/cromite_patches_list.txt (Cromite's and CromIKO's), and builds
@@ -10,13 +10,16 @@
 # with an APK of that bundle to try it on a phone (an .aab can't be installed).
 # The Windows version is cross-compiled here, on Linux, like Cromite's: with
 # Microsoft's compiler tools and Windows SDK, downloaded by msvc-wine, and
-# packed as a zip of the browser folder.
+# packed as a zip of the browser folder. The Linux version is built like
+# Cromite's chrome-lin64 and packed as a .tar.xz with a launcher and the desktop
+# entry (tools/cromiko/pack_linux.py).
 # The steps follow Cromite's own build images (tools/images/chr-source,
 # tools/images/cromite-source and tools/images/win-sdk).
 #
 # Usage: tools/cromiko/build.sh [arm64|arm|x64]     (Android, default: arm64)
 #        CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 tools/cromiko/build.sh
 #                                                   (Windows, 64-bit)
+#        CROMIKO_FLAVOR=linux tools/cromiko/build.sh  (Linux, 64-bit)
 #
 # Environment, all optional:
 #   CROMIKO_WORKDIR        Chromium checkout and build output
@@ -27,6 +30,7 @@
 #   CROMIKO_FLAVOR         github (default): the APK of the GitHub releases.
 #                          play: the App Bundle (.aab) to upload to Google Play.
 #                          windows: the zip of CromIKO for Windows (x64).
+#                          linux: the .tar.xz of CromIKO for Linux (x64).
 #   CROMIKO_ACCEPT_MSVC_LICENSE=1
 #                          for windows: accept the license terms of the Visual
 #                          Studio Build Tools and of the Windows SDK, which the
@@ -51,12 +55,14 @@ FLAVOR=${CROMIKO_FLAVOR:-github}
 case "$FLAVOR" in
   github|play) TARGET_OS=android; TARGET_CPU=${1:-arm64} ;;
   windows) TARGET_OS=win; TARGET_CPU=${1:-x64} ;;
-  *) echo "Unknown CROMIKO_FLAVOR '$FLAVOR' (use github, play or windows)" >&2; exit 2 ;;
+  linux) TARGET_OS=linux; TARGET_CPU=${1:-x64} ;;
+  *) echo "Unknown CROMIKO_FLAVOR '$FLAVOR' (use github, play, windows or linux)" >&2; exit 2 ;;
 esac
 case "$TARGET_OS-$TARGET_CPU" in
-  android-arm64|android-arm|android-x64|win-x64) ;;
+  android-arm64|android-arm|android-x64|win-x64|linux-x64) ;;
   android-*) echo "Unknown target CPU '$TARGET_CPU' (use arm64, arm or x64)" >&2; exit 2 ;;
-  *) echo "The Windows version is built for x64 only, not '$TARGET_CPU'" >&2; exit 2 ;;
+  win-*) echo "The Windows version is built for x64 only, not '$TARGET_CPU'" >&2; exit 2 ;;
+  *) echo "The Linux version is built for x64 only, not '$TARGET_CPU'" >&2; exit 2 ;;
 esac
 if [ "$FLAVOR" = windows ] && [ "${CROMIKO_ACCEPT_MSVC_LICENSE:-0}" != 1 ]; then
   echo "The Windows build downloads Microsoft's Visual Studio Build Tools and Windows SDK." >&2
@@ -74,7 +80,11 @@ VERSION=$(tr -d '[:space:]' < "$REPO_DIR/build/RELEASE")
 WORKDIR=${CROMIKO_WORKDIR:-$HOME/cromiko-build}
 DIST=${CROMIKO_DIST:-$WORKDIR/dist}
 SRC=$WORKDIR/chromium/src
-if [ "$TARGET_OS" = win ]; then OUT=out/win64; else OUT=out/$TARGET_CPU; fi
+case "$TARGET_OS" in
+  win) OUT=out/win64 ;;
+  linux) OUT=out/lin64 ;;
+  *) OUT=out/$TARGET_CPU ;;
+esac
 STAMP=$WORKDIR/.chromium-version
 # The platforms that the Chromium download has the files of, like "android win".
 TARGETS_STAMP=$WORKDIR/.chromium-targets
@@ -184,6 +194,7 @@ step "Checking the machine"
 case "$FLAVOR" in
   play) echo "CromIKO for Google Play, Chromium $VERSION, target $TARGET_CPU" ;;
   windows) echo "CromIKO for Windows, Chromium $VERSION, target $TARGET_CPU" ;;
+  linux) echo "CromIKO for Linux, Chromium $VERSION, target $TARGET_CPU" ;;
   *) echo "CromIKO for GitHub, Chromium $VERSION, target $TARGET_CPU" ;;
 esac
 echo "CromIKO $(git -C "$REPO_DIR" log -1 --format='%h (%cs) %s' 2>/dev/null || echo '(not a git checkout)')," \
@@ -193,7 +204,8 @@ free_gb=$(df -BG --output=avail "$WORKDIR" | tail -1 | tr -dc '0-9')
 echo "Free disk in $WORKDIR: ${free_gb} GB"
 
 # The Chromium download has the files of the platforms it was made for. A Windows build on
-# a download without them downloads Chromium again, with both.
+# a download without them downloads Chromium again, with both. The Linux files are always
+# there: this machine is the Linux host of the build.
 targets="android"
 if [ "$TARGET_OS" = win ] || grep -qw win "$TARGETS_STAMP" 2>/dev/null; then
   targets="android win"
@@ -409,6 +421,7 @@ step "Building (several hours on a first build)"
 case "$FLAVOR" in
   play) python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome_public_bundle --offline ;;
   windows) python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome --offline ;;
+  linux) python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome chrome_sandbox --offline ;;
   *) python3 "$WORKDIR/depot_tools/siso.py" ninja -C "$OUT" chrome_public_apk --offline ;;
 esac
 
@@ -452,6 +465,15 @@ elif [ "$FLAVOR" = windows ]; then
   echo "CromIKO for Windows: $ZIP"
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+    echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+  fi
+elif [ "$FLAVOR" = linux ]; then
+  step "Packing CromIKO for Linux"
+  TAR=$DIST/CromIKO-$VERSION-linux64.tar.xz
+  python3 "$REPO_DIR/tools/cromiko/pack_linux.py" "$SRC" "$OUT" "$TAR"
+  echo "CromIKO for Linux: $TAR"
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "tar=$TAR" >> "$GITHUB_OUTPUT"
     echo "version=$VERSION" >> "$GITHUB_OUTPUT"
   fi
 else

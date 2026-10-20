@@ -206,10 +206,14 @@ the mascot.
 - The tops of the CromIKO pages keep their tinted card in the rounded
   style of the settings of Chromium 153.
 
-## CromIKO for Windows
+## CromIKO for Windows and Linux
 
 The Windows version is built by `tools/cromiko/build.sh` (option 3 of
 `server-build.sh`), cross-compiled on the Linux build server like Cromite's.
+The Linux version (option 4) is built natively from the same patches, packed
+as a `.tar.xz` with a launcher and `install.sh` for the desktop entry
+(`CromIKO-Linux.patch`: its own profile folder, desktop entry and icons). The
+steps below are for both: the desktop patches are not only for Windows.
 Each step below is its own `CromIKO-Windows-*.patch` (or a change of the
 build scripts), built and tried before the next one.
 

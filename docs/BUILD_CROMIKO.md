@@ -130,7 +130,7 @@ read -rsp "Keystore password: " CROMIKO_KEYSTORE_PASSWORD; export CROMIKO_KEYSTO
 curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo -E bash
 ```
 
-## GitHub, Google Play or Windows version
+## GitHub, Google Play, Windows or Linux version
 
 When `server-build.sh` starts, it asks which version to build:
 
@@ -178,6 +178,23 @@ When `server-build.sh` starts, it asks which version to build:
    made for Android only downloads Chromium again once, with the Windows
    files.
 
+4. **Linux version**: `CromIKO-<version>-linux64.tar.xz`, CromIKO for Linux
+   (64-bit), with the same CromIKO features as the Windows version. Unpack it
+   anywhere (`tar -xJf CromIKO-<version>-linux64.tar.xz`) and start
+   `./cromiko` in the `cromiko` folder; `./install.sh` adds it to the apps of
+   your desktop with its icon (run it again after moving the folder,
+   `./install.sh --remove` takes it away). It keeps its profile in
+   `~/.config/cromiko`, so it runs next to Chromium and Cromite.
+
+   Some systems (Ubuntu 23.10 and newer among them) only let known apps use
+   the sandbox of the pages. There, `install.sh` shows the one command that
+   lets CromIKO use its own sandbox helper (`chrome-sandbox`, owned by root
+   with the setuid bit).
+
+   It is built natively on the Linux server, like Cromite's `chrome-lin64`:
+   it needs no download of its own, and the same Chromium download builds
+   the Android, Windows and Linux versions.
+
 For the Google Play version it also asks for the number of the upload.
 Google Play only accepts an upload with a higher version code than the one
 before. The version code comes from the Chromium version; the upload number
@@ -193,6 +210,7 @@ To skip the questions, set the answers at the end of the command:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 bash
+curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=linux bash
 curl -fsSL https://raw.githubusercontent.com/PupJune2/cromIKO/master/tools/cromiko/server-build.sh | sudo CROMIKO_FLAVOR=play CROMIKO_PLAY_RELEASE=0 bash
 ```
 
@@ -204,7 +222,7 @@ version (an older one) stops with an error instead of building the GitHub
 APK of an older CromIKO. Without the
 server script, `CROMIKO_FLAVOR=play tools/cromiko/build.sh arm64` and
 `CROMIKO_FLAVOR=windows CROMIKO_ACCEPT_MSVC_LICENSE=1 tools/cromiko/build.sh`
-do the same. The GitHub Actions workflow always builds the GitHub version.
+and `CROMIKO_FLAVOR=linux tools/cromiko/build.sh` do the same. The GitHub Actions workflow always builds the GitHub version.
 
 ## Building again after changes
 
