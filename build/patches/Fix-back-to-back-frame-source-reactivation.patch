@@ -1,0 +1,143 @@
+From: Wyatt <16966487+WyattTheSkid@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 22:00:00 -0400
+Subject: Fix back-to-back frame source reactivation
+
+Removing the last observer stops DelayBasedTimeSource and clears its last
+tick. If an observer is readded while GPU back-pressure is active, clearing
+that back-pressure can call OnGpuNoLongerBusy before the new timer task.
+Do not emit a BeginFrame using the cleared timestamp in that interval.
+
+ExternalBeginFrameSource rejects the backward timestamp, so the client
+does not acknowledge it and the back-to-back source can stop permanently.
+Leave the scheduled timer intact so it delivers the first valid frame.
+
+The 60 Hz interval widens the window before the first timer tick. Add a
+mock-clock regression covering observer removal, readdition, and GPU
+availability before that tick, followed by continued frame delivery.
+
+License: GPL-2.0-or-later - https://spdx.org/licenses/GPL-2.0-or-later.html
+---
+diff --git a/components/viz/common/frame_sinks/begin_frame_source.cc b/components/viz/common/frame_sinks/begin_frame_source.cc
+--- a/components/viz/common/frame_sinks/begin_frame_source.cc
++++ b/components/viz/common/frame_sinks/begin_frame_source.cc
+@@ -314,6 +314,13 @@
+ }
+ 
+ void BackToBackBeginFrameSource::OnGpuNoLongerBusy() {
++  // Reactivating the time source posts a new timer task but leaves its last
++  // tick null until that task runs. A GPU availability callback can arrive
++  // first. Emitting that null timestamp would make clients reject the frame
++  // without acknowledging it, leaving this source waiting indefinitely.
++  if (time_source_->LastTickTime().is_null()) {
++    return;
++  }
+   OnTimerTick();
+ }
+ 
+diff --git a/components/viz/common/frame_sinks/begin_frame_source_unittest.cc b/components/viz/common/frame_sinks/begin_frame_source_unittest.cc
+--- a/components/viz/common/frame_sinks/begin_frame_source_unittest.cc
++++ b/components/viz/common/frame_sinks/begin_frame_source_unittest.cc
+@@ -9,11 +9,13 @@
+ #include <memory>
+ #include <string>
+ #include <utility>
++#include <vector>
+ 
+ #include "base/feature_list.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/test_mock_time_task_runner.h"
++#include "cc/base/features.h"
+ #include "components/viz/common/display/display_scheduler_draw_result.h"
+ #include "components/viz/common/features.h"
+ #include "components/viz/test/begin_frame_args_test.h"
+@@ -430,6 +432,77 @@
+ 
+   // DCHECK for pending observers list being empty should not fire.
+   source_->OnGpuNoLongerBusy();
++}
++
++class ThrottledBackToBackBeginFrameSourceTest
++    : public BackToBackBeginFrameSourceTest {
++ protected:
++  void SetUp() override {
++    feature_list_.InitAndEnableFeature(::features::kThrottleMainFrameTo60Hz);
++    BackToBackBeginFrameSourceTest::SetUp();
++  }
++
++ private:
++  base::test::ScopedFeatureList feature_list_;
++};
++
++TEST_F(ThrottledBackToBackBeginFrameSourceTest,
++       GpuAvailableAfterObserverReaddedWaitsForNewTimerTick) {
++  std::vector<BeginFrameArgs> received;
++  EXPECT_CALL(*obs_, OnBeginFrame(_))
++      .WillRepeatedly([&received](const BeginFrameArgs& args) {
++        received.push_back(args);
++      });
++
++  const auto interval = base::Hertz(60);
++  const auto first_tick = base::TimeTicks() + interval;
++
++  source_->AddObserver(obs_.get());
++  task_runner_->FastForwardTo(first_tick);
++  ASSERT_EQ(1u, received.size());
++  EXPECT_EQ(first_tick, received.back().frame_time);
++
++  // One BeginFrame is allowed after the GPU becomes busy; the next tick
++  // enters kThrottled while leaving the timer active.
++  source_->SetIsGpuBusy(true);
++  source_->DidFinishFrame(obs_.get(), DisplaySchedulerDrawResult::kUnknown);
++  task_runner_->FastForwardTo(first_tick + interval);
++  ASSERT_EQ(2u, received.size());
++  const auto last_delivered_frame_time = received.back().frame_time;
++  source_->DidFinishFrame(obs_.get(), DisplaySchedulerDrawResult::kUnknown);
++  task_runner_->FastForwardTo(first_tick + interval * 2);
++  ASSERT_EQ(2u, received.size());
++  EXPECT_TRUE(delay_based_time_source_->Active());
++
++  // Removing the last observer stops the timer and clears LastTickTime().
++  // Readding it activates a timer for the *next* 60 Hz tick, but until that
++  // task runs LastTickTime() remains null.
++  source_->RemoveObserver(obs_.get());
++  EXPECT_FALSE(delay_based_time_source_->Active());
++  EXPECT_TRUE(delay_based_time_source_->LastTickTime().is_null());
++  source_->AddObserver(obs_.get());
++  EXPECT_TRUE(delay_based_time_source_->Active());
++  EXPECT_TRUE(delay_based_time_source_->LastTickTime().is_null());
++
++  // Clearing the GPU-busy condition invokes OnGpuNoLongerBusy before the
++  // new timer fires. It must not deliver an epoch-zero frame and consume
++  // the observer's only pending BeginFrame request.
++  source_->SetIsGpuBusy(false);
++  EXPECT_EQ(2u, received.size());
++  EXPECT_TRUE(delay_based_time_source_->Active());
++
++  task_runner_->FastForwardTo(first_tick + interval * 3);
++  ASSERT_EQ(3u, received.size());
++  EXPECT_GT(received.back().frame_time, last_delivered_frame_time);
++  EXPECT_EQ(first_tick + interval * 3, received.back().frame_time);
++
++  // Completing the recovered frame must keep the pipeline advancing.
++  source_->DidFinishFrame(obs_.get(), DisplaySchedulerDrawResult::kUnknown);
++  task_runner_->FastForwardTo(first_tick + interval * 4);
++  ASSERT_EQ(4u, received.size());
++  EXPECT_EQ(first_tick + interval * 4, received.back().frame_time);
++
++  source_->RemoveObserver(obs_.get());
+ }
+ 
+ // DelayBasedBeginFrameSource testing
+diff --git a/components/viz/common/BUILD.gn b/components/viz/common/BUILD.gn
+--- a/components/viz/common/BUILD.gn
++++ b/components/viz/common/BUILD.gn
+@@ -319,6 +319,7 @@
+     ":common",
+     "//base/test:test_support",
+     "//cc:test_support",
++    "//cc/base",
+     "//components/viz/test:test_support",
+     "//gpu/command_buffer/client:gles2_implementation",
+     "//gpu/command_buffer/client:gles2_interface",
+--
